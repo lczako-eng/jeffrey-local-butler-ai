@@ -1,0 +1,10 @@
+# Local config and secrets
+config.json
+memory.json
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Storex

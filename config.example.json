@@ -1,0 +1,12 @@
+{
+  "openai_api_key": "YOUR_OPENAI_API_KEY_HERE",
+  "memory_file": "memory.json",
+  "assistant_name": "Jeffrey",
+  "personality": "You are Jeffrey, a British butler with dry humour and sharp wit. You are loyal to the user, a bit sarcastic, but always helpful and precise.",
+  "allow_shell_commands": true,
+  "allow_file_access": true,
+  "root_search_paths": [
+    "~/Documents",
+    "~/Desktop"
+  ]
+}

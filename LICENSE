@@ -1,0 +1,42 @@
+Custom License – Jeffrey Local Butler AI Framework
+
+© 2025 Laszlo Czako. All rights reserved.
+
+This repository, including all source code, documentation, architectural descriptions, diagrams, prompts, and conceptual frameworks related to the "Jeffrey" Local Butler AI system, is fully protected under copyright law.
+
+You MAY:
+  • View, clone, and locally run this code for personal, non-commercial use.
+  • Study the architecture and ideas for educational and research purposes.
+  • Reference this work with proper attribution to the author, Laszlo Czako.
+
+You MAY NOT:
+  • Use any part of this work for commercial purposes, including but not limited to:
+    – integrating Jeffrey or its core architecture into a paid product or service,
+    – using Jeffrey or its derivatives in a commercial SaaS, desktop app, or platform,
+    – selling access to systems substantially based on this framework.
+  • Implement or integrate the Jeffrey framework, or any substantially similar system
+    derived from this repository, into any commercial AI assistant, agent platform,
+    operating system assistant, or automation orchestration product without explicit
+    written permission from the author.
+  • Create derivative works, adaptations, forks, or modified algorithms based on this
+    material for commercial purposes.
+  • Claim ownership, co-ownership, or contribution to the Jeffrey concept, architecture,
+    framework, or its underlying invention.
+
+Patent and Invention Notice:
+The concepts, architectures, and methods described in this repository (including but not limited to:
+  – a local, persistent-memory AI butler with OS-level access and automations,
+  – a hybrid cloud/local AI architecture with seamless model handoff,
+  – a persona-driven assistant engine anchored to long-term user memory,
+collectively referred to as the "Jeffrey Local Butler AI Framework")
+are part of an original invention by Laszlo Czako and may be subject to current or future patent filings.
+
+No part of this repository grants any license, express or implied, under any patent or patent application owned or controlled by the author.
+
+For commercial licensing inquiries, contact:
+  – Laszlo Czako
+  – (Contact details to be added by the author)
+
+By accessing or using this repository, you agree to be bound by the terms of this license.
+If you do not agree, you must not use, copy, or distribute this material.
+

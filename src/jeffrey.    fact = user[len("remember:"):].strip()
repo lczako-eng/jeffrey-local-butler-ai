@@ -1,0 +1,73 @@
+import json
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+MEMORY_FILE = BASE_DIR / "memory.json"
+
+def load_memory():
+    if not MEMORY_FILE.exists():
+        return []
+    try:
+        data = json.loads(MEMORY_FILE.read_text())
+        return data.get("facts", [])
+    except Exception:
+        return []
+
+def save_memory(facts):
+    MEMORY_FILE.write_text(json.dumps({"facts": facts}, indent=4))
+
+def remember(fact: str):
+    facts = load_memory()
+    if fact not in facts:
+        facts.append(fact)
+        save_memory(facts)
+
+def main():
+    print("Jeffrey: Good day, sir. How may I assist you?")
+    print("Type 'remember: ...' to store a fact, or 'exit' to quit.\n")
+
+    while True:
+        try:
+            user = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nJeffrey: Very well, sir. Shutting down.")
+            break
+
+        if user.lower() in ("exit", "quit"):
+            print("Jeffrey: Until next time, sir.")
+            break
+
+        if user.lower().startswith("remember:"):
+            fact = user[len("remember:"):].strip()
+            if fact:
+                remember(fact)
+                print("Jeffrey: Noted, sir. I shall remember that.")
+            else:
+                print("Jeffrey: You must give me something worth remembering, sir.")
+            continue
+
+        print("Jeffrey: At the moment I am a simple prototype, sir. But I am here, and I am listening.")
+
+if __name__ == "__main__":
+    main()            if fact:
+                remember(fact)
+                print("Jeffrey: Noted, sir. I shall remember that.")
+            else:
+                print("Jeffrey: You must give me something worth remembering, s$
+            continue
+            
+        print("Jeffrey: At the moment I am a simple prototype, sir. But I am he$
+        
+if __name__ == "__main__":
+    main()  
+                
+                
+            
+                
+            
+            
+    
+File Name to write : src/jeffrey.                                               
+^G Get Help  ^T  To Files                                                     
+^C Cancel    TAB Complete                                                     
+≈
