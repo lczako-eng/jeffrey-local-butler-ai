@@ -16,6 +16,19 @@ This repository serves as both a **technical prototype** and a **timestamped pub
 
 ---
 
+## ⚡ The Agent Connector (new)
+
+**[`connector/`](connector/)** — JEFFEREY's first shipping form, per the
+[public build spec](https://github.com/lczako-eng/Jeffrey-AI-Butler/blob/main/docs/JEFFEREY_TO_BE_BUILT.md):
+an MCP server that plugs JEFFEREY's owned conscience into Claude and other
+MCP-capable engines. Priorities with confidence scores, corrections as the
+curriculum, facts separate from values, the Directive Pack — a conscience
+you own, riding whichever engine is best.
+
+*The intelligence is rented. The conscience is owned.*
+
+---
+
 ## Features (Current MVP)
 
 - CLI-based assistant  
