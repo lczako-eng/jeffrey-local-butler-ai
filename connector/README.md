@@ -19,11 +19,30 @@ conscience store.
   `close_goal`.
 - **`directives.md`** — the Jefferey Directive Pack: the identity and
   operating rules the host model adopts to *be* Jefferey.
+- **`jefferey_chat.py`** — **Jefferey himself, runnable.** A terminal chat
+  that wears the Directive Pack on a rented Claude engine and wires every
+  conscience tool live. Talk to him today.
 
-## Install
+## Talk to Jefferey (standalone)
 
 ```bash
-pip install "mcp[cli]"
+pip install anthropic
+export ANTHROPIC_API_KEY=sk-ant-...   # console.anthropic.com
+python connector/jefferey_chat.py
+```
+
+- `/conscience` in-chat shows everything he knows — you own every byte.
+- `--once "message"` for a single exchange; `--selftest` proves the whole
+  learning loop offline (dispatch, reinforcement, contradiction → flip,
+  remember/forget) with **no API key needed**.
+- Quit and relaunch — same conscience, same Jefferey. Point the MCP
+  connector below at the same store and he's the same person inside
+  Claude Desktop or Claude Code too. One conscience, many engines.
+
+## Install (MCP connector)
+
+```bash
+pip install "mcp[cli]"        # or: pip install -r connector/requirements.txt
 ```
 
 ### Claude Code
