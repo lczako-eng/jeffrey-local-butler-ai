@@ -22,6 +22,9 @@ conscience store.
 - **`jefferey_chat.py`** — **Jefferey himself, runnable.** A terminal chat
   that wears the Directive Pack on a rented Claude engine and wires every
   conscience tool live. Talk to him today.
+- **`jefferey_http.py`** — the same conscience over HTTP, for engines that
+  speak Actions instead of MCP — most importantly **custom GPTs**. The other
+  half of build priority 03.
 
 ## Talk to Jefferey (standalone)
 
@@ -68,6 +71,27 @@ Add to `claude_desktop_config.json`:
 
 Then start a conversation with: **"Call get_directives and be Jefferey."**
 
+## Install (custom GPT — the GPT side)
+
+```bash
+pip install fastapi uvicorn
+python connector/jefferey_http.py     # http://127.0.0.1:8377, prints a bearer token
+```
+
+Expose it over HTTPS (e.g. `ngrok http 8377` or `cloudflared tunnel`, or run
+it on any small server), set `JEFFEREY_PUBLIC_URL` to that URL, then at
+chatgpt.com → **Create a GPT**:
+
+1. **Instructions**: paste `directives.md`, plus one line — *"Call
+   get_directives and get_conscience at the start of every chat."*
+2. **Actions → Import from URL**: `<JEFFEREY_PUBLIC_URL>/openapi.json`
+3. **Authentication**: API Key → Bearer → the token the server printed
+   (pin it with `JEFFEREY_HTTP_TOKEN`).
+
+Same `conscience.json` as the Claude connector and the standalone chat.
+Override GPT-Jefferey on Monday, and Claude-Jefferey already knows why on
+Tuesday. **One conscience, many engines.**
+
 ## The demo that matters
 
 1. Ask Jefferey for a recommendation (a phone plan, a flight).
@@ -82,7 +106,5 @@ locked to themselves.
 
 ## Roadmap
 
-- HTTP/SSE transport for hosts that need remote connectors (custom GPTs via
-  Actions) — the same conscience serving multiple engines at once.
 - The Opportunity Engine loop (goals × world changes × permissions).
 - Self-Cloud™: the conscience comes home to hardware you physically own.
