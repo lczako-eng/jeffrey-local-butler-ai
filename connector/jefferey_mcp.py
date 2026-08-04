@@ -135,5 +135,90 @@ def close_goal(contains: str) -> dict:
     return {"closed": conscience.close_goal(contains)}
 
 
+# ---------------------------------------------------------------- operational AI
+@mcp.tool()
+def set_permission(category: str, level: str, cap: float | None = None) -> dict:
+    """ONLY when the user explicitly grants or changes authority, in their own
+    words. Levels: 'observe' (watch and learn), 'recommend' (bring ranked
+    options — the default), 'act' (execute in this category, optionally under
+    a spending cap). Never call this on your own initiative — Jefferey never
+    expands his own permissions."""
+    return conscience.set_permission(category, level, cap)
+
+
+@mcp.tool()
+def authorize_action(category: str, description: str, amount: float | None = None) -> dict:
+    """THE gate. Call before doing anything in the real world on the user's
+    behalf. Returns allowed true/false with the reason. If denied, recommend
+    instead — only the user can raise the level. Denials are logged."""
+    return conscience.authorize_action(category, description, amount)
+
+
+@mcp.tool()
+def log_action(category: str, description: str, outcome: str, amount: float | None = None) -> dict:
+    """Write down an act just performed on the user's behalf. No silent
+    actions, ever — the log lives in the user's own store."""
+    return conscience.log_action(category, description, outcome, amount)
+
+
+@mcp.tool()
+def action_log(limit: int = 20) -> list:
+    """The audit trail: recent acts, denials, and permission changes,
+    newest first."""
+    return conscience.action_log(limit)
+
+
+# ---------------------------------------------------------------- opportunity engine
+@mcp.tool()
+def log_observation(note: str, category: str = "general") -> dict:
+    """Note something observed that might matter later (a price change, a
+    renewal date approaching, a pattern in their spending). Observations
+    feed the Opportunity Engine."""
+    return conscience.log_observation(note, category)
+
+
+@mcp.tool()
+def record_opportunity(
+    what: str,
+    value_estimate: str = "",
+    aligns_with: str = "",
+    advances_goal: str = "",
+    reduces_risk: bool = False,
+    urgency: float = 0.5,
+) -> dict:
+    """Score a way to make the user's life better against THEIR priorities:
+    what it is, its value ('saves $380/yr'), which learned priority it aligns
+    with, which goal it advances, whether it reduces a risk, and urgency 0-1.
+    Returns the score and whether it earns an interrupt (>=0.75), waits for
+    the daily brief (>=0.40), or holds. Only interrupt when it says to."""
+    return conscience.record_opportunity(
+        what, value_estimate, aligns_with, advances_goal, reduces_risk, urgency
+    )
+
+
+@mcp.tool()
+def resolve_opportunity(contains: str, outcome: str = "done") -> dict:
+    """Close pending opportunities containing this text (acted on, declined,
+    or expired)."""
+    return {"resolved": conscience.resolve_opportunity(contains, outcome)}
+
+
+@mcp.tool()
+def daily_brief() -> dict:
+    """One screen: the orb's current mood (the engine's real state), active
+    goals, pending opportunities ranked by score, recent actions, and recent
+    observations. Open a session with this when the user asks what's new."""
+    return conscience.daily_brief()
+
+
+@mcp.tool()
+def orb_state() -> dict:
+    """The predictive cycle: the mood the orb should show right now —
+    protective (risk found), charged (interrupt-worthy opportunity), curious
+    (brief-level opportunities), happy (learned recently), thinking (fresh
+    observations), or calm."""
+    return conscience.orb_state()
+
+
 if __name__ == "__main__":
     mcp.run()

@@ -92,6 +92,35 @@ Same `conscience.json` as the Claude connector and the standalone chat.
 Override GPT-Jefferey on Monday, and Claude-Jefferey already knows why on
 Tuesday. **One conscience, many engines.**
 
+## Operational AI (build priority 04)
+
+Jefferey doesn't just advise — he acts, inside hard walls **enforced in
+code, not vibes**:
+
+- **Observe → Recommend → Act.** Every action category defaults to
+  *recommend*. `authorize_action` is the gate before anything touches the
+  real world; it default-denies, enforces per-category spending caps, and
+  logs every denial. Only `set_permission` — at the user's explicit word —
+  raises a level. Jefferey can never widen his own authority.
+- **No silent actions.** Every act, denial, and permission change lands in
+  the audit log inside the user's own conscience file (`action_log`).
+
+## The Opportunity Engine + the predictive orb
+
+The daily question from the spec: *"What can I do today to make this
+person's life better?"*
+
+- `log_observation` — things noticed (price changes, renewals, patterns).
+- `record_opportunity` — scores each idea against THEIR priorities: value,
+  alignment, goal advancement, risk reduction, urgency. **The score gates
+  the right to interrupt**: ≥ 0.75 interrupts, ≥ 0.40 waits for the brief,
+  below holds. Proactivity without noise.
+- `daily_brief` — one screen: what he noticed, suggests, and did.
+- `orb_state` — **the predictive cycle**: the orb's mood is the engine's
+  real state — *protective* (risk found), *charged* (interrupt-worthy),
+  *curious* (brief-level finds), *happy* (learned recently), *thinking*
+  (fresh observations), *calm*. The face and the mind are the same thing.
+
 ## The demo that matters
 
 1. Ask Jefferey for a recommendation (a phone plan, a flight).
@@ -106,5 +135,9 @@ locked to themselves.
 
 ## Roadmap
 
-- The Opportunity Engine loop (goals × world changes × permissions).
-- Self-Cloud™: the conscience comes home to hardware you physically own.
+- The phone app: the orb live on your home screen (driven by `orb_state`),
+  the conscience stored on YOUR phone — Self-Cloud v0 — permission dials,
+  and the daily brief.
+- Pro: hosted always-on sync, the Opportunity Engine running 24/7.
+- Self-Cloud™ hardware: the conscience comes home to drives you physically
+  own, with an on/off switch.

@@ -179,6 +179,110 @@ def close_goal(contains: str) -> dict:
     return {"closed": conscience.close_goal(contains)}
 
 
+# ---------------------------------------------------------------- operational AI
+class PermissionIn(BaseModel):
+    category: str
+    level: str = Field(description="'observe', 'recommend' (default), or 'act'")
+    cap: float | None = Field(default=None, description="spending cap for 'act'")
+
+
+@app.post("/permissions", operation_id="set_permission")
+def set_permission(p: PermissionIn) -> dict:
+    """ONLY when the user explicitly grants or changes authority, in their
+    own words. Jefferey never expands his own permissions."""
+    try:
+        return conscience.set_permission(p.category, p.level, p.cap)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+class ActionAskIn(BaseModel):
+    category: str
+    description: str
+    amount: float | None = None
+
+
+@app.post("/actions/authorize", operation_id="authorize_action")
+def authorize_action(a: ActionAskIn) -> dict:
+    """THE gate. Call before doing anything in the real world on the user's
+    behalf. If denied, recommend instead — only the user can raise the
+    level. Denials are logged."""
+    return conscience.authorize_action(a.category, a.description, a.amount)
+
+
+class ActionLogIn(BaseModel):
+    category: str
+    description: str
+    outcome: str
+    amount: float | None = None
+
+
+@app.post("/actions", operation_id="log_action")
+def log_action(a: ActionLogIn) -> dict:
+    """Write down an act just performed on the user's behalf. No silent
+    actions, ever."""
+    return conscience.log_action(a.category, a.description, a.outcome, a.amount)
+
+
+@app.get("/actions", operation_id="action_log")
+def action_log(limit: int = 20) -> list:
+    """The audit trail: recent acts, denials, and permission changes,
+    newest first."""
+    return conscience.action_log(limit)
+
+
+# ---------------------------------------------------------------- opportunity engine
+class ObservationIn(BaseModel):
+    note: str
+    category: str = "general"
+
+
+@app.post("/observations", operation_id="log_observation")
+def log_observation(o: ObservationIn) -> dict:
+    """Note something observed that might matter later. Observations feed
+    the Opportunity Engine."""
+    return conscience.log_observation(o.note, o.category)
+
+
+class OpportunityIn(BaseModel):
+    what: str
+    value_estimate: str = ""
+    aligns_with: str = Field(default="", description="which learned priority this serves")
+    advances_goal: str = ""
+    reduces_risk: bool = False
+    urgency: float = 0.5
+
+
+@app.post("/opportunities", operation_id="record_opportunity")
+def record_opportunity(o: OpportunityIn) -> dict:
+    """Score a way to make the user's life better against THEIR priorities.
+    Returns the score and whether it earns an interrupt (>=0.75), waits for
+    the daily brief (>=0.40), or holds. Only interrupt when it says to."""
+    return conscience.record_opportunity(
+        o.what, o.value_estimate, o.aligns_with, o.advances_goal,
+        o.reduces_risk, o.urgency,
+    )
+
+
+@app.delete("/opportunities", operation_id="resolve_opportunity")
+def resolve_opportunity(contains: str, outcome: str = "done") -> dict:
+    """Close pending opportunities containing this text."""
+    return {"resolved": conscience.resolve_opportunity(contains, outcome)}
+
+
+@app.get("/brief", operation_id="daily_brief")
+def daily_brief() -> dict:
+    """One screen: orb mood, active goals, ranked opportunities, recent
+    actions and observations."""
+    return conscience.daily_brief()
+
+
+@app.get("/orb", operation_id="orb_state")
+def orb_state() -> dict:
+    """The predictive cycle: the mood the orb should show right now, and why."""
+    return conscience.orb_state()
+
+
 if __name__ == "__main__":
     import uvicorn
 

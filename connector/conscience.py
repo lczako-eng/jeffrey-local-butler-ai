@@ -46,6 +46,10 @@ class Conscience:
             "priorities": [],   # [{context, higher, lower, confidence, evidence, updated}]
             "goals": [],        # [{goal, added, active}]
             "corrections": [],  # [{context, suggested, chosen, inferred, added}]
+            "permissions": {},  # {category: {level, cap, updated}} — Operational AI
+            "actions": [],      # [{category, description, amount, outcome, added, ts}]
+            "observations": [],   # [{note, category, added, ts}] — Opportunity Engine
+            "opportunities": [],  # [{what, ..., score, status, added, ts}]
         }
         self._load()
 
@@ -119,6 +123,7 @@ class Conscience:
         self.data["corrections"].append({
             "context": context, "suggested": suggested, "chosen": chosen,
             "inferred": f"{inferred_higher} > {inferred_lower}", "added": _now(),
+            "ts": time.time(),
         })
 
         p = self._find_priority(context, inferred_higher, inferred_lower)
@@ -166,6 +171,172 @@ class Conscience:
                 n += 1
         self._save()
         return n
+
+    # ------------------------------------------------------------ operational AI
+    # The Act tier, enforced in code. Jefferey can never widen his own
+    # authority: permissions change only here, at the user's explicit word,
+    # and every grant, denial, and act lands in the owned log.
+
+    LEVELS = ("observe", "recommend", "act")
+
+    def set_permission(self, category: str, level: str, cap: float | None = None) -> dict:
+        """User-granted authority for a category of action. 'act' may carry a
+        spending cap; anything above it is denied regardless of level."""
+        if level not in self.LEVELS:
+            raise ValueError(f"level must be one of {self.LEVELS}")
+        entry = {"level": level, "cap": cap, "updated": _now()}
+        self.data["permissions"][category.lower().strip()] = entry
+        self.data["actions"].append({
+            "category": category.lower().strip(),
+            "description": f"permission set to '{level}'"
+                           + (f" with cap {cap}" if cap is not None else ""),
+            "amount": None, "outcome": "permission_change",
+            "added": _now(), "ts": time.time(),
+        })
+        self._save()
+        return {"category": category.lower().strip(), **entry}
+
+    def permission_for(self, category: str) -> dict:
+        """Default is 'recommend': watch, learn, bring options — never act."""
+        return self.data["permissions"].get(
+            category.lower().strip(), {"level": "recommend", "cap": None}
+        )
+
+    def authorize_action(self, category: str, description: str,
+                         amount: float | None = None) -> dict:
+        """THE gate. Called before any real-world act. Denials are logged too —
+        an auditable trail of what Jefferey wanted to do but wasn't allowed."""
+        perm = self.permission_for(category)
+        if perm["level"] != "act":
+            verdict = {
+                "allowed": False,
+                "reason": (
+                    f"'{category}' is at level '{perm['level']}' — recommend it "
+                    "to the user instead; only they can raise the level."
+                ),
+                **perm,
+            }
+        elif amount is not None and perm.get("cap") is not None and amount > perm["cap"]:
+            verdict = {
+                "allowed": False,
+                "reason": f"amount {amount} exceeds the user's cap of {perm['cap']} "
+                          f"for '{category}' — ask them first.",
+                **perm,
+            }
+        else:
+            verdict = {"allowed": True, "reason": "within granted authority", **perm}
+        if not verdict["allowed"]:
+            self.data["actions"].append({
+                "category": category.lower().strip(), "description": description,
+                "amount": amount, "outcome": f"denied: {verdict['reason']}",
+                "added": _now(), "ts": time.time(),
+            })
+            self._save()
+        return verdict
+
+    def log_action(self, category: str, description: str, outcome: str,
+                   amount: float | None = None) -> dict:
+        """Every executed act is written down. No silent actions, ever."""
+        entry = {
+            "category": category.lower().strip(), "description": description,
+            "amount": amount, "outcome": outcome, "added": _now(), "ts": time.time(),
+        }
+        self.data["actions"].append(entry)
+        self._save()
+        return entry
+
+    def action_log(self, limit: int = 20) -> list[dict]:
+        return self.data["actions"][-limit:][::-1]
+
+    # ------------------------------------------------------------ opportunity engine
+    # "What can I do today to make this person's life better?" — observations
+    # come in, opportunities get scored against THEIR priorities, and only
+    # what clears the bar earns the right to interrupt.
+
+    def log_observation(self, note: str, category: str = "general") -> dict:
+        entry = {"note": note.strip(), "category": category,
+                 "added": _now(), "ts": time.time()}
+        self.data["observations"].append(entry)
+        self._save()
+        return entry
+
+    def record_opportunity(self, what: str, value_estimate: str = "",
+                           aligns_with: str = "", advances_goal: str = "",
+                           reduces_risk: bool = False, urgency: float = 0.5) -> dict:
+        """Score an opportunity by the spec's questions: does it align with
+        their priorities, advance a goal, reduce a risk, and is it urgent?
+        >= 0.75 earns an interrupt; >= 0.40 waits for the daily brief;
+        below that it holds."""
+        urgency = max(0.0, min(1.0, urgency))
+        score = round(
+            0.20
+            + (0.25 if aligns_with.strip() else 0)
+            + (0.20 if advances_goal.strip() else 0)
+            + (0.15 if reduces_risk else 0)
+            + 0.20 * urgency,
+            2,
+        )
+        status = "interrupt" if score >= 0.75 else "brief" if score >= 0.40 else "hold"
+        entry = {
+            "what": what.strip(), "value_estimate": value_estimate,
+            "aligns_with": aligns_with, "advances_goal": advances_goal,
+            "reduces_risk": reduces_risk, "urgency": urgency,
+            "score": score, "status": status, "resolved": False,
+            "added": _now(), "ts": time.time(),
+        }
+        self.data["opportunities"].append(entry)
+        self._save()
+        return entry
+
+    def pending_opportunities(self) -> list[dict]:
+        return sorted(
+            [o for o in self.data["opportunities"] if not o["resolved"]],
+            key=lambda o: -o["score"],
+        )
+
+    def resolve_opportunity(self, contains: str, outcome: str = "done") -> int:
+        n = 0
+        for o in self.data["opportunities"]:
+            if not o["resolved"] and contains.lower() in o["what"].lower():
+                o["resolved"] = True
+                o["outcome"] = outcome
+                n += 1
+        self._save()
+        return n
+
+    def orb_state(self) -> dict:
+        """The predictive cycle: the orb's mood is the engine's real state,
+        so the user reads Jefferey like a face."""
+        now = time.time()
+        pending = self.pending_opportunities()
+        recent_corr = any(
+            c.get("ts", 0) > now - 48 * 3600 for c in self.data["corrections"]
+        )
+        if any(o["reduces_risk"] and o["status"] == "interrupt" for o in pending):
+            return {"mood": "protective",
+                    "reason": "a risk to the user needs attention"}
+        if any(o["status"] == "interrupt" for o in pending):
+            return {"mood": "charged",
+                    "reason": "found something worth interrupting for"}
+        if any(o["status"] == "brief" for o in pending):
+            return {"mood": "curious",
+                    "reason": "opportunities waiting in the daily brief"}
+        if recent_corr:
+            return {"mood": "happy", "reason": "learned something new recently"}
+        if any(ob.get("ts", 0) > now - 24 * 3600 for ob in self.data["observations"]):
+            return {"mood": "thinking", "reason": "digesting new observations"}
+        return {"mood": "calm", "reason": "all quiet, watching"}
+
+    def daily_brief(self) -> dict:
+        """One screen: what he noticed, what he suggests, what he did."""
+        return {
+            "orb": self.orb_state(),
+            "active_goals": [g["goal"] for g in self.data["goals"] if g["active"]],
+            "opportunities": self.pending_opportunities()[:10],
+            "recent_actions": self.action_log(10),
+            "recent_observations": self.data["observations"][-5:][::-1],
+            "corrections_learned_from": len(self.data["corrections"]),
+        }
 
     # ------------------------------------------------------------ views
     def snapshot(self) -> dict:

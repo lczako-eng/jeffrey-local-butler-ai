@@ -163,6 +163,135 @@ TOOLS = [
             "required": ["contains"],
         },
     },
+    {
+        "name": "set_permission",
+        "description": (
+            "ONLY when the user explicitly grants or changes authority, in "
+            "their own words. Levels: 'observe' (watch and learn), 'recommend' "
+            "(bring ranked options — the default), 'act' (execute in this "
+            "category, optionally under a spending cap). Never call this on "
+            "your own initiative — Jefferey never expands his own permissions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string"},
+                "level": {"type": "string", "enum": ["observe", "recommend", "act"]},
+                "cap": {"type": "number"},
+            },
+            "required": ["category", "level"],
+        },
+    },
+    {
+        "name": "authorize_action",
+        "description": (
+            "THE gate. Call before doing anything in the real world on the "
+            "user's behalf. Returns allowed true/false with the reason. If "
+            "denied, recommend instead — only the user can raise the level. "
+            "Denials are logged."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string"},
+                "description": {"type": "string"},
+                "amount": {"type": "number"},
+            },
+            "required": ["category", "description"],
+        },
+    },
+    {
+        "name": "log_action",
+        "description": (
+            "Write down an act just performed on the user's behalf. No silent "
+            "actions, ever — the log lives in the user's own store."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string"},
+                "description": {"type": "string"},
+                "outcome": {"type": "string"},
+                "amount": {"type": "number"},
+            },
+            "required": ["category", "description", "outcome"],
+        },
+    },
+    {
+        "name": "action_log",
+        "description": "The audit trail: recent acts, denials, and permission changes, newest first.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "default": 20}},
+        },
+    },
+    {
+        "name": "log_observation",
+        "description": (
+            "Note something observed that might matter later (a price change, "
+            "a renewal approaching, a pattern). Observations feed the "
+            "Opportunity Engine."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note": {"type": "string"},
+                "category": {"type": "string", "default": "general"},
+            },
+            "required": ["note"],
+        },
+    },
+    {
+        "name": "record_opportunity",
+        "description": (
+            "Score a way to make the user's life better against THEIR "
+            "priorities: value ('saves $380/yr'), which learned priority it "
+            "aligns with, which goal it advances, whether it reduces risk, "
+            "urgency 0-1. Returns the score: interrupt (>=0.75), daily brief "
+            "(>=0.40), or hold. Only interrupt when it says to."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "what": {"type": "string"},
+                "value_estimate": {"type": "string"},
+                "aligns_with": {"type": "string"},
+                "advances_goal": {"type": "string"},
+                "reduces_risk": {"type": "boolean", "default": False},
+                "urgency": {"type": "number", "default": 0.5},
+            },
+            "required": ["what"],
+        },
+    },
+    {
+        "name": "resolve_opportunity",
+        "description": "Close pending opportunities containing this text (acted on, declined, or expired).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contains": {"type": "string"},
+                "outcome": {"type": "string", "default": "done"},
+            },
+            "required": ["contains"],
+        },
+    },
+    {
+        "name": "daily_brief",
+        "description": (
+            "One screen: orb mood (the engine's real state), active goals, "
+            "pending opportunities ranked by score, recent actions and "
+            "observations. Open with this when the user asks what's new."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "orb_state",
+        "description": (
+            "The predictive cycle: the mood the orb should show right now — "
+            "protective, charged, curious, happy, thinking, or calm — and why."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -190,6 +319,31 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
         return conscience.add_goal(args["goal"])
     if name == "close_goal":
         return {"closed": conscience.close_goal(args["contains"])}
+    if name == "set_permission":
+        return conscience.set_permission(
+            args["category"], args["level"], args.get("cap"))
+    if name == "authorize_action":
+        return conscience.authorize_action(
+            args["category"], args["description"], args.get("amount"))
+    if name == "log_action":
+        return conscience.log_action(
+            args["category"], args["description"], args["outcome"], args.get("amount"))
+    if name == "action_log":
+        return conscience.action_log(args.get("limit", 20))
+    if name == "log_observation":
+        return conscience.log_observation(args["note"], args.get("category", "general"))
+    if name == "record_opportunity":
+        return conscience.record_opportunity(
+            args["what"], args.get("value_estimate", ""), args.get("aligns_with", ""),
+            args.get("advances_goal", ""), args.get("reduces_risk", False),
+            args.get("urgency", 0.5))
+    if name == "resolve_opportunity":
+        return {"resolved": conscience.resolve_opportunity(
+            args["contains"], args.get("outcome", "done"))}
+    if name == "daily_brief":
+        return conscience.daily_brief()
+    if name == "orb_state":
+        return conscience.orb_state()
     raise ValueError(f"unknown tool: {name}")
 
 
@@ -209,6 +363,23 @@ _TRACE = {
     "priorities_for": lambda a, r: "reading your hierarchy",
     "add_goal": lambda a, r: f"goal registered: {a.get('goal')}",
     "close_goal": lambda a, r: f"closed {r.get('closed')} goal(s)",
+    "set_permission": lambda a, r: (
+        f"authority: {a.get('category')} → {a.get('level')}"
+        + (f" (cap {a.get('cap')})" if a.get('cap') is not None else "")
+    ),
+    "authorize_action": lambda a, r: (
+        f"{'✓ authorized' if r.get('allowed') else '✗ denied'}: "
+        f"{a.get('description')} [{a.get('category')}]"
+    ),
+    "log_action": lambda a, r: f"acted: {a.get('description')} → {a.get('outcome')}",
+    "action_log": lambda a, r: "reading the action log",
+    "log_observation": lambda a, r: f"noticed: {a.get('note')}",
+    "record_opportunity": lambda a, r: (
+        f"opportunity [{r.get('status')} @ {r.get('score')}]: {a.get('what')}"
+    ),
+    "resolve_opportunity": lambda a, r: f"resolved {r.get('resolved')} opportunity(ies)",
+    "daily_brief": lambda a, r: "assembling your brief",
+    "orb_state": lambda a, r: f"orb: {r.get('mood')} — {r.get('reason')}",
 }
 
 
@@ -377,6 +548,25 @@ def selftest() -> None:
                 "priorities_for": {},
                 "add_goal": {"goal": "cut monthly expenses 15%"},
                 "close_goal": {"contains": "expenses"},
+                "set_permission": {"category": "subscriptions", "level": "act", "cap": 50},
+                "authorize_action": {
+                    "category": "subscriptions",
+                    "description": "cancel unused gym app", "amount": 12.99,
+                },
+                "log_action": {
+                    "category": "subscriptions",
+                    "description": "cancelled unused gym app", "outcome": "done",
+                    "amount": 12.99,
+                },
+                "action_log": {},
+                "log_observation": {"note": "streaming price rose to $22.99"},
+                "record_opportunity": {
+                    "what": "switch streaming plan", "value_estimate": "saves $96/yr",
+                    "aligns_with": "saving money", "urgency": 0.4,
+                },
+                "resolve_opportunity": {"contains": "streaming"},
+                "daily_brief": {},
+                "orb_state": {},
             }[name]
             out = dispatch_tool(name, sample)
             assert out is not None, name
@@ -405,7 +595,34 @@ def selftest() -> None:
         assert conscience.forget_fact("recital") == 1, "forget failed"
         print("  ✓ remember / forget")
 
-        # 5. The system prompt carries directives + live store.
+        # 5. Operational AI: the gate holds.
+        denied = conscience.authorize_action("travel", "book flight", 300)
+        assert not denied["allowed"], "acted without permission!"
+        conscience.set_permission("travel", "act", cap=500)
+        assert conscience.authorize_action("travel", "book flight", 300)["allowed"]
+        over = conscience.authorize_action("travel", "book flight", 900)
+        assert not over["allowed"] and "cap" in over["reason"], "cap not enforced!"
+        assert any("denied" in a["outcome"] for a in conscience.action_log()), \
+            "denials not logged"
+        print("  ✓ act gate: default-deny, grant, cap, audit trail")
+
+        # 6. Opportunity engine: scoring gates the right to interrupt.
+        low = conscience.record_opportunity("minor coupon")
+        assert low["status"] == "hold", low
+        hot = conscience.record_opportunity(
+            "suspicious recurring charge found", value_estimate="stops $60/mo",
+            aligns_with="protecting money", advances_goal="cut expenses",
+            reduces_risk=True, urgency=1.0)
+        assert hot["status"] == "interrupt", hot
+        assert conscience.orb_state()["mood"] == "protective", conscience.orb_state()
+        conscience.resolve_opportunity("suspicious")
+        conscience.resolve_opportunity("coupon")
+        brief = conscience.daily_brief()
+        assert "orb" in brief and "opportunities" in brief
+        print(f"  ✓ opportunity engine: hold {low['score']} / interrupt {hot['score']} "
+              f"/ orb went protective / brief assembles")
+
+        # 7. The system prompt carries directives + live store.
         sp = system_prompt()
         assert "JEFFEREY" in sp and "Live conscience" in sp and "priorities" in sp
         print("  ✓ system prompt assembly")
