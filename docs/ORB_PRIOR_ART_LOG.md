@@ -6,14 +6,31 @@ differs from adjacent products in the market. Maintained so that counsel can
 reconstruct the timeline quickly. This document makes no accusation against
 any party; it records facts with dates and sources.
 
-**Status of protection (as stated by the founder, August 2026):**
-- Patent application covering the system: **filed — patent pending.**
-  (Filing date, application number, and publication status: confirm with
-  patent agent and record here.)
-- Registered trademarks held: **Jefferey AI**, **Personal AI Shadow**,
-  **Self Cloud** (filed/paid 2025, per founder).
+**Status of protection (documents reviewed 2026-08-14):**
+- Trademark application **PERSONAL AI SHADOW** — filed with the Canadian
+  Trademarks Office **February 7, 2026**, application **#2454960**, Nice
+  class 42 (SaaS featuring AI software). (Jefferey AI and Self Cloud
+  applications: per founder; record application numbers/dates here.)
+- Patent claims document ("Description of a Physically Sovereign AI
+  System", 18 pp) and novelty analysis — both dated **February 6, 2026**.
+  Filing status: **patent pending per founder — confirm application number,
+  filing date, and publication status with patent agent and record here.**
 - Public notice "Emotional-state interface — patent pending" displayed on
   jeffereyai.com orb section as of 2026-08-04 (site repo, main branch).
+
+**Earlier origin — to be substantiated.** The founder recalls first putting
+this IP out in **summer 2025**. The February 2026 compilation explicitly
+references an earlier source document, **`Emotionalai_Jefferey.pdf`**
+(describing the orb as a "living visual organism" with morphogenic shape
+language, a tri-accent colour system, and five core emotional states: Calm,
+Charged, Rage, Annoyed, Sad) — that document and its date are not yet in
+this record. Candidate evidence to locate and preserve: the original
+`Emotionalai_Jefferey.pdf` with its file-creation metadata; the AI-chat
+conversation history in which the concept was developed; e-mails or cloud
+uploads from summer 2025; the jeffereyai.com domain registration date
+(whois); any dated purchase/filing receipts. Until such an artifact is
+found, the earliest **provable** date in this record is 2025-11-29
+(repository initialization) / 2025-12-01 (public mood-colour orb commit).
 
 ---
 
@@ -36,10 +53,13 @@ Times are from git history (public repositories under github.com/lczako-eng).
 
 | Date | Event | Evidence |
 |---|---|---|
+| summer 2025 | Founder-recalled first documentation (`Emotionalai_Jefferey.pdf`) — artifact to be located; see note above | — |
 | 2025-11-29 | Code repo initialized (`jeffrey-local-butler-ai`) | commit `10ca39b` |
 | 2025-12-01 | **Colour-changing mood orb publicly committed** — site repo "Add live orb site", "Update Jeffrey orb transitions": orb with mood-driven colour gradients and transitions | commits `9b58117`, `4db73dd` (Jeffrey-AI-Butler) |
 | 2026-02-18/19 | Orb iterated across site pages; mood asset naming | commits `cc2d4ab`, `679b089`, `147cccd` |
 | 2026-08-03 | WebGL particle orb v1–v13: eight emotions (calm/charged/happy/curious/annoyed/protective/sad/thinking), per-mood palettes + conic shimmer, lifelike touch reactions, temper escalation, visit memory | commits `e825b2a` … through v13 series (Jeffrey-AI-Butler) |
+| 2026-02-06 | Patent claims document + novelty analysis dated (orb claimed as "Emotional Orb Interface — morphogenic visual organism for AI emotional state"; also "Adaptive Emotional Intensity System") | founder's documents |
+| 2026-02-07 | PERSONAL AI SHADOW trademark application filed (CA #2454960) | application document |
 | 2026-08-03 | Public "To Be Built" spec names the Emotional Orb as build priority 05 with state-communication role | `docs/JEFFEREY_TO_BE_BUILT.md` (Jeffrey-AI-Butler) |
 | 2026-08-04 | **Engine-driven emotion shipped**: `orb_state()` maps live conscience state (risk found → protective, opportunity → charged/curious, recent learning → happy, observations → thinking, else calm) across MCP/HTTP/chat surfaces | commit `c49fe0a` (jeffrey-local-butler-ai) |
 | 2026-08-04 | Patent-pending notice added to public orb section | site repo, main |
