@@ -2,3 +2,4 @@ anthropic>=0.120
 mcp[cli]
 fastapi
 uvicorn
+pypdf

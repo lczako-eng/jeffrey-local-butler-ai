@@ -38,8 +38,10 @@ from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).parent))
 from conscience import Conscience
+from representative import Representative
 
 conscience = Conscience()
+rep = Representative(conscience)
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
 TOKEN = os.environ.get("JEFFEREY_HTTP_TOKEN") or secrets.token_urlsafe(24)
@@ -281,6 +283,72 @@ def daily_brief() -> dict:
 def orb_state() -> dict:
     """The predictive cycle: the mood the orb should show right now, and why."""
     return conscience.orb_state()
+
+
+# ---------------------------------------------------------------- representative
+class TriageIn(BaseModel):
+    sender: str = ""
+    subject: str = ""
+    body: str
+
+
+@app.post("/triage", operation_id="triage_message")
+def triage_message(t: TriageIn) -> dict:
+    """Read an incoming message the way a good friend would: what does it
+    want, does it matter by THIS person's priorities, and is anyone trying to
+    take advantage of them? Returns a verdict, the predatory tactics spotted,
+    amounts and deadlines, and the user's relevant values. Never reply, click,
+    pay, or unsubscribe on their behalf without authorize_action."""
+    return rep.triage_message(t.sender, t.subject, t.body)
+
+
+class DraftIn(BaseModel):
+    purpose: str
+    recipient: str = ""
+
+
+@app.post("/draft-guidance", operation_id="draft_guidance")
+def draft_guidance(d: DraftIn) -> dict:
+    """Call BEFORE writing anything in the user's name. Returns their voice,
+    the priorities and facts that apply, who to sign as, and the hard limits.
+    Sending requires authorize_action on 'correspondence'."""
+    return rep.draft_guidance(d.purpose, d.recipient)
+
+
+class FormIn(BaseModel):
+    fields: list[str]
+
+
+@app.post("/forms/fill", operation_id="fill_form")
+def fill_form(f: FormIn) -> dict:
+    """Given a form's field labels, return what Jefferey can fill from the
+    user's own profile and exactly what he cannot. He never guesses, and
+    never fills sensitive identifiers — those go back to the user."""
+    return rep.fill_form(f.fields)
+
+
+class ProfileIn(BaseModel):
+    field: str
+    value: str
+
+
+@app.post("/profile", operation_id="set_profile_field")
+def set_profile_field(p: ProfileIn) -> dict:
+    """Store one identity detail Jefferey may reuse on forms. Sensitive
+    identifiers (SIN/SSN, cards, PINs) are refused by design."""
+    return rep.set_profile_field(p.field, p.value)
+
+
+@app.get("/profile", operation_id="get_profile")
+def get_profile() -> dict:
+    """Everything Jefferey can put on a form for this user. They own all of it."""
+    return rep.get_profile()
+
+
+@app.delete("/profile", operation_id="forget_profile_field")
+def forget_profile_field(field: str) -> dict:
+    """Delete one profile detail. The right to erase is absolute."""
+    return rep.forget_profile_field(field)
 
 
 if __name__ == "__main__":

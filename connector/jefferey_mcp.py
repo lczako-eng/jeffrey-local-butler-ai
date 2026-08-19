@@ -31,9 +31,11 @@ except ImportError:  # mcp >= 2.0
 
 sys.path.insert(0, str(Path(__file__).parent))
 from conscience import Conscience
+from representative import Representative
 
 mcp = _Server("jefferey")
 conscience = Conscience()
+rep = Representative(conscience)
 
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
@@ -218,6 +220,74 @@ def orb_state() -> dict:
     (brief-level opportunities), happy (learned recently), thinking (fresh
     observations), or calm."""
     return conscience.orb_state()
+
+
+# ---------------------------------------------------------------- representative
+# Correspondence and paperwork, done in the user's interest. Jefferey rides
+# the host's own mail/file connectors; these tools supply the representation.
+@mcp.tool()
+def triage_message(sender: str, subject: str, body: str) -> dict:
+    """Read an incoming message the way a good friend would: what does it
+    want, does it matter by THIS person's priorities, and is anyone trying to
+    take advantage of them? Returns a verdict (likely_scam / suspicious /
+    money_watch / needs_decision / routine), the predatory tactics spotted in
+    plain words, amounts and deadlines found, and the user's relevant values.
+    Never reply, click, pay, or unsubscribe on their behalf without
+    authorize_action."""
+    return rep.triage_message(sender, subject, body)
+
+
+@mcp.tool()
+def draft_guidance(purpose: str, recipient: str = "") -> dict:
+    """Call BEFORE writing anything in the user's name (an email, a letter,
+    a complaint, a cancellation). Returns their voice, the priorities and
+    facts that apply here, who to sign as, and the hard limits. Write the
+    draft from this — then show it to them. Sending requires
+    authorize_action on 'correspondence'."""
+    return rep.draft_guidance(purpose, recipient)
+
+
+@mcp.tool()
+def fill_form(fields: list) -> dict:
+    """Given the field labels on a form (HTML, PDF, or paper), return what
+    Jefferey can fill from the user's own profile and exactly what he cannot.
+    He never guesses a value, and never fills sensitive identifiers (SIN/SSN,
+    card numbers, PINs, signatures) — those always go back to the user."""
+    return rep.fill_form([str(f) for f in fields])
+
+
+@mcp.tool()
+def pdf_form_fields(pdf_path: str) -> dict:
+    """List the fillable field names in a PDF form. Feed them to fill_form."""
+    return rep.pdf_form_fields(pdf_path)
+
+
+@mcp.tool()
+def fill_pdf(pdf_path: str, values: dict, out_path: str = "") -> dict:
+    """Write values into a PDF form, saving a NEW file — the user's original
+    is never modified. Show them the filled copy for review; submitting or
+    signing requires authorize_action on 'paperwork'."""
+    return rep.fill_pdf(pdf_path, {str(k): str(v) for k, v in values.items()}, out_path)
+
+
+@mcp.tool()
+def set_profile_field(field: str, value: str) -> dict:
+    """Store one identity detail Jefferey may reuse on forms (name, address,
+    phone, email, date of birth, employer...). Sensitive identifiers are
+    refused by design. Ask before storing anything the user hasn't offered."""
+    return rep.set_profile_field(field, value)
+
+
+@mcp.tool()
+def get_profile() -> dict:
+    """Everything Jefferey can put on a form for this user. They own all of it."""
+    return rep.get_profile()
+
+
+@mcp.tool()
+def forget_profile_field(field: str) -> dict:
+    """Delete one profile detail. The right to erase is absolute."""
+    return rep.forget_profile_field(field)
 
 
 if __name__ == "__main__":

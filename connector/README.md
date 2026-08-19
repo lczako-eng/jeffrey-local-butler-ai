@@ -121,6 +121,29 @@ person's life better?"*
   *curious* (brief-level finds), *happy* (learned recently), *thinking*
   (fresh observations), *calm*. The face and the mind are the same thing.
 
+## The Representative — correspondence & paperwork
+
+The part that earns his keep on day one. Jefferey carries **no mail account
+of his own** — he rides the Gmail/Outlook connector the host engine already
+has. What he adds is representation:
+
+- `triage_message` — reads anything that wants money, time, or a decision.
+  Returns a verdict (`likely_scam` / `suspicious` / `money_watch` /
+  `needs_decision` / `routine`), the predatory tactics **named in plain
+  words** (gift cards, manufactured urgency, "don't tell anyone", remote
+  access, impersonated institutions), amounts and deadlines found, and the
+  user's own priorities that apply. Built for the people who get targeted.
+- `draft_guidance` → write in their voice, from their values, signed as
+  them. Sending requires `authorize_action` on `correspondence`.
+- `fill_form` / `pdf_form_fields` / `fill_pdf` — completes HTML and PDF
+  forms from the user's profile, saves a **new** file (never overwrites the
+  original), and hands back every field it doesn't know. **It never guesses
+  a value onto a form.**
+- `set_profile_field` / `get_profile` / `forget_profile_field` — the identity
+  details he may reuse, in the user's own store. **Sensitive identifiers
+  (SIN/SSN, card numbers, PINs, signatures) are refused by design** — even
+  if the user asks. Those fields always come back to them.
+
 ## The demo that matters
 
 1. Ask Jefferey for a recommendation (a phone plan, a flight).

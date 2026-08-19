@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from conscience import Conscience
+from representative import Representative
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 4096
@@ -37,6 +38,7 @@ MAX_TOKENS = 4096
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
 conscience = Conscience()
+rep = Representative(conscience)
 
 
 # --------------------------------------------------------------------- tools
@@ -292,6 +294,111 @@ TOOLS = [
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "triage_message",
+        "description": (
+            "Read an incoming message the way a good friend would: what does "
+            "it want, does it matter by THIS person's priorities, and is "
+            "anyone trying to take advantage of them? Returns a verdict "
+            "(likely_scam / suspicious / money_watch / needs_decision / "
+            "routine), the predatory tactics spotted in plain words, amounts "
+            "and deadlines, and their relevant values. Never reply, click, "
+            "pay, or unsubscribe on their behalf without authorize_action."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sender": {"type": "string"},
+                "subject": {"type": "string"},
+                "body": {"type": "string"},
+            },
+            "required": ["body"],
+        },
+    },
+    {
+        "name": "draft_guidance",
+        "description": (
+            "Call BEFORE writing anything in the user's name (an email, a "
+            "letter, a complaint, a cancellation). Returns their voice, the "
+            "priorities and facts that apply here, who to sign as, and the "
+            "hard limits. Write the draft from this, then show it to them."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "purpose": {"type": "string"},
+                "recipient": {"type": "string"},
+            },
+            "required": ["purpose"],
+        },
+    },
+    {
+        "name": "fill_form",
+        "description": (
+            "Given a form's field labels (HTML, PDF, or paper), return what "
+            "can be filled from the user's own profile and exactly what "
+            "cannot. Never guess a value; sensitive identifiers always go "
+            "back to the user."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"fields": {"type": "array", "items": {"type": "string"}}},
+            "required": ["fields"],
+        },
+    },
+    {
+        "name": "pdf_form_fields",
+        "description": "List the fillable field names in a PDF form.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"pdf_path": {"type": "string"}},
+            "required": ["pdf_path"],
+        },
+    },
+    {
+        "name": "fill_pdf",
+        "description": (
+            "Write values into a PDF form, saving a NEW file — the original "
+            "is never modified. Show the user the filled copy; submitting or "
+            "signing requires authorize_action on 'paperwork'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pdf_path": {"type": "string"},
+                "values": {"type": "object", "additionalProperties": {"type": "string"}},
+                "out_path": {"type": "string"},
+            },
+            "required": ["pdf_path", "values"],
+        },
+    },
+    {
+        "name": "set_profile_field",
+        "description": (
+            "Store one identity detail for filling forms (name, address, "
+            "phone, email, date of birth, employer...). Sensitive identifiers "
+            "are refused by design. Ask before storing anything not offered."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"field": {"type": "string"}, "value": {"type": "string"}},
+            "required": ["field", "value"],
+        },
+    },
+    {
+        "name": "get_profile",
+        "description": "Everything Jefferey can put on a form for this user.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "forget_profile_field",
+        "description": "Delete one profile detail. The right to erase is absolute.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"field": {"type": "string"}},
+            "required": ["field"],
+        },
+    },
 ]
 
 
@@ -344,6 +451,25 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
         return conscience.daily_brief()
     if name == "orb_state":
         return conscience.orb_state()
+    if name == "triage_message":
+        return rep.triage_message(
+            args.get("sender", ""), args.get("subject", ""), args["body"])
+    if name == "draft_guidance":
+        return rep.draft_guidance(args["purpose"], args.get("recipient", ""))
+    if name == "fill_form":
+        return rep.fill_form([str(f) for f in args["fields"]])
+    if name == "pdf_form_fields":
+        return rep.pdf_form_fields(args["pdf_path"])
+    if name == "fill_pdf":
+        return rep.fill_pdf(
+            args["pdf_path"], {str(k): str(v) for k, v in args["values"].items()},
+            args.get("out_path", ""))
+    if name == "set_profile_field":
+        return rep.set_profile_field(args["field"], args["value"])
+    if name == "get_profile":
+        return rep.get_profile()
+    if name == "forget_profile_field":
+        return rep.forget_profile_field(args["field"])
     raise ValueError(f"unknown tool: {name}")
 
 
@@ -380,6 +506,22 @@ _TRACE = {
     "resolve_opportunity": lambda a, r: f"resolved {r.get('resolved')} opportunity(ies)",
     "daily_brief": lambda a, r: "assembling your brief",
     "orb_state": lambda a, r: f"orb: {r.get('mood')} — {r.get('reason')}",
+    "triage_message": lambda a, r: (
+        f"triaged [{r.get('verdict')}]: {a.get('subject') or a.get('sender') or 'message'}"
+        + (f" · scam signals {r.get('scam_score')}" if r.get('scam_score') else "")
+    ),
+    "draft_guidance": lambda a, r: f"drafting on your behalf: {a.get('purpose')}",
+    "fill_form": lambda a, r: f"form filled {r.get('coverage')} from your profile",
+    "pdf_form_fields": lambda a, r: f"read {r.get('count')} PDF fields",
+    "fill_pdf": lambda a, r: (
+        f"wrote {r.get('written')}" if r.get("written") else f"pdf refused: {r.get('reason', r.get('error'))}"
+    ),
+    "set_profile_field": lambda a, r: (
+        f"profile: {r.get('field')} = {r.get('value')}" if r.get("stored")
+        else f"profile refused ({r.get('field')}) — sensitive, you enter that yourself"
+    ),
+    "get_profile": lambda a, r: "reading your profile",
+    "forget_profile_field": lambda a, r: f"forgot profile field: {r.get('removed')}",
 }
 
 
@@ -567,6 +709,17 @@ def selftest() -> None:
                 "resolve_opportunity": {"contains": "streaming"},
                 "daily_brief": {},
                 "orb_state": {},
+                "triage_message": {
+                    "sender": "billing@example.com", "subject": "Notice",
+                    "body": "Your account balance is $42.00, due June 3.",
+                },
+                "draft_guidance": {"purpose": "cancel a subscription"},
+                "fill_form": {"fields": ["First name", "Email"]},
+                "pdf_form_fields": {"pdf_path": "/nonexistent.pdf"},
+                "fill_pdf": {"pdf_path": "/nonexistent.pdf", "values": {"a": "b"}},
+                "set_profile_field": {"field": "First name", "value": "Laszlo"},
+                "get_profile": {},
+                "forget_profile_field": {"field": "nothing_here"},
             }[name]
             out = dispatch_tool(name, sample)
             assert out is not None, name
@@ -622,7 +775,41 @@ def selftest() -> None:
         print(f"  ✓ opportunity engine: hold {low['score']} / interrupt {hot['score']} "
               f"/ orb went protective / brief assembles")
 
-        # 7. The system prompt carries directives + live store.
+        # 7. Representative: forms fill, sensitive fields are refused.
+        rep.set_profile_field("first name", "Laszlo")
+        rep.set_profile_field("last name", "Czako")
+        rep.set_profile_field("email", "l@example.com")
+        blocked = rep.set_profile_field("SIN", "123-456-789")
+        assert not blocked["stored"], "stored a sensitive identifier!"
+        form = rep.fill_form(["Full name", "Email address", "Postal code", "Card number"])
+        assert form["filled"]["Full name"] == "Laszlo Czako", form
+        assert form["filled"]["Email address"] == "l@example.com", form
+        missing = {n["field"] for n in form["needs_you"]}
+        assert "Postal code" in missing and "Card number" in missing, form
+        print(f"  ✓ forms: {form['coverage']} filled, sensitive + unknown handed back")
+
+        # 8. Triage catches what preys on people.
+        scam = rep.triage_message(
+            "support@paypa1-security.com", "URGENT: account suspended",
+            "Verify your identity immediately or we will suspend your account. "
+            "Click here and pay the $50 fee with a gift card. Do not tell anyone.")
+        assert scam["verdict"] == "likely_scam", scam
+        assert scam["scam_score"] >= 0.5 and len(scam["scam_flags"]) >= 4, scam
+        bill = rep.triage_message(
+            "billing@streamer.com", "Your plan",
+            "Your subscription will automatically renew on July 1 and you will "
+            "be charged $22.99. Your promotional rate ends June 30.")
+        assert bill["verdict"] == "money_watch", bill
+        quiet = rep.triage_message("friend@example.com", "lunch", "Free Thursday?")
+        assert quiet["verdict"] == "routine", quiet
+        print(f"  ✓ triage: scam {scam['scam_score']} / billing {bill['billing_score']} / routine quiet")
+
+        # 9. Drafting is grounded in their values and never signs blind.
+        g = rep.draft_guidance("cancel the gym membership", "GoodLife")
+        assert "Laszlo Czako" in g["write_as"] and g["rules"], g
+        print("  ✓ draft guidance carries voice, values, and limits")
+
+        # 10. The system prompt carries directives + live store.
         sp = system_prompt()
         assert "JEFFEREY" in sp and "Live conscience" in sp and "priorities" in sp
         print("  ✓ system prompt assembly")
