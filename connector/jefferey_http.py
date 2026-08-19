@@ -327,6 +327,14 @@ def fill_form(f: FormIn) -> dict:
     return rep.fill_form(f.fields)
 
 
+@app.get("/vault", operation_id="vault_status")
+def vault_status() -> dict:
+    """Where the user's secrets live (their platform keychain) and which
+    exist, by NAME only. You never see a value and must never ask. Use a
+    secret on a form with the token 'vault:<name>' — resolved locally."""
+    return rep.vault_status()
+
+
 class ProfileIn(BaseModel):
     field: str
     value: str

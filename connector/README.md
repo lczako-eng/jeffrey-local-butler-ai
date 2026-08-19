@@ -25,6 +25,10 @@ conscience store.
 - **`jefferey_http.py`** — the same conscience over HTTP, for engines that
   speak Actions instead of MCP — most importantly **custom GPTs**. The other
   half of build priority 03.
+- **`representative.py`** — correspondence triage (scam and predatory-billing
+  detection), drafting in the user's voice, and HTML/PDF form filling.
+- **`vault.py`** — secrets stored in the platform keychain, used by reference
+  so the AI never sees them.
 
 ## Talk to Jefferey (standalone)
 
@@ -143,6 +147,37 @@ has. What he adds is representation:
   details he may reuse, in the user's own store. **Sensitive identifiers
   (SIN/SSN, card numbers, PINs, signatures) are refused by design** — even
   if the user asks. Those fields always come back to them.
+
+## The Vault — secrets the platform holds, not Jefferey
+
+*"He's supposed to look out for me but can't hold my information?"* He
+doesn't have to hold it. **The operating system already does.**
+
+`vault.py` puts secrets in the platform's own credential store — **Apple
+Keychain**, **Windows Credential Manager**, Linux Secret Service, and on
+phones iOS Keychain / Android Keystore behind Face ID. No partnership or
+special deal is required: these are public APIs any developer can use.
+
+Two rules are enforced in code, not promised:
+
+1. **Secrets never enter an AI context.** You store them from your own
+   terminal, never by typing them into a chat:
+   ```bash
+   python connector/vault.py set sin      # prompts privately, no echo
+   ```
+2. **Jefferey uses them by reference, never by value.** He writes
+   `vault:sin` into the form field; local code on your machine swaps in the
+   real value at the moment of writing. It goes keychain → your PDF, never
+   touching Anthropic, OpenAI, or us.
+
+So he files the same government form every year — including the box he
+isn't allowed to know. He knows the secret *exists*; he never learns what
+it is. Handing him a literal secret is refused outright.
+
+```
+What the AI sees:      {"SIN": "vault:sin", "Full Name": "Laszlo Czako"}
+What lands in the PDF: {"SIN": "999-888-777", "Full Name": "Laszlo Czako"}
+```
 
 ## The demo that matters
 

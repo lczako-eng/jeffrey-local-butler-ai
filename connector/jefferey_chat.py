@@ -386,6 +386,17 @@ TOOLS = [
         },
     },
     {
+        "name": "vault_status",
+        "description": (
+            "Where the user's secrets live (their platform keychain) and "
+            "WHICH exist, by name only. You never see a value and must never "
+            "ask for one. To use a secret on a form, pass 'vault:<name>' — "
+            "local code resolves it at write time. If one isn't stored yet, "
+            "tell them to run: python connector/vault.py set <name>"
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "get_profile",
         "description": "Everything Jefferey can put on a form for this user.",
         "input_schema": {"type": "object", "properties": {}},
@@ -466,6 +477,8 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
             args.get("out_path", ""))
     if name == "set_profile_field":
         return rep.set_profile_field(args["field"], args["value"])
+    if name == "vault_status":
+        return rep.vault_status()
     if name == "get_profile":
         return rep.get_profile()
     if name == "forget_profile_field":
@@ -519,6 +532,10 @@ _TRACE = {
     "set_profile_field": lambda a, r: (
         f"profile: {r.get('field')} = {r.get('value')}" if r.get("stored")
         else f"profile refused ({r.get('field')}) — sensitive, you enter that yourself"
+    ),
+    "vault_status": lambda a, r: (
+        "vault: " + (", ".join(r.get("secrets", [])) or "empty")
+        + (f" (in {r.get('store')})" if r.get("store") else "")
     ),
     "get_profile": lambda a, r: "reading your profile",
     "forget_profile_field": lambda a, r: f"forgot profile field: {r.get('removed')}",
@@ -718,6 +735,7 @@ def selftest() -> None:
                 "pdf_form_fields": {"pdf_path": "/nonexistent.pdf"},
                 "fill_pdf": {"pdf_path": "/nonexistent.pdf", "values": {"a": "b"}},
                 "set_profile_field": {"field": "First name", "value": "Laszlo"},
+                "vault_status": {},
                 "get_profile": {},
                 "forget_profile_field": {"field": "nothing_here"},
             }[name]
@@ -809,7 +827,34 @@ def selftest() -> None:
         assert "Laszlo Czako" in g["write_as"] and g["rules"], g
         print("  ✓ draft guidance carries voice, values, and limits")
 
-        # 10. The system prompt carries directives + live store.
+        # 10. The vault: he uses secrets he cannot see.
+        import keyring
+        from keyring.backend import KeyringBackend
+        import vault as _vault
+
+        class _FakeKeychain(KeyringBackend):
+            priority = 10
+            _s: dict = {}
+            def set_password(self, svc, u, p): self._s[(svc, u)] = p
+            def get_password(self, svc, u): return self._s.get((svc, u))
+            def delete_password(self, svc, u): self._s.pop((svc, u), None)
+        _prev = keyring.get_keyring()
+        keyring.set_keyring(_FakeKeychain())
+        try:
+            SECRET = "999-888-777"
+            _vault.store("sin", SECRET)            # user does this out of band
+            plan = rep.fill_form(["Full name", "SIN"])
+            assert plan["filled"]["SIN"] == "vault:sin", plan
+            assert SECRET not in json.dumps(plan), "secret leaked into AI payload!"
+            assert _vault.resolve("vault:sin") == SECRET
+            assert _vault.resolve("not-a-ref") is None
+            assert "sin" in rep.vault_status()["secrets"]
+            assert SECRET not in json.dumps(rep.vault_status()), "vault status leaked a value!"
+            print("  ✓ vault: sensitive field filled by reference, value never in AI context")
+        finally:
+            keyring.set_keyring(_prev)
+
+        # 11. The system prompt carries directives + live store.
         sp = system_prompt()
         assert "JEFFEREY" in sp and "Live conscience" in sp and "priorities" in sp
         print("  ✓ system prompt assembly")

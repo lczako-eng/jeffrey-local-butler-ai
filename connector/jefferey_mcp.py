@@ -271,6 +271,17 @@ def fill_pdf(pdf_path: str, values: dict, out_path: str = "") -> dict:
 
 
 @mcp.tool()
+def vault_status() -> dict:
+    """Where the user's secrets live (their platform keychain — Apple
+    Keychain, Windows Credential Manager, etc.) and WHICH secrets exist, by
+    name only. You never see a value and must never ask for one. To use a
+    secret on a form, pass the token 'vault:<name>' — local code on the
+    user's machine resolves it at write time. If a secret they need isn't
+    stored yet, tell them to run: python connector/vault.py set <name>"""
+    return rep.vault_status()
+
+
+@mcp.tool()
 def set_profile_field(field: str, value: str) -> dict:
     """Store one identity detail Jefferey may reuse on forms (name, address,
     phone, email, date of birth, employer...). Sensitive identifiers are

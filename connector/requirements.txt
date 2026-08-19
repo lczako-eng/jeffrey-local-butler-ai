@@ -3,3 +3,4 @@ mcp[cli]
 fastapi
 uvicorn
 pypdf
+keyring

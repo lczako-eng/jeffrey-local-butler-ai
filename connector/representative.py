@@ -31,6 +31,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import vault
+
 # ------------------------------------------------------------------ profile
 # Field aliases: the labels real forms actually use, mapped to our keys.
 FIELD_ALIASES: dict[str, list[str]] = {
@@ -158,10 +160,25 @@ class Representative:
         profile = self.c.data.get("profile", {})
         filled: dict[str, str] = {}
         needs_you: list[dict] = []
+        vault_names = vault.names()
         for raw in fields:
             label = str(raw)
             if self._is_sensitive(label):
-                needs_you.append({"field": label, "why": "sensitive — you enter this yourself, always"})
+                slot = self._vault_slot(label, vault_names)
+                if slot:
+                    # He completes it WITHOUT seeing it: the token is resolved
+                    # from the platform keychain at write time, locally.
+                    filled[label] = f"vault:{slot}"
+                else:
+                    needs_you.append({
+                        "field": label,
+                        "why": "sensitive — you enter this yourself, always",
+                        "or": (
+                            "store it once in your platform keychain "
+                            f"(python connector/vault.py set {self._suggest_slot(label)}) "
+                            "and Jefferey can fill it by reference without ever seeing it"
+                        ),
+                    })
                 continue
             key = self._normalize_field(label)
             if key and key in profile:
@@ -174,10 +191,13 @@ class Representative:
             "filled": filled,
             "needs_you": needs_you,
             "coverage": f"{len(filled)}/{len(fields)}",
+            "vault_available": vault_names,
             "rule": (
                 "Present the filled values for review, ask the user only for "
                 "'needs_you', and never submit without authorize_action on the "
-                "'paperwork' category."
+                "'paperwork' category. Values shown as 'vault:<name>' are "
+                "references — you do not know what they are and must never "
+                "ask. Local code fills them at write time."
             ),
         }
 
@@ -212,13 +232,47 @@ class Representative:
         p = Path(pdf_path).expanduser()
         if not p.exists():
             return {"error": f"no such file: {p}"}
-        blocked = [k for k in values if self._is_sensitive(k)]
+        # A sensitive field may be filled ONLY through a vault reference —
+        # never with a literal value handed over by the model.
+        blocked = [
+            k for k, v in values.items()
+            if self._is_sensitive(k) and not vault.is_reference(v)
+        ]
         if blocked:
             return {
                 "error": "refused",
                 "fields": blocked,
-                "reason": "Sensitive fields are never auto-filled — the user enters these themselves.",
+                "reason": (
+                    "Sensitive fields are never filled from a literal value. "
+                    "Store the secret in the platform keychain once "
+                    "(python connector/vault.py set <name>) and pass "
+                    "'vault:<name>' instead — it is resolved locally and never "
+                    "seen by the AI."
+                ),
             }
+
+        # Resolve references here, on the user's machine, at write time.
+        resolved, from_vault, missing = {}, [], []
+        for k, v in values.items():
+            if vault.is_reference(v):
+                try:
+                    secret = vault.resolve(v)
+                except vault.VaultUnavailable as e:
+                    return {"error": "vault unavailable", "reason": str(e)}
+                if secret is None:
+                    missing.append(str(v))
+                    continue
+                resolved[k] = secret
+                from_vault.append(k)
+            else:
+                resolved[k] = v
+        if missing:
+            return {
+                "error": "unknown vault reference",
+                "references": missing,
+                "available": vault.names(),
+            }
+        values = resolved
         out = Path(out_path).expanduser() if out_path else p.with_name(p.stem + "_filled.pdf")
         try:
             reader = pypdf.PdfReader(str(p))
@@ -233,8 +287,13 @@ class Representative:
         return {
             "written": str(out),
             "fields_set": sorted(values.keys()),
+            "filled_from_vault": sorted(from_vault),
             "original_untouched": str(p),
-            "rule": "Show the user the filled copy for review before anything is submitted or signed.",
+            "rule": (
+                "Show the user the filled copy for review before anything is "
+                "submitted or signed. Vault-filled fields were written by local "
+                "code — you never saw those values and must not ask for them."
+            ),
         }
 
     # -------------------------------------------------------------- triage
@@ -329,7 +388,37 @@ class Representative:
             ],
         }
 
+    def vault_status(self) -> dict:
+        """Where secrets live and which exist — names only, never values."""
+        return vault.status()
+
     # -------------------------------------------------------------- helpers
+    @staticmethod
+    def _suggest_slot(label: str) -> str:
+        low = re.sub(r"[^a-z0-9]+", "_", str(label).lower()).strip("_")
+        for short, pats in [
+            ("sin", ("sin", "social_insurance")), ("ssn", ("ssn", "social_security")),
+            ("card_number", ("card",)), ("pin", ("pin",)),
+            ("password", ("password", "passcode")),
+        ]:
+            if any(p in low for p in pats):
+                return short
+        return low[:40] or "secret"
+
+    @classmethod
+    def _vault_slot(cls, label: str, available: list[str]) -> str | None:
+        """Match a sensitive form field to a stored secret's NAME."""
+        if not available:
+            return None
+        low = re.sub(r"[^a-z0-9]+", "_", str(label).lower()).strip("_")
+        suggested = cls._suggest_slot(label)
+        if suggested in available:
+            return suggested
+        for name in available:
+            if name in low or low in name:
+                return name
+        return None
+
     @staticmethod
     def _is_sensitive(label: str) -> bool:
         low = str(label).lower()
