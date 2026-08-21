@@ -1,10 +1,13 @@
 # Local config and secrets
 config.json
 memory.json
+conscience.json
 
 # Python
 __pycache__/
 *.pyc
 
 # macOS
-.DS_Storex
+.DS_Store
+.venv/
+venv/
