@@ -39,9 +39,13 @@ from pydantic import BaseModel, Field
 sys.path.insert(0, str(Path(__file__).parent))
 from conscience import Conscience
 from representative import Representative
+from guardian import Guardian
+from life import Life
 
 conscience = Conscience()
 rep = Representative(conscience)
+guard = Guardian(conscience)
+life = Life(conscience)
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
 TOKEN = os.environ.get("JEFFEREY_HTTP_TOKEN") or secrets.token_urlsafe(24)
@@ -357,6 +361,145 @@ def get_profile() -> dict:
 def forget_profile_field(field: str) -> dict:
     """Delete one profile detail. The right to erase is absolute."""
     return rep.forget_profile_field(field)
+
+
+# ---------------------------------------------------------------- guardian
+class ExpectIn(BaseModel):
+    merchant: str
+    amount: float
+    cadence: str = "monthly"
+    authorized_recurring: bool = True
+    note: str = ""
+
+
+@app.post("/charges/expected", operation_id="expect_charge")
+def expect_charge(e: ExpectIn) -> dict:
+    """Register a charge the user has actually agreed to. Anything not in
+    this register becomes a question later."""
+    return guard.expect_charge(e.merchant, e.amount, e.cadence,
+                               e.authorized_recurring, e.note)
+
+
+class CancelIn(BaseModel):
+    merchant: str
+    on: str = ""
+
+
+@app.post("/charges/cancelled", operation_id="mark_cancelled")
+def mark_cancelled(c: CancelIn) -> dict:
+    """Record that the user cancelled something — any charge after this date
+    is unauthorized."""
+    return guard.mark_cancelled(c.merchant, c.on)
+
+
+class ChargeIn(BaseModel):
+    merchant: str
+    amount: float
+    date: str = ""
+
+
+@app.post("/charges/check", operation_id="check_charge")
+def check_charge(c: ChargeIn) -> dict:
+    """Hold one charge up against what the user agreed to. Returns a verdict
+    in plain words with the dollars at stake."""
+    return guard.check_charge(c.merchant, c.amount, c.date)
+
+
+class StatementIn(BaseModel):
+    charges: list[ChargeIn]
+
+
+@app.post("/charges/review", operation_id="review_statement")
+def review_statement(s: StatementIn) -> dict:
+    """Run a whole statement through at once and report the total at stake."""
+    return guard.review_statement([c.model_dump() for c in s.charges])
+
+
+@app.get("/charges/expected", operation_id="expected_charges")
+def expected_charges() -> list:
+    """What the user has agreed to pay, and what they've cancelled."""
+    return guard.expected_charges()
+
+
+@app.get("/charges/dispute", operation_id="dispute_pack")
+def dispute_pack(merchant: str) -> dict:
+    """Everything needed to get money back from one merchant."""
+    return guard.dispute_pack(merchant)
+
+
+# ---------------------------------------------------------------- life layer
+class PersonIn(BaseModel):
+    name: str
+    relationship: str
+    notes: str = ""
+    important_dates: str = ""
+
+
+@app.post("/life/people", operation_id="add_person")
+def add_person(p: PersonIn) -> dict:
+    """Record someone who matters to the user. Only when they offer it."""
+    return life.add_person(p.name, p.relationship, p.notes, p.important_dates)
+
+
+class MemoryIn(BaseModel):
+    text: str
+    when: str = ""
+    people: str = ""
+    tags: str = ""
+    visibility: str = Field(default="private", description="private | family | legacy")
+
+
+@app.post("/life/memories", operation_id="add_memory")
+def add_memory(m: MemoryIn) -> dict:
+    """Record a snippet of the user's life in their own words. Never invent
+    one; only record what they actually said."""
+    try:
+        return life.add_memory(m.text, m.when, m.people, m.tags, m.visibility)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+class MediaIn(BaseModel):
+    path: str
+    caption: str = ""
+    when: str = ""
+    people: str = ""
+    visibility: str = "private"
+
+
+@app.post("/life/media", operation_id="add_media")
+def add_media(m: MediaIn) -> dict:
+    """Reference a photo where it already lives on the user's Self-Cloud —
+    never a copy, never an upload."""
+    try:
+        return life.add_media(m.path, m.caption, m.when, m.people, m.visibility)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/life", operation_id="who_am_i")
+def who_am_i(include: str = "private") -> dict:
+    """What Jefferey understands about this person as a human being."""
+    return life.who_am_i(include)
+
+
+@app.get("/life/story", operation_id="tell_story")
+def tell_story(theme: str = "", audience: str = "family") -> dict:
+    """Gather what's needed to tell a piece of their story, for the audience
+    they permitted."""
+    return life.tell_story(theme, audience)
+
+
+@app.get("/life/gaps", operation_id="story_gaps")
+def story_gaps() -> dict:
+    """What's missing from their story. Ask for at most one at a time."""
+    return life.story_gaps()
+
+
+@app.delete("/life", operation_id="forget_life")
+def forget_life(contains: str) -> dict:
+    """Erase anything in the life layer matching this text."""
+    return life.forget_life(contains)
 
 
 if __name__ == "__main__":

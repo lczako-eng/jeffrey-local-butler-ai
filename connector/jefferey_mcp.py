@@ -32,10 +32,14 @@ except ImportError:  # mcp >= 2.0
 sys.path.insert(0, str(Path(__file__).parent))
 from conscience import Conscience
 from representative import Representative
+from guardian import Guardian
+from life import Life
 
 mcp = _Server("jefferey")
 conscience = Conscience()
 rep = Representative(conscience)
+guard = Guardian(conscience)
+life = Life(conscience)
 
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
@@ -299,6 +303,121 @@ def get_profile() -> dict:
 def forget_profile_field(field: str) -> dict:
     """Delete one profile detail. The right to erase is absolute."""
     return rep.forget_profile_field(field)
+
+
+# ---------------------------------------------------------------- guardian
+# Money that leaves without asking. Jefferey never moves money — he catches
+# what moved, proves it, and helps the user get it back.
+@mcp.tool()
+def expect_charge(merchant: str, amount: float, cadence: str = "monthly",
+                  authorized_recurring: bool = True, note: str = "") -> dict:
+    """Register a charge the user has ACTUALLY agreed to (merchant, amount,
+    cadence, and whether they ever authorized recurring billing). Anything
+    not in this register becomes a question later, so build it up whenever
+    a subscription or bill comes up in conversation."""
+    return guard.expect_charge(merchant, amount, cadence, authorized_recurring, note)
+
+
+@mcp.tool()
+def mark_cancelled(merchant: str, on: str = "") -> dict:
+    """The user cancelled something. Record it — any charge after this date
+    is unauthorized, and that is the kind that goes unnoticed for years."""
+    return guard.mark_cancelled(merchant, on)
+
+
+@mcp.tool()
+def check_charge(merchant: str, amount: float, date: str = "") -> dict:
+    """Hold one charge up against what the user agreed to. Returns a verdict:
+    expected / amount_increased / unexpected_merchant / charged_after_cancel /
+    duplicate, in plain words, with the dollars at stake. Anything that isn't
+    'expected' should be scored with record_opportunity (reduces_risk=True)
+    and said out loud."""
+    return guard.check_charge(merchant, amount, date)
+
+
+@mcp.tool()
+def review_statement(charges: list) -> dict:
+    """Run a whole statement or transaction list through at once — each entry
+    {merchant, amount, date}. This is where people find the money that has
+    been quietly leaking for years. Report the total at stake."""
+    return guard.review_statement([dict(c) for c in charges])
+
+
+@mcp.tool()
+def expected_charges() -> list:
+    """What the user has agreed to pay, and what they've cancelled."""
+    return guard.expected_charges()
+
+
+@mcp.tool()
+def dispute_pack(merchant: str) -> dict:
+    """Assemble everything needed to get money back from one merchant: what
+    was authorized, every disputed charge, and how to write the demand. The
+    user should never be the one digging through statements at 11pm."""
+    return guard.dispute_pack(merchant)
+
+
+# ---------------------------------------------------------------- the life layer
+# The Digital Conscience proper: who this person IS, so Jefferey can
+# represent them now and tell their story later.
+@mcp.tool()
+def add_person(name: str, relationship: str, notes: str = "",
+               important_dates: str = "") -> dict:
+    """Record someone who matters to the user (family, friends, the people
+    they'd want remembered). Only when they offer it — never interrogate."""
+    return life.add_person(name, relationship, notes, important_dates)
+
+
+@mcp.tool()
+def add_memory(text: str, when: str = "", people: str = "", tags: str = "",
+               visibility: str = "private") -> dict:
+    """Record a snippet of the user's life in their own words — a moment, a
+    turning point, a lesson, a joke only their family gets. visibility:
+    'private' (Jefferey only), 'family' (may be shared with named people),
+    'legacy' (meant to outlive them). Never invent one; only record what
+    they actually said."""
+    return life.add_memory(text, when, people, tags, visibility)
+
+
+@mcp.tool()
+def add_media(path: str, caption: str = "", when: str = "", people: str = "",
+              visibility: str = "private") -> dict:
+    """Reference a photo or recording WHERE IT ALREADY LIVES — on the user's
+    own Self-Cloud drive. Jefferey stores the path and caption, never a copy
+    and never an upload. If the drive is off, it simply reads unreachable."""
+    return life.add_media(path, caption, when, people, visibility)
+
+
+@mcp.tool()
+def who_am_i(include: str = "private") -> dict:
+    """What Jefferey understands about this person as a human being: the
+    people who matter, the moments recorded, the pictures, and what they
+    value. Speak from this — never invent a memory or a feeling."""
+    return life.who_am_i(include)
+
+
+@mcp.tool()
+def tell_story(theme: str = "", audience: str = "family") -> dict:
+    """Gather what's needed to tell a piece of this person's story — for them
+    now, or for the people they named, later. audience: 'self', 'family', or
+    'legacy' (each sees only what the user permitted). Tell it in their
+    voice, in order, using only what is here."""
+    return life.tell_story(theme, audience)
+
+
+@mcp.tool()
+def story_gaps() -> dict:
+    """What's missing from their story, so you can gently ask for it while
+    there is still time. Ask for at most ONE at a time, at the right moment.
+    Never pressure them."""
+    return life.story_gaps()
+
+
+@mcp.tool()
+def forget_life(contains: str) -> dict:
+    """Erase anything in the life layer matching this text — people, moments,
+    media references. Never argued with."""
+    return life.forget_life(contains)
 
 
 if __name__ == "__main__":

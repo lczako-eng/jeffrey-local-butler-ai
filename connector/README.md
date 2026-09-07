@@ -179,6 +179,50 @@ What the AI sees:      {"SIN": "vault:sin", "Full Name": "Laszlo Czako"}
 What lands in the PDF: {"SIN": "999-888-777", "Full Name": "Laszlo Czako"}
 ```
 
+## The Guardian — money that leaves without asking
+
+The GoDaddy problem: a card gets charged, nobody asked, and finding out takes
+forever. Multiply that across every auto-renewal, silent price hike, zombie
+subscription and double-billing and it is an enormous amount of money quietly
+leaving people who never agreed to it.
+
+- `expect_charge` / `mark_cancelled` — the register of what the user actually
+  agreed to, and what they've cancelled.
+- `check_charge` / `review_statement` — every charge held against it.
+  Verdicts: `expected` (stay quiet), `amount_increased` (with the delta and
+  the annual cost), `unexpected_merchant`, `charged_after_cancel`,
+  `duplicate`. Statement names are normalized, so `GODADDY.COM 480-505-8855`
+  and `GoDaddy Inc` are the same company.
+- `dispute_pack` — what was authorized, every disputed charge, and how to
+  write the demand, so the user is never the one digging through statements
+  at 11pm.
+
+Jefferey holds **no card numbers** — only what was charged, by whom, and
+whether it was ever agreed to. He never moves money: disputing or cancelling
+is an Act, gated and logged.
+
+## The life layer — the Digital Conscience proper
+
+Priorities tell Jefferey *how* to represent you. This tells him **who he is
+representing** — and lets him tell your story down the road (priority 07,
+starting now instead of too late).
+
+- `add_person` — the people who matter, before he needs to know them.
+- `add_memory` — snippets of a life in your own words, each marked
+  `private` / `family` / `legacy`.
+- `add_media` — photographs referenced **where they already live** on your
+  Self-Cloud. Never a copy, never an upload; if the drive is off, they read
+  as unreachable.
+- `who_am_i` / `tell_story(audience=…)` — what he understands, and what each
+  audience is permitted to hear. The visibility walls are enforced, not
+  suggested.
+- `story_gaps` — what's missing, so he can gently ask for one thing at a
+  time while there's still time to ask.
+- `forget_life` — absolute, never argued with.
+
+See [`docs/SELF_CLOUD.md`](../docs/SELF_CLOUD.md) for how this comes home to
+hardware you physically own.
+
 ## The demo that matters
 
 1. Ask Jefferey for a recommendation (a phone plan, a flight).

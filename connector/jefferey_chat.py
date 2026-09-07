@@ -31,6 +31,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from conscience import Conscience
 from representative import Representative
+from guardian import Guardian
+from life import Life
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 4096
@@ -39,6 +41,8 @@ DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
 conscience = Conscience()
 rep = Representative(conscience)
+guard = Guardian(conscience)
+life = Life(conscience)
 
 
 # --------------------------------------------------------------------- tools
@@ -402,6 +406,205 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "expect_charge",
+        "description": (
+            "Register a charge the user has ACTUALLY agreed to — merchant, "
+            "amount, cadence, and whether they ever authorized recurring "
+            "billing. Build this register whenever a bill or subscription "
+            "comes up; anything not in it becomes a question later."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "merchant": {"type": "string"},
+                "amount": {"type": "number"},
+                "cadence": {"type": "string", "default": "monthly"},
+                "authorized_recurring": {"type": "boolean", "default": True},
+                "note": {"type": "string"},
+            },
+            "required": ["merchant", "amount"],
+        },
+    },
+    {
+        "name": "mark_cancelled",
+        "description": (
+            "The user cancelled something. Record it — any charge after this "
+            "date is unauthorized, and that kind goes unnoticed for years."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"merchant": {"type": "string"}, "on": {"type": "string"}},
+            "required": ["merchant"],
+        },
+    },
+    {
+        "name": "check_charge",
+        "description": (
+            "Hold one charge up against what the user agreed to. Verdicts: "
+            "expected / amount_increased / unexpected_merchant / "
+            "charged_after_cancel / duplicate — in plain words, with the "
+            "dollars at stake. Anything but 'expected' should be scored with "
+            "record_opportunity (reduces_risk=True) and said out loud."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "merchant": {"type": "string"},
+                "amount": {"type": "number"},
+                "date": {"type": "string"},
+            },
+            "required": ["merchant", "amount"],
+        },
+    },
+    {
+        "name": "review_statement",
+        "description": (
+            "Run a whole statement through at once — a list of "
+            "{merchant, amount, date}. This is where people find money that "
+            "has been leaking for years. Report the total at stake."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "charges": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "merchant": {"type": "string"},
+                            "amount": {"type": "number"},
+                            "date": {"type": "string"},
+                        },
+                        "required": ["merchant", "amount"],
+                    },
+                }
+            },
+            "required": ["charges"],
+        },
+    },
+    {
+        "name": "expected_charges",
+        "description": "What the user has agreed to pay, and what they've cancelled.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "dispute_pack",
+        "description": (
+            "Assemble everything needed to get money back from one merchant: "
+            "what was authorized, every disputed charge, and how to write the "
+            "demand. The user should never be the one digging through "
+            "statements at 11pm."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"merchant": {"type": "string"}},
+            "required": ["merchant"],
+        },
+    },
+    {
+        "name": "add_person",
+        "description": (
+            "Record someone who matters to the user — family, friends, the "
+            "people they'd want remembered. Only when they offer it; never "
+            "interrogate."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "relationship": {"type": "string"},
+                "notes": {"type": "string"},
+                "important_dates": {"type": "string"},
+            },
+            "required": ["name", "relationship"],
+        },
+    },
+    {
+        "name": "add_memory",
+        "description": (
+            "Record a snippet of the user's life in their own words — a "
+            "moment, a turning point, a lesson, a joke only their family "
+            "gets. visibility: 'private' (you only), 'family', or 'legacy' "
+            "(meant to outlive them). Never invent one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "when": {"type": "string"},
+                "people": {"type": "string"},
+                "tags": {"type": "string"},
+                "visibility": {"type": "string", "enum": ["private", "family", "legacy"]},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "add_media",
+        "description": (
+            "Reference a photo or recording WHERE IT ALREADY LIVES — on the "
+            "user's Self-Cloud drive. Path and caption only: never a copy, "
+            "never an upload. If the drive is off, it reads unreachable."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "caption": {"type": "string"},
+                "when": {"type": "string"},
+                "people": {"type": "string"},
+                "visibility": {"type": "string", "enum": ["private", "family", "legacy"]},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "who_am_i",
+        "description": (
+            "What you understand about this person as a human being: who "
+            "matters to them, the moments recorded, the pictures, what they "
+            "value. Speak from this — never invent a memory or a feeling."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"include": {"type": "string", "default": "private"}},
+        },
+    },
+    {
+        "name": "tell_story",
+        "description": (
+            "Gather what's needed to tell a piece of this person's story — "
+            "for them now, or for the people they named, later. audience: "
+            "'self', 'family', or 'legacy'. Tell it in their voice, in order, "
+            "using only what is here."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "theme": {"type": "string"},
+                "audience": {"type": "string", "enum": ["self", "family", "legacy"]},
+            },
+        },
+    },
+    {
+        "name": "story_gaps",
+        "description": (
+            "What's missing from their story, so you can gently ask while "
+            "there's still time. Ask at most ONE at a time, at the right "
+            "moment. Never pressure them."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "forget_life",
+        "description": "Erase anything in the life layer matching this text. Never argued with.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"contains": {"type": "string"}},
+            "required": ["contains"],
+        },
+    },
+    {
         "name": "forget_profile_field",
         "description": "Delete one profile detail. The right to erase is absolute.",
         "input_schema": {
@@ -483,6 +686,37 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
         return rep.get_profile()
     if name == "forget_profile_field":
         return rep.forget_profile_field(args["field"])
+    if name == "expect_charge":
+        return guard.expect_charge(
+            args["merchant"], args["amount"], args.get("cadence", "monthly"),
+            args.get("authorized_recurring", True), args.get("note", ""))
+    if name == "mark_cancelled":
+        return guard.mark_cancelled(args["merchant"], args.get("on", ""))
+    if name == "check_charge":
+        return guard.check_charge(args["merchant"], args["amount"], args.get("date", ""))
+    if name == "review_statement":
+        return guard.review_statement([dict(x) for x in args["charges"]])
+    if name == "expected_charges":
+        return guard.expected_charges()
+    if name == "dispute_pack":
+        return guard.dispute_pack(args["merchant"])
+    if name == "add_person":
+        return life.add_person(args["name"], args["relationship"],
+                               args.get("notes", ""), args.get("important_dates", ""))
+    if name == "add_memory":
+        return life.add_memory(args["text"], args.get("when", ""), args.get("people", ""),
+                               args.get("tags", ""), args.get("visibility", "private"))
+    if name == "add_media":
+        return life.add_media(args["path"], args.get("caption", ""), args.get("when", ""),
+                              args.get("people", ""), args.get("visibility", "private"))
+    if name == "who_am_i":
+        return life.who_am_i(args.get("include", "private"))
+    if name == "tell_story":
+        return life.tell_story(args.get("theme", ""), args.get("audience", "family"))
+    if name == "story_gaps":
+        return life.story_gaps()
+    if name == "forget_life":
+        return life.forget_life(args["contains"])
     raise ValueError(f"unknown tool: {name}")
 
 
@@ -539,6 +773,43 @@ _TRACE = {
     ),
     "get_profile": lambda a, r: "reading your profile",
     "forget_profile_field": lambda a, r: f"forgot profile field: {r.get('removed')}",
+    "expect_charge": lambda a, r: (
+        f"registered: {a.get('merchant')} ${a.get('amount')} {a.get('cadence','monthly')}"
+    ),
+    "mark_cancelled": lambda a, r: f"cancelled on file: {a.get('merchant')} ({r.get('cancelled_on')})",
+    "check_charge": lambda a, r: (
+        f"charge [{r.get('verdict')}]: {a.get('merchant')} ${a.get('amount')}"
+        + (f" · ${r.get('recoverable')} at stake" if r.get("recoverable") else "")
+    ),
+    "review_statement": lambda a, r: (
+        f"statement: {len(r.get('flagged', []))} flagged of {r.get('checked')} "
+        f"· ${r.get('recoverable_total', 0)} at stake"
+    ),
+    "expected_charges": lambda a, r: "reading your charge register",
+    "dispute_pack": lambda a, r: (
+        f"dispute pack: {a.get('merchant')} · ${r.get('amount_in_dispute', 0)}"
+    ),
+    "add_person": lambda a, r: f"remembered {a.get('name')} ({a.get('relationship')})",
+    "add_memory": lambda a, r: (
+        f"kept a moment [{a.get('visibility','private')}]: {str(a.get('text',''))[:52]}…"
+    ),
+    "add_media": lambda a, r: (
+        f"linked {a.get('path')}"
+        + ("" if r.get("reachable") else " (Self-Cloud not reachable right now)")
+    ),
+    "who_am_i": lambda a, r: (
+        "recalling who you are — "
+        + ", ".join(f"{k}: {v}" for k, v in (r.get("depth") or {}).items())
+    ),
+    "tell_story": lambda a, r: (
+        f"telling your story [{a.get('audience','family')}]: "
+        f"{len(r.get('moments', []))} moment(s)"
+    ),
+    "story_gaps": lambda a, r: f"{len(r.get('gaps', []))} thing(s) still missing from your story",
+    "forget_life": lambda a, r: (
+        f"forgot {r.get('memories_removed',0)} moment(s), "
+        f"{r.get('media_removed',0)} picture(s), {r.get('people_removed',0)} person/people"
+    ),
 }
 
 
@@ -687,9 +958,14 @@ def selftest() -> None:
     """
     import tempfile
 
-    global conscience
+    global conscience, rep, guard, life
     with tempfile.TemporaryDirectory() as td:
+        # Rebind EVERY helper — they each hold a reference to the store, and
+        # a self-test must never touch the user's real conscience.
         conscience = Conscience(Path(td) / "conscience.json")
+        rep = Representative(conscience)
+        guard = Guardian(conscience)
+        life = Life(conscience)
 
         # 1. Every declared tool dispatches.
         for tool in TOOLS:
@@ -738,6 +1014,19 @@ def selftest() -> None:
                 "vault_status": {},
                 "get_profile": {},
                 "forget_profile_field": {"field": "nothing_here"},
+                "expect_charge": {"merchant": "Netflix", "amount": 16.49},
+                "mark_cancelled": {"merchant": "Old Gym"},
+                "check_charge": {"merchant": "Netflix", "amount": 16.49},
+                "review_statement": {"charges": [{"merchant": "Netflix", "amount": 16.49}]},
+                "expected_charges": {},
+                "dispute_pack": {"merchant": "Netflix"},
+                "add_person": {"name": "Karen", "relationship": "wife"},
+                "add_memory": {"text": "A day worth keeping."},
+                "add_media": {"path": "~/SelfCloud/photo.jpg"},
+                "who_am_i": {},
+                "tell_story": {},
+                "story_gaps": {},
+                "forget_life": {"contains": "zzz-nothing"},
             }[name]
             out = dispatch_tool(name, sample)
             assert out is not None, name
@@ -854,7 +1143,46 @@ def selftest() -> None:
         finally:
             keyring.set_keyring(_prev)
 
-        # 11. The system prompt carries directives + live store.
+        # 11. The Guardian: money that leaves without asking.
+        guard.expect_charge("GoDaddy", 21.99, "yearly", authorized_recurring=False)
+        guard.mark_cancelled("Adobe Creative Cloud", on="2026-08-15")
+        stmt = guard.review_statement([
+            {"merchant": "GODADDY.COM 480-505-8855", "amount": 89.97, "date": "2026-09-02"},
+            {"merchant": "ADOBE CREATIVE CLOUD", "amount": 32.99, "date": "2026-09-03"},
+            {"merchant": "WHO IS THIS LLC", "amount": 14.99, "date": "2026-09-04"},
+        ])
+        verdicts = {f["verdict"] for f in stmt["flagged"]}
+        assert verdicts == {"amount_increased", "charged_after_cancel", "unexpected_merchant"}, stmt
+        assert stmt["recoverable_total"] > 100, stmt
+        pack = guard.dispute_pack("GoDaddy")
+        assert pack["amount_in_dispute"] == 89.97, pack
+        print(f"  ✓ guardian: 3 verdicts, ${stmt['recoverable_total']:.2f} at stake, dispute pack built")
+
+        # 12. The life layer: who they are, and who may hear it.
+        # Isolated store — the dispatch pass above already seeded the shared one.
+        from life import Life as _Life
+        _lc = Conscience(Path(td) / "life.json")
+        _life = _Life(_lc)
+        _life.add_person("Karen", "wife", "no kids; we look out for each other")
+        _life.add_memory("The kitchen-table night we decided to build him.",
+                         when="2025-07", people="Karen", tags="origin", visibility="legacy")
+        _life.add_memory("Something told in confidence.", visibility="private")
+        _life.add_memory("The orb made her laugh until she cried.", visibility="family")
+        assert len(_life.tell_story("", audience="legacy")["moments"]) == 1, "legacy leaked!"
+        assert len(_life.tell_story("", audience="family")["moments"]) == 2, "family saw private!"
+        assert len(_life.tell_story("", audience="self")["moments"]) == 3
+        media = _life.add_media("~/SelfCloud/photos/kitchen.jpg", caption="Where it started",
+                                visibility="legacy")
+        assert media["path"].endswith("kitchen.jpg") and "copy" in media["note"]
+        assert _life.who_am_i()["depth"]["people"] == 1
+        # A life with nothing in it should notice, and ask.
+        _empty = _Life(Conscience(Path(td) / "empty.json"))
+        assert _empty.story_gaps()["gaps"], "an empty story should prompt questions"
+        gone = _life.forget_life("confidence")
+        assert gone["memories_removed"] == 1, gone
+        print("  ✓ life layer: people, moments, visibility walls, Self-Cloud refs, erase")
+
+        # 13. The system prompt carries directives + live store.
         sp = system_prompt()
         assert "JEFFEREY" in sp and "Live conscience" in sp and "priorities" in sp
         print("  ✓ system prompt assembly")
