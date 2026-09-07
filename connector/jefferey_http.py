@@ -41,11 +41,15 @@ from conscience import Conscience
 from representative import Representative
 from guardian import Guardian
 from life import Life
+from selfcloud import SelfCloud
+from interview import Interview
 
 conscience = Conscience()
 rep = Representative(conscience)
 guard = Guardian(conscience)
 life = Life(conscience)
+cloud = SelfCloud(conscience)
+interview = Interview(conscience, life)
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
 TOKEN = os.environ.get("JEFFEREY_HTTP_TOKEN") or secrets.token_urlsafe(24)
@@ -500,6 +504,97 @@ def story_gaps() -> dict:
 def forget_life(contains: str) -> dict:
     """Erase anything in the life layer matching this text."""
     return life.forget_life(contains)
+
+
+# ---------------------------------------------------------------- self-cloud
+@app.get("/selfcloud", operation_id="selfcloud_status")
+def selfcloud_status() -> dict:
+    """Who holds a key to this person's Self-Cloud, what's revoked, and any
+    recent refusals."""
+    return cloud.status()
+
+
+@app.get("/selfcloud/grants", operation_id="selfcloud_grants")
+def selfcloud_grants() -> dict:
+    """Every key in full, plus every scope that exists."""
+    return cloud.grants()
+
+
+class GrantIn(BaseModel):
+    client: str
+    scopes: list[str] | None = None
+    label: str = ""
+    note: str = ""
+
+
+@app.post("/selfcloud/grants", operation_id="selfcloud_grant")
+def selfcloud_grant(g: GrantIn) -> dict:
+    """ONLY at the owner's explicit word. Never grant a key on your own
+    initiative, and never widen your own."""
+    return cloud.grant(g.client, g.scopes, g.label, g.note)
+
+
+class ScopeIn(BaseModel):
+    client: str
+    scope: str
+
+
+@app.post("/selfcloud/scopes/add", operation_id="selfcloud_add_scope")
+def selfcloud_add_scope(s: ScopeIn) -> dict:
+    """Widen one key by exactly one scope, at the owner's word."""
+    return cloud.add_scope(s.client, s.scope)
+
+
+@app.post("/selfcloud/scopes/remove", operation_id="selfcloud_remove_scope")
+def selfcloud_remove_scope(s: ScopeIn) -> dict:
+    """Narrow a key by one scope."""
+    return cloud.remove_scope(s.client, s.scope)
+
+
+@app.delete("/selfcloud/grants", operation_id="selfcloud_revoke")
+def selfcloud_revoke(client: str) -> dict:
+    """Kill a key completely. Never argue with a revocation."""
+    return cloud.revoke(client)
+
+
+@app.get("/selfcloud/check", operation_id="selfcloud_check_access")
+def selfcloud_check_access(client: str, scope: str) -> dict:
+    """Would this client be allowed this scope? Deny by default."""
+    return cloud.check_access(client, scope)
+
+
+@app.get("/selfcloud/log", operation_id="selfcloud_access_log")
+def selfcloud_access_log(limit: int = 30) -> list:
+    """Who asked for what, and what happened."""
+    return cloud.access_log(limit)
+
+
+# ---------------------------------------------------------------- interview
+@app.get("/interview/next", operation_id="next_question")
+def next_question(domain: str = "") -> dict:
+    """ONE question to weave into conversation — never a list, never
+    announced. Only what the relationship has earned."""
+    return interview.next_question(domain)
+
+
+class AnswerIn(BaseModel):
+    question_id: str
+    answer: str = ""
+    declined: bool = False
+    visibility: str = "private"
+
+
+@app.post("/interview/answer", operation_id="record_answer")
+def record_answer(a: AnswerIn) -> dict:
+    """Keep what they said under the visibility they chose. If they
+    deflected, declined=True retires the question permanently."""
+    return interview.record_answer(a.question_id, a.answer, a.declined, a.visibility)
+
+
+@app.get("/interview/progress", operation_id="interview_progress")
+def interview_progress() -> dict:
+    """What you know, what's missing, and the depth you've earned."""
+    return interview.progress()
 
 
 if __name__ == "__main__":

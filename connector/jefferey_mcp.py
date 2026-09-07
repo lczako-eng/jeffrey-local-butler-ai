@@ -34,12 +34,16 @@ from conscience import Conscience
 from representative import Representative
 from guardian import Guardian
 from life import Life
+from selfcloud import SelfCloud
+from interview import Interview
 
 mcp = _Server("jefferey")
 conscience = Conscience()
 rep = Representative(conscience)
 guard = Guardian(conscience)
 life = Life(conscience)
+cloud = SelfCloud(conscience)
+interview = Interview(conscience, life)
 
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
@@ -418,6 +422,99 @@ def forget_life(contains: str) -> dict:
     """Erase anything in the life layer matching this text — people, moments,
     media references. Never argued with."""
     return life.forget_life(contains)
+
+
+# ---------------------------------------------------------------- self-cloud
+# Self-Cloud is the OWNER'S vault. Jefferey is a caretaker holding a key they
+# granted and can take back — not the owner of it.
+@mcp.tool()
+def selfcloud_status() -> dict:
+    """Who currently holds a key to this person's Self-Cloud, what has been
+    revoked, and any recent refusals. Show this whenever they ask who can see
+    their data."""
+    return cloud.status()
+
+
+@mcp.tool()
+def selfcloud_grants() -> dict:
+    """Every key to the Self-Cloud in full — client, scopes, and when it was
+    granted or revoked — plus every scope that exists. Written to be read by
+    the owner without help."""
+    return cloud.grants()
+
+
+@mcp.tool()
+def selfcloud_grant(client: str, scopes: list | None = None, label: str = "",
+                    note: str = "") -> dict:
+    """ONLY at the owner's explicit word. Give a client a key: 'claude-raw',
+    'gpt-raw', 'jefferey', 'family', 'executor', or a name they choose. With
+    no scopes, the preset for that kind of client is used as a starting
+    point. Never grant a key on your own initiative, and never widen your
+    own."""
+    return cloud.grant(client, list(scopes) if scopes else None, label, note)
+
+
+@mcp.tool()
+def selfcloud_add_scope(client: str, scope: str) -> dict:
+    """Widen one key by exactly one scope — only when the owner says so.
+    You may never call this about your own key ('jefferey')."""
+    return cloud.add_scope(client, scope)
+
+
+@mcp.tool()
+def selfcloud_remove_scope(client: str, scope: str) -> dict:
+    """Narrow a key by one scope, at the owner's word."""
+    return cloud.remove_scope(client, scope)
+
+
+@mcp.tool()
+def selfcloud_revoke(client: str) -> dict:
+    """Kill a key completely. Instant and total; the record that it existed
+    stays. Never argue with a revocation — including your own."""
+    return cloud.revoke(client)
+
+
+@mcp.tool()
+def selfcloud_check_access(client: str, scope: str) -> dict:
+    """Would this client be allowed this scope? Deny by default. Use it to
+    answer 'can ChatGPT see my photos?' truthfully rather than from memory."""
+    return cloud.check_access(client, scope)
+
+
+@mcp.tool()
+def selfcloud_access_log(limit: int = 30) -> list:
+    """Who asked for what, and what happened. The owner's audit trail."""
+    return cloud.access_log(limit)
+
+
+# ---------------------------------------------------------------- the interview
+# How the conscience actually gets built: not a form — a friendship, one
+# question at a time, at a depth that has been earned.
+@mcp.tool()
+def next_question(domain: str = "") -> dict:
+    """Get ONE question to weave into the conversation — never a list, never
+    announced as an interview. Returns only what the relationship has earned:
+    warm questions with a stranger, values and legacy only once they've
+    genuinely shared. Ask it once, naturally, then let it go."""
+    return interview.next_question(domain)
+
+
+@mcp.tool()
+def record_answer(question_id: str, answer: str = "", declined: bool = False,
+                  visibility: str = "private") -> dict:
+    """Keep what they said, in their own words, under the visibility they
+    chose ('private', 'family', 'legacy'). If they deflected, pass
+    declined=True — their 'no' is a complete answer and the question is
+    retired permanently. Never re-ask either way."""
+    return interview.record_answer(question_id, answer, declined, visibility)
+
+
+@mcp.tool()
+def interview_progress() -> dict:
+    """What you know, what's still missing, and what depth you have earned
+    the right to ask at. A person who answers nothing is not a failure — be
+    useful anyway."""
+    return interview.progress()
 
 
 if __name__ == "__main__":

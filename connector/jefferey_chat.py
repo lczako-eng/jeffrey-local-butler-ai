@@ -33,6 +33,8 @@ from conscience import Conscience
 from representative import Representative
 from guardian import Guardian
 from life import Life
+from selfcloud import SelfCloud
+from interview import Interview
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 4096
@@ -43,6 +45,8 @@ conscience = Conscience()
 rep = Representative(conscience)
 guard = Guardian(conscience)
 life = Life(conscience)
+cloud = SelfCloud(conscience)
+interview = Interview(conscience, life)
 
 
 # --------------------------------------------------------------------- tools
@@ -596,6 +600,128 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "selfcloud_status",
+        "description": (
+            "Who currently holds a key to this person's Self-Cloud, what's "
+            "been revoked, and recent refusals. Show this whenever they ask "
+            "who can see their data."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "selfcloud_grants",
+        "description": "Every key in full, plus every scope that exists.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "selfcloud_grant",
+        "description": (
+            "ONLY at the owner's explicit word. Give a client a key — "
+            "'claude-raw', 'gpt-raw', 'jefferey', 'family', 'executor', or a "
+            "name they choose. With no scopes, the preset is a starting "
+            "point. Never grant on your own initiative; never widen your own."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "client": {"type": "string"},
+                "scopes": {"type": "array", "items": {"type": "string"}},
+                "label": {"type": "string"},
+                "note": {"type": "string"},
+            },
+            "required": ["client"],
+        },
+    },
+    {
+        "name": "selfcloud_add_scope",
+        "description": ("Widen one key by exactly one scope — only when the "
+                        "owner says so. Never about your own key."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"client": {"type": "string"}, "scope": {"type": "string"}},
+            "required": ["client", "scope"],
+        },
+    },
+    {
+        "name": "selfcloud_remove_scope",
+        "description": "Narrow a key by one scope, at the owner's word.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"client": {"type": "string"}, "scope": {"type": "string"}},
+            "required": ["client", "scope"],
+        },
+    },
+    {
+        "name": "selfcloud_revoke",
+        "description": ("Kill a key completely — instant and total. Never "
+                        "argue with a revocation, including your own."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"client": {"type": "string"}},
+            "required": ["client"],
+        },
+    },
+    {
+        "name": "selfcloud_check_access",
+        "description": (
+            "Would this client be allowed this scope? Deny by default. Use it "
+            "to answer 'can ChatGPT see my photos?' truthfully."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"client": {"type": "string"}, "scope": {"type": "string"}},
+            "required": ["client", "scope"],
+        },
+    },
+    {
+        "name": "selfcloud_access_log",
+        "description": "Who asked for what, and what happened. The owner's audit trail.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "default": 30}},
+        },
+    },
+    {
+        "name": "next_question",
+        "description": (
+            "Get ONE question to weave into the conversation — never a list, "
+            "never announced as an interview. Returns only what the "
+            "relationship has earned: warm questions with a stranger, values "
+            "and legacy only once they've genuinely shared. Ask it once, "
+            "naturally, then let it go."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"domain": {"type": "string"}},
+        },
+    },
+    {
+        "name": "record_answer",
+        "description": (
+            "Keep what they said, in their own words, under the visibility "
+            "they chose. If they deflected, pass declined=true — their 'no' "
+            "is a complete answer and the question is retired permanently."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question_id": {"type": "string"},
+                "answer": {"type": "string"},
+                "declined": {"type": "boolean", "default": False},
+                "visibility": {"type": "string", "enum": ["private", "family", "legacy"]},
+            },
+            "required": ["question_id"],
+        },
+    },
+    {
+        "name": "interview_progress",
+        "description": (
+            "What you know, what's still missing, and what depth you've "
+            "earned. Someone who answers nothing is not a failure."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "forget_life",
         "description": "Erase anything in the life layer matching this text. Never argued with.",
         "input_schema": {
@@ -717,6 +843,31 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
         return life.story_gaps()
     if name == "forget_life":
         return life.forget_life(args["contains"])
+    if name == "selfcloud_status":
+        return cloud.status()
+    if name == "selfcloud_grants":
+        return cloud.grants()
+    if name == "selfcloud_grant":
+        return cloud.grant(args["client"], args.get("scopes"),
+                           args.get("label", ""), args.get("note", ""))
+    if name == "selfcloud_add_scope":
+        return cloud.add_scope(args["client"], args["scope"])
+    if name == "selfcloud_remove_scope":
+        return cloud.remove_scope(args["client"], args["scope"])
+    if name == "selfcloud_revoke":
+        return cloud.revoke(args["client"])
+    if name == "selfcloud_check_access":
+        return cloud.check_access(args["client"], args["scope"])
+    if name == "selfcloud_access_log":
+        return cloud.access_log(args.get("limit", 30))
+    if name == "next_question":
+        return interview.next_question(args.get("domain", ""))
+    if name == "record_answer":
+        return interview.record_answer(
+            args["question_id"], args.get("answer", ""),
+            args.get("declined", False), args.get("visibility", "private"))
+    if name == "interview_progress":
+        return interview.progress()
     raise ValueError(f"unknown tool: {name}")
 
 
@@ -806,6 +957,30 @@ _TRACE = {
         f"{len(r.get('moments', []))} moment(s)"
     ),
     "story_gaps": lambda a, r: f"{len(r.get('gaps', []))} thing(s) still missing from your story",
+    "selfcloud_status": lambda a, r: (
+        "self-cloud keys: " + (", ".join(r.get("active_keys", [])) or "none")
+    ),
+    "selfcloud_grants": lambda a, r: "reading the Self-Cloud key list",
+    "selfcloud_grant": lambda a, r: (
+        f"key issued: {a.get('client')} · {len(r.get('scopes', []))} scope(s)"
+    ),
+    "selfcloud_add_scope": lambda a, r: f"widened {a.get('client')}: +{a.get('scope')}",
+    "selfcloud_remove_scope": lambda a, r: f"narrowed {a.get('client')}: -{a.get('scope')}",
+    "selfcloud_revoke": lambda a, r: f"key revoked: {a.get('client')}",
+    "selfcloud_check_access": lambda a, r: (
+        f"{'✓' if r.get('allowed') else '✗'} {a.get('client')} → {a.get('scope')}"
+    ),
+    "selfcloud_access_log": lambda a, r: "reading the Self-Cloud audit trail",
+    "next_question": lambda a, r: (
+        f"(earned depth {(r.get('trust') or {}).get('max_depth')}) "
+        + (f"asking about {r.get('domain')}" if r.get("question") else "nothing to ask yet")
+    ),
+    "record_answer": lambda a, r: (
+        f"kept what you said ({r.get('recorded')})"
+    ),
+    "interview_progress": lambda a, r: (
+        f"knows you: {r.get('answered')} answered, {r.get('locked_deeper')} still locked"
+    ),
     "forget_life": lambda a, r: (
         f"forgot {r.get('memories_removed',0)} moment(s), "
         f"{r.get('media_removed',0)} picture(s), {r.get('people_removed',0)} person/people"
@@ -1027,6 +1202,17 @@ def selftest() -> None:
                 "tell_story": {},
                 "story_gaps": {},
                 "forget_life": {"contains": "zzz-nothing"},
+                "selfcloud_status": {},
+                "selfcloud_grants": {},
+                "selfcloud_grant": {"client": "claude-raw"},
+                "selfcloud_add_scope": {"client": "claude-raw", "scope": "goals.read"},
+                "selfcloud_remove_scope": {"client": "claude-raw", "scope": "goals.read"},
+                "selfcloud_revoke": {"client": "claude-raw"},
+                "selfcloud_check_access": {"client": "claude-raw", "scope": "facts.read"},
+                "selfcloud_access_log": {},
+                "next_question": {},
+                "record_answer": {"question_id": "how_address", "answer": "Laszlo"},
+                "interview_progress": {},
             }[name]
             out = dispatch_tool(name, sample)
             assert out is not None, name
@@ -1182,7 +1368,42 @@ def selftest() -> None:
         assert gone["memories_removed"] == 1, gone
         print("  ✓ life layer: people, moments, visibility walls, Self-Cloud refs, erase")
 
-        # 13. The system prompt carries directives + live store.
+        # 13. Self-Cloud: the owner's vault, Jefferey merely a keyholder.
+        from selfcloud import SelfCloud as _SC
+        _cc = Conscience(Path(td) / "cloud.json")
+        _sc = _SC(_cc)
+        _sc.grant("claude-raw"); _sc.grant("jefferey"); _sc.grant("executor")
+        assert not _sc.check_access("claude-raw", "life.read")["allowed"], "raw engine saw the life layer!"
+        assert _sc.check_access("jefferey", "life.read")["allowed"]
+        assert not _sc.check_access("executor", "life.read")["allowed"], "executor saw private life!"
+        assert _sc.check_access("executor", "legacy.read")["allowed"]
+        assert not _sc.check_access("nobody-ai", "facts.read")["allowed"], "unknown client got in!"
+        _sc.revoke("jefferey")
+        assert not _sc.check_access("jefferey", "life.read")["allowed"], "revocation ignored!"
+        assert len(_sc.access_log(99)) >= 8, "access decisions not audited"
+        print("  ✓ self-cloud: per-client keys, deny by default, revocation, audit")
+
+        # 14. The interview: depth is earned, and 'no' is final.
+        from interview import Interview as _IV
+        _ic = Conscience(Path(td) / "iv.json")
+        _il = _Life(_ic)
+        _iv = _IV(_ic, _il)
+        assert _iv.trust()["max_depth"] == 1, "opened too deep with a stranger"
+        first = _iv.next_question()
+        assert first["depth"] == 1, first
+        for qid, ans in [("call_first", "Karen."), ("good_day", "Quiet, then built."),
+                         ("hands_busy", "I tinker."), ("pet_peeve", "Hold music.")]:
+            _iv.record_answer(qid, ans)
+        assert _iv.trust()["max_depth"] >= 2, "depth never rose despite sharing"
+        _iv.record_answer("worry_at_night", "", declined=True)
+        for _ in range(6):
+            nq = _iv.next_question()
+            assert nq.get("id") != "worry_at_night", "re-asked a declined question!"
+            if nq.get("id"):
+                _iv.record_answer(nq["id"], "…")
+        print(f"  ✓ interview: depth earned 1→{_iv.trust()['max_depth']}, declines final, never repeats")
+
+        # 15. The system prompt carries directives + live store.
         sp = system_prompt()
         assert "JEFFEREY" in sp and "Live conscience" in sp and "priorities" in sp
         print("  ✓ system prompt assembly")

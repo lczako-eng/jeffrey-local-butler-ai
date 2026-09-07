@@ -223,6 +223,42 @@ starting now instead of too late).
 See [`docs/SELF_CLOUD.md`](../docs/SELF_CLOUD.md) for how this comes home to
 hardware you physically own.
 
+## Self-Cloud — the vault, and who gets a key
+
+Self-Cloud is **its own product**. Jefferey is one caretaker holding a key
+the owner granted and can take back — not the owner of the vault.
+(`selfcloud.py`; architecture in [`docs/SELF_CLOUD.md`](../docs/SELF_CLOUD.md).)
+
+| Key | Gets |
+|---|---|
+| `claude-raw` | facts, priorities, goals. Useful, not intimate. |
+| `gpt-raw` | the same — a rented engine kept at arm's length. |
+| `jefferey` | the caretaker: conscience, life layer, media, money, legacy. Never the secrets themselves. |
+| `family` | only what was marked `family`. Writes nothing. |
+| `executor` | `legacy` only. Nothing else, ever. |
+
+Three properties, enforced not promised: **deny by default** (an unknown
+client gets nothing), **every decision logged** in the owner's own store, and
+**revocation instant and total**. The physical switch is still the final
+word — drive off, nothing is reachable by anyone.
+
+## The interview — how the conscience actually gets built
+
+You can't hand someone a form and get a person out of it. `interview.py` is
+a ladder of questions Jefferey **earns the right to ask**:
+
+1. **warm** — *"Who's the first person you'd call with good news?"*
+2. **shape** — *"What do you do, and is it what you meant to do?"*
+3. **values** — *"Is there a decision you'd make differently now?"*
+4. **legacy** — *"If someone told your story in one sentence, what would you
+   want it to say?"*
+
+Depth rises with what the person has actually chosen to share — never with
+elapsed time. `next_question` returns **one** question to weave into
+conversation, never a list, never announced. `record_answer` keeps it in
+their words at the visibility they choose. A deflection is recorded as
+declined and **never raised again**.
+
 ## The demo that matters
 
 1. Ask Jefferey for a recommendation (a phone plan, a flight).
