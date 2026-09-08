@@ -190,6 +190,22 @@ only when the owner includes them (`conscience_include`), and can be taken
 back out. Storage is total; the conscience is curated. Your API only needs to
 let Jefferey *reference* an item; the choice to include it is his layer.
 
+## 7e. The box is the hub; everything feeds it
+
+Founder's direction (2026-09-08): the Self-Cloud unit — drive **plus a small
+always-on computer** — is the hub. It runs the connector, talks to the rented
+engines, and syncs to the phone and other devices, which are windows onto
+it. Design Self-Cloud as the source of truth with devices holding working
+copies; secrets never sync (keychain per device).
+
+And it ingests the life the person already generates: Apple Health exports,
+wearable APIs (e.g. Oura), bank/Revolv transaction exports, calendar. Plan an
+**ingestion layer** in Self-Cloud (start with stable file exports: Apple
+Health XML, bank CSV; add live APIs where offered). Jefferey then reads
+those streams under his key and the owner's conscience rules — health
+defaults to *owner only*. The Guardian's charge register should be fed from
+real transactions once that stream exists, replacing hand entry.
+
 ## 8. Naming the founder's IP correctly
 
 Use these exactly: **JEFFEREY** (never "Jeff"), **Self-Cloud**, **Personal AI

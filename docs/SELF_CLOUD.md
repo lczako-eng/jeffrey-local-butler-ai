@@ -49,6 +49,15 @@ that can be stolen. The drive holds who you are; the keychain holds the keys.
 
 Each step is the same file finding a better home. Nothing is rewritten.
 
+**Revision (2026-09-08):** the founder's preferred destination is the **box as
+hub** — drive + small computer, always on at home, running the connector and
+talking to the rented engines, with the phone and other devices as *windows*
+onto it rather than the place the life lives. The phone-storage stage is a
+bridge for people without the box, not the goal. See `FOUNDER_DIRECTIONS.md`
+§3. Everything the person already generates — wearables, Apple Health,
+transactions, calendar — feeds Self-Cloud through exports and APIs, and the
+conscience takes what the owner includes.
+
 ## The digital conscience, in the founder's terms
 
 > *"I want to build that digital conscience about you so it has to understand

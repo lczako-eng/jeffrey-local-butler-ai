@@ -92,7 +92,58 @@ to be in there.* The conscience is the one place a life's remembering goes.
 - "Anything you need to remember" must not become "everything, automatically."
   The intake gate stays: the owner includes; Jefferey never hoovers.
 
-## 3. Things already decided in this session, so they aren't relitigated
+## 3. Everything feeds it — and the drive is the hub (recorded 2026-09-08)
+
+> "My other apps should be able to tie into this — your workout schedules,
+> your health from your ring and all that, your Apple Health, even your
+> transactions from Revolv. This should know everything about you. But
+> storage — why should your phone be charged? You can just plug it in
+> anywhere and let that resonate. It might be best to have the hard drive
+> connected to your intelligence, which pulls off the intelligence and brings
+> information back and forth onto your phone or whatever other device."
+
+**Two ideas, both recorded as direction:**
+
+**(a) The integrations layer — everything you already generate feeds the
+conscience.** Wearables (Oura ring, watch), Apple Health, workout apps,
+transactions (Revolv, bank exports), calendar. The person already produces
+this data every day; today it sits in a dozen silos owned by a dozen
+companies. Pulled onto Self-Cloud it becomes one life, in one place, owned.
+
+- **How it enters:** through each app's export or API (Apple Health exports
+  its full record; Oura, most banks and calendars have APIs or CSV). Self-
+  Cloud ingests into storage; the conscience takes only what the owner
+  includes (the intake gate); each stream gets a default rule (health: *me
+  only*). Nothing is scraped from a screen.
+- **What it unlocks:** the Guardian watching *real* transactions instead of a
+  hand-kept register; health patterns ("your sleep has been short for two
+  weeks") noticed without being asked; the morning brief built from actual
+  data. This is where "protect you more than anybody" becomes concrete.
+- **Honesty about the work:** every integration is its own small project
+  and every API changes under you. Start with exports (Apple Health, bank
+  CSV) — they are stable and need no partnership — and add live APIs where a
+  provider offers one.
+
+**(b) The drive is the hub, not the phone.** The Self-Cloud unit is the
+always-on node: it holds the storage, runs the connector, talks to the rented
+intelligence (Claude, GPT), and syncs to the phone and any other device. The
+phone becomes a *window* onto Self-Cloud, not the place the life lives — so
+the phone isn't burdened, and losing or replacing a phone loses nothing.
+
+- **One physical fact to design around:** a bare hard drive cannot run
+  software. "Plug it in anywhere" means the unit is **a drive plus a small
+  computer** (the size of a paperback — a Raspberry Pi / mini-PC class
+  board, tens of dollars). That pairing *is* the Self-Cloud box. Plug it into
+  power and the home network and it's the hub; unplug it and it's off the
+  network — the switch, made physical.
+- **This revises the staged path** in `SELF_CLOUD.md`: the phone-storage v0
+  becomes a *bridge* for people who don't have the box yet, not the destination.
+  The destination is the box at home, with the phone as its face.
+- **Sync rule:** the box is the source of truth; devices hold a working copy
+  of what they need and nothing more; secrets never sync anywhere (keychain
+  only, per device).
+
+## 4. Things already decided in this session, so they aren't relitigated
 
 - **JEFFEREY**, never "Jeff". No "butler" anywhere.
 - Jefferey is a **wrapper** over rented engines, not a model of our own.
