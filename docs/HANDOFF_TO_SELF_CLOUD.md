@@ -133,6 +133,29 @@ Dedup first, then back up, then verify the second copy restores, *then*
 cancel. Please put this check into Self-Cloud itself — "yours, and safe" is
 the pitch; "yours" alone is just a hard drive.
 
+## 7b. Originals are sacred — the on-drive layout
+
+The founder's rule: **always keep an untouched copy of the originals on the
+same drive**, separate from the working library. Same-drive originals guard
+against *mistakes* (an over-aggressive dedup, a bad rename, a Self-Cloud bug,
+an accidental edit); the second drive in §7 guards against *physics* (the
+drive dying). Both are required — they defend against different things.
+
+```
+/originals    exactly as downloaded from iCloud. Read-only, immutable,
+              a checksum stored per file so an original can be PROVEN
+              unchanged years later. Nothing writes here — not the
+              organizer, not the dedup, not Jefferey. No key has write
+              scope to this path, ever.
+/library      the organized, de-duplicated, captioned working copy.
+/conscience   Jefferey's store and the life layer.
+```
+
+Consequence to check now, before the layout is locked: originals + library
+means the photos occupy roughly **double** their size on the drive. Measure
+the iCloud library and decide whether 1 TB is enough or the drive must be
+larger, *before* the structure is committed.
+
 ## 8. Naming the founder's IP correctly
 
 Use these exactly: **JEFFEREY** (never "Jeff"), **Self-Cloud**, **Personal AI
