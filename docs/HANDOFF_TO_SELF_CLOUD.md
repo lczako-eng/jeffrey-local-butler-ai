@@ -156,6 +156,21 @@ means the photos occupy roughly **double** their size on the drive. Measure
 the iCloud library and decide whether 1 TB is enough or the drive must be
 larger, *before* the structure is committed.
 
+## 7c. What the Digital Conscience is, in the founder's words
+
+**The Digital Conscience is the person's journal** — a daily and family
+journal, kept *for* them by Jefferey and stored *on* Self-Cloud: what
+happened, who was there, the photo from that day, in their own words, added
+a little at a time over years. It is not a database about the person. The
+priorities, the story-telling, the protection all grow out of the journal,
+because the journal is the raw material of knowing someone.
+
+Consequences for the seam: the journal's entries live in Self-Cloud's
+storage (under `/conscience`), its photos are references into `/library`,
+and Jefferey is the one who writes to it (under his key) and reads it back —
+"on this day", the weekly note, the story. Self-Cloud keeps it; Jefferey
+keeps it *alive*.
+
 ## 8. Naming the founder's IP correctly
 
 Use these exactly: **JEFFEREY** (never "Jeff"), **Self-Cloud**, **Personal AI
