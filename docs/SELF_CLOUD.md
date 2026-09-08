@@ -58,6 +58,27 @@ bridge for people without the box, not the goal. See `FOUNDER_DIRECTIONS.md`
 transactions, calendar — feeds Self-Cloud through exports and APIs, and the
 conscience takes what the owner includes.
 
+## Hardware v1 — the box, concretely (recorded 2026-09-08)
+
+A bare drive cannot run software, so the unit is **a drive plus a small
+computer in one enclosure**. Not a workaround — every personal-cloud device
+ever sold is this. The computer is tiny, cheap, silent, and invisible.
+
+| Stage | What | Notes |
+|---|---|---|
+| **v0 — now** | The founder's laptop with the drive attached, running the Self-Cloud software | Already exists. Not always-on; not a product. |
+| **v1 — the box** | Raspberry Pi 5 (or equivalent mini-PC board) + the drive, one case, power + Ethernet/Wi-Fi | ~$80–120 compute, ~$150–200 all-in above the drive. Runs Linux 24/7, nightlight-level power, no fan. Runs the storage stack, the connector, and talks to the rented engines. **Build toward this.** |
+| **v2 — the product** | Own board + designed enclosure with the physical switch on the front | Same software. When users justify manufacturing. |
+
+**Reaching it from outside the house:** the box sits behind the home router.
+First answer: a **private encrypted tunnel** between the owner's devices and
+the box (Tailscale-class: zero router configuration, end-to-end encrypted,
+free for personal use, none of the owner's data touches any server of ours).
+Later: the Pro sync. The tunnel keeps the promise; start there.
+
+**The switch stays physical.** Pull the plug — or flip a switch on the box —
+and it is gone from every network. No software "off mode" can promise that.
+
 ## The digital conscience, in the founder's terms
 
 > *"I want to build that digital conscience about you so it has to understand
