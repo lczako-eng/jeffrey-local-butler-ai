@@ -60,7 +60,39 @@ it sounding.
 
 ---
 
-## 2. Things already decided in this session, so they aren't relitigated
+## 2. What belongs in the Digital Conscience (recorded 2026-09-08)
+
+> "The Digital Conscience is also gonna have your health stuff in there —
+> health records. You could also share your locations. Also use your
+> information off your pictures — metadata. It should have a daily review if
+> it's attached to a GPT or something like that, in the morning. Also your
+> tasks, and everything. Anything you need to really remember needs to be in
+> there… I'm on the line with [locations]. Just remember what I'm telling
+> you."
+
+**The principle, in his words:** *anything you need to really remember needs
+to be in there.* The conscience is the one place a life's remembering goes.
+
+**Contents, and how each is handled:**
+
+| What | Enters how | Default rule |
+|---|---|---|
+| **Health records** | Only by the owner's explicit inclusion, item by item | *disclosure: me only* — the strictest default in the system. A doctor or family member is opened up by a named rule, never by default. Health is where "silence is a no" matters most. |
+| **Location** | **Opt-in, and the founder is undecided** ("on the line"). Design it as a switch the owner turns on per purpose — e.g. "remember where photos were taken" separately from "know where I am now" — never as an always-on trail. | *disclosure: me only*; never shared with any third party or engine beyond what a task strictly needs. If in doubt, off. |
+| **Photo metadata** (dates, places, faces, camera) | Automatically *indexed* by Self-Cloud; *enters the conscience* only for photos the owner included. Metadata is how "on this day" and "where was this" work without asking. | Follows the photo's visibility. |
+| **Tasks** | Goals and to-dos, stated or drawn out; the Opportunity Engine works them. | private |
+| **The daily review — the morning brief** | When Jefferey is attached to an engine (GPT, Claude, the app), the day opens with one review: what's coming, what he noticed, what needs a decision, what he did. `daily_brief` already exists; this is its delivery, in the morning, by habit. Later, spoken — in the owner's own voice (§1). | — |
+| **Everything else worth remembering** | "Remember this" — the one verb. | private unless marked otherwise |
+
+**Two cautions to build to:**
+- Health and location are the two categories where a leak does lasting harm.
+  They get the strictest defaults, the loudest confirmation before any
+  sharing, and full audit. Treat them like the secrets in the keychain: the
+  fact that Jefferey *can* hold them is exactly why the walls must be real.
+- "Anything you need to remember" must not become "everything, automatically."
+  The intake gate stays: the owner includes; Jefferey never hoovers.
+
+## 3. Things already decided in this session, so they aren't relitigated
 
 - **JEFFEREY**, never "Jeff". No "butler" anywhere.
 - Jefferey is a **wrapper** over rented engines, not a model of our own.
