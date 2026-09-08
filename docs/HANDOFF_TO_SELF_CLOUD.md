@@ -171,6 +171,25 @@ and Jefferey is the one who writes to it (under his key) and reads it back —
 "on this day", the weekly note, the story. Self-Cloud keeps it; Jefferey
 keeps it *alive*.
 
+## 7d. Two permission layers, not one
+
+The owner's words: *"You give permission of what you want in that Digital
+Conscience, and there's rules to the Digital Conscience as well — share with
+me only these, react this way only to these, react to others about me in
+this sense."*
+
+So there are **two layers**, owned by different sides:
+
+| Layer | Question it answers | Owned by |
+|---|---|---|
+| **Self-Cloud keys** (§4) | *Which client may touch which storage?* | Self-Cloud |
+| **Conscience rules** (`connector/rules.py`) | *Of what Jefferey holds, who may hear what, how does he react to the owner, how does he speak of them to others?* | Jefferey |
+
+Plus the **intake gate**: the conscience is a curated subset — items enter
+only when the owner includes them (`conscience_include`), and can be taken
+back out. Storage is total; the conscience is curated. Your API only needs to
+let Jefferey *reference* an item; the choice to include it is his layer.
+
 ## 8. Naming the founder's IP correctly
 
 Use these exactly: **JEFFEREY** (never "Jeff"), **Self-Cloud**, **Personal AI

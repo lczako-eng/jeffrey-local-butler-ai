@@ -43,6 +43,7 @@ from guardian import Guardian
 from life import Life
 from selfcloud import SelfCloud
 from interview import Interview
+from rules import ConscienceRules
 
 conscience = Conscience()
 rep = Representative(conscience)
@@ -50,6 +51,7 @@ guard = Guardian(conscience)
 life = Life(conscience)
 cloud = SelfCloud(conscience)
 interview = Interview(conscience, life)
+rules = ConscienceRules(conscience)
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
 TOKEN = os.environ.get("JEFFEREY_HTTP_TOKEN") or secrets.token_urlsafe(24)
@@ -595,6 +597,65 @@ def record_answer(a: AnswerIn) -> dict:
 def interview_progress() -> dict:
     """What you know, what's missing, and the depth you've earned."""
     return interview.progress()
+
+
+# ---------------------------------------------------------------- conscience rules
+class IncludeIn(BaseModel):
+    ref: str
+    note: str = ""
+
+
+@app.post("/conscience/include", operation_id="conscience_include")
+def conscience_include(i: IncludeIn) -> dict:
+    """The owner chose to let something from Self-Cloud into their conscience."""
+    return rules.include(i.ref, i.note)
+
+
+@app.delete("/conscience/include", operation_id="conscience_exclude")
+def conscience_exclude(contains: str) -> dict:
+    """Take something back out of the conscience; it stays on Self-Cloud."""
+    return rules.exclude(contains)
+
+
+class RuleIn(BaseModel):
+    kind: str = Field(description="disclosure | reaction | representation")
+    tags: str
+    instruction: str
+    audience: str = "me"
+    allow: bool = True
+
+
+@app.post("/rules", operation_id="set_rule")
+def set_rule(r: RuleIn) -> dict:
+    """Write one of the owner's standing rules, in their words. Only at their word."""
+    try:
+        return rules.set_rule(r.kind, r.tags, r.instruction, r.audience, r.allow)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.delete("/rules", operation_id="remove_rule")
+def remove_rule(rule_id_or_text: str) -> dict:
+    """Delete a rule. Never argued with."""
+    return rules.remove_rule(rule_id_or_text)
+
+
+@app.get("/rules", operation_id="list_rules")
+def list_rules(kind: str = "") -> list:
+    """Every standing rule the owner has written."""
+    return rules.rules(kind)
+
+
+@app.get("/rules/check", operation_id="check_disclosure")
+def check_disclosure(audience: str, tags: str) -> dict:
+    """Before saying anything about the owner to anyone else. Silence is a no."""
+    return rules.check_disclosure(audience, tags)
+
+
+@app.get("/rules/guidance", operation_id="guidance_for")
+def guidance_for(tags: str, audience: str = "me") -> dict:
+    """The owner's standing instructions that apply right now, verbatim."""
+    return rules.guidance_for(tags, audience)
 
 
 if __name__ == "__main__":

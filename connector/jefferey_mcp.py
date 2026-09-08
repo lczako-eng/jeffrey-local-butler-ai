@@ -36,6 +36,7 @@ from guardian import Guardian
 from life import Life
 from selfcloud import SelfCloud
 from interview import Interview
+from rules import ConscienceRules
 
 mcp = _Server("jefferey")
 conscience = Conscience()
@@ -44,6 +45,7 @@ guard = Guardian(conscience)
 life = Life(conscience)
 cloud = SelfCloud(conscience)
 interview = Interview(conscience, life)
+rules = ConscienceRules(conscience)
 
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
@@ -515,6 +517,65 @@ def interview_progress() -> dict:
     the right to ask at. A person who answers nothing is not a failure — be
     useful anyway."""
     return interview.progress()
+
+
+# ---------------------------------------------------------------- conscience rules
+# Storage is total; the conscience is curated — and over it, the owner writes
+# the rules for how Jefferey carries them. Silence is a no.
+@mcp.tool()
+def conscience_include(ref: str, note: str = "") -> dict:
+    """The owner chose to let something from Self-Cloud INTO their Digital
+    Conscience — a photo, an album, a document. Only at their explicit word;
+    nothing enters otherwise."""
+    return rules.include(ref, note)
+
+
+@mcp.tool()
+def conscience_exclude(contains: str) -> dict:
+    """Take something back out of the conscience. It stays on Self-Cloud;
+    Jefferey simply no longer holds it as part of who they are."""
+    return rules.exclude(contains)
+
+
+@mcp.tool()
+def set_rule(kind: str, tags: str, instruction: str, audience: str = "me",
+             allow: bool = True) -> dict:
+    """Write one of the owner's standing rules, in THEIR words. kind:
+    'disclosure' (who may hear what — set allow true/false), 'reaction' (how
+    to respond when THEY raise this), 'representation' (how to speak of them
+    to others). tags: the subject ('health', 'father', 'money', 'karen').
+    audience: 'me', 'anyone', or a named person/group. Only ever at the
+    owner's word; never write a rule for them."""
+    return rules.set_rule(kind, tags, instruction, audience, allow)
+
+
+@mcp.tool()
+def remove_rule(rule_id_or_text: str) -> dict:
+    """Delete a rule by id or by text it contains. Never argued with."""
+    return rules.remove_rule(rule_id_or_text)
+
+
+@mcp.tool()
+def list_rules(kind: str = "") -> list:
+    """Every standing rule the owner has written, in plain language."""
+    return rules.rules(kind)
+
+
+@mcp.tool()
+def check_disclosure(audience: str, tags: str) -> dict:
+    """Call BEFORE saying anything about the owner to anyone who is not them.
+    A rule naming this audience beats a rule for 'anyone'; deny beats allow;
+    a representation rule is permission to say exactly that much and no
+    more; with no rule at all, silence is a no."""
+    return rules.check_disclosure(audience, tags)
+
+
+@mcp.tool()
+def guidance_for(tags: str, audience: str = "me") -> dict:
+    """The owner's standing instructions that apply right now: how to react
+    when speaking WITH them about this, or how to speak ABOUT them to someone
+    else. Returned verbatim — follow their words, not your paraphrase."""
+    return rules.guidance_for(tags, audience)
 
 
 if __name__ == "__main__":

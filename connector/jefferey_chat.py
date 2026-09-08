@@ -35,6 +35,7 @@ from guardian import Guardian
 from life import Life
 from selfcloud import SelfCloud
 from interview import Interview
+from rules import ConscienceRules
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 4096
@@ -47,6 +48,7 @@ guard = Guardian(conscience)
 life = Life(conscience)
 cloud = SelfCloud(conscience)
 interview = Interview(conscience, life)
+rules = ConscienceRules(conscience)
 
 
 # --------------------------------------------------------------------- tools
@@ -722,6 +724,74 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "conscience_include",
+        "description": ("The owner chose to let something from Self-Cloud INTO their "
+                        "Digital Conscience. Only at their explicit word."),
+        "input_schema": {"type": "object",
+                         "properties": {"ref": {"type": "string"}, "note": {"type": "string"}},
+                         "required": ["ref"]},
+    },
+    {
+        "name": "conscience_exclude",
+        "description": "Take something back out of the conscience; it stays on Self-Cloud.",
+        "input_schema": {"type": "object", "properties": {"contains": {"type": "string"}},
+                         "required": ["contains"]},
+    },
+    {
+        "name": "set_rule",
+        "description": (
+            "Write one of the owner's standing rules, in THEIR words. kind: "
+            "'disclosure' (who may hear what; set allow), 'reaction' (how to "
+            "respond when THEY raise this), 'representation' (how to speak of "
+            "them to others). audience: 'me', 'anyone', or a named person. "
+            "Only at the owner's word; never write a rule for them."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["disclosure", "reaction", "representation"]},
+                "tags": {"type": "string"},
+                "instruction": {"type": "string"},
+                "audience": {"type": "string", "default": "me"},
+                "allow": {"type": "boolean", "default": True},
+            },
+            "required": ["kind", "tags", "instruction"],
+        },
+    },
+    {
+        "name": "remove_rule",
+        "description": "Delete a rule by id or text. Never argued with.",
+        "input_schema": {"type": "object", "properties": {"rule_id_or_text": {"type": "string"}},
+                         "required": ["rule_id_or_text"]},
+    },
+    {
+        "name": "list_rules",
+        "description": "Every standing rule the owner has written, in plain language.",
+        "input_schema": {"type": "object", "properties": {"kind": {"type": "string"}}},
+    },
+    {
+        "name": "check_disclosure",
+        "description": (
+            "Call BEFORE saying anything about the owner to anyone who is not "
+            "them. Specific audience beats 'anyone'; deny beats allow; a "
+            "representation rule permits exactly that much; no rule = silence."
+        ),
+        "input_schema": {"type": "object",
+                         "properties": {"audience": {"type": "string"}, "tags": {"type": "string"}},
+                         "required": ["audience", "tags"]},
+    },
+    {
+        "name": "guidance_for",
+        "description": (
+            "The owner's standing instructions that apply right now — how to "
+            "react WITH them, or how to speak ABOUT them to someone else. "
+            "Verbatim; follow their words."
+        ),
+        "input_schema": {"type": "object",
+                         "properties": {"tags": {"type": "string"}, "audience": {"type": "string", "default": "me"}},
+                         "required": ["tags"]},
+    },
+    {
         "name": "forget_life",
         "description": "Erase anything in the life layer matching this text. Never argued with.",
         "input_schema": {
@@ -868,6 +938,21 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
             args.get("declined", False), args.get("visibility", "private"))
     if name == "interview_progress":
         return interview.progress()
+    if name == "conscience_include":
+        return rules.include(args["ref"], args.get("note", ""))
+    if name == "conscience_exclude":
+        return rules.exclude(args["contains"])
+    if name == "set_rule":
+        return rules.set_rule(args["kind"], args["tags"], args["instruction"],
+                              args.get("audience", "me"), args.get("allow", True))
+    if name == "remove_rule":
+        return rules.remove_rule(args["rule_id_or_text"])
+    if name == "list_rules":
+        return rules.rules(args.get("kind", ""))
+    if name == "check_disclosure":
+        return rules.check_disclosure(args["audience"], args["tags"])
+    if name == "guidance_for":
+        return rules.guidance_for(args["tags"], args.get("audience", "me"))
     raise ValueError(f"unknown tool: {name}")
 
 
@@ -981,6 +1066,15 @@ _TRACE = {
     "interview_progress": lambda a, r: (
         f"knows you: {r.get('answered')} answered, {r.get('locked_deeper')} still locked"
     ),
+    "conscience_include": lambda a, r: f"let into the conscience: {a.get('ref')}",
+    "conscience_exclude": lambda a, r: f"took {r.get('excluded')} item(s) out of the conscience",
+    "set_rule": lambda a, r: f"rule kept [{a.get('kind')}/{a.get('tags')}]: \"{a.get('instruction')}\"",
+    "remove_rule": lambda a, r: f"removed {r.get('removed')} rule(s)",
+    "list_rules": lambda a, r: f"reading your {len(r) if isinstance(r, list) else 0} rule(s)",
+    "check_disclosure": lambda a, r: (
+        f"{'may' if r.get('allowed') else 'may NOT'} speak of {a.get('tags')} to {a.get('audience')} — {r.get('reason')}"
+    ),
+    "guidance_for": lambda a, r: f"checking your instructions on {a.get('tags')}",
     "forget_life": lambda a, r: (
         f"forgot {r.get('memories_removed',0)} moment(s), "
         f"{r.get('media_removed',0)} picture(s), {r.get('people_removed',0)} person/people"
@@ -1213,6 +1307,13 @@ def selftest() -> None:
                 "next_question": {},
                 "record_answer": {"question_id": "how_address", "answer": "Laszlo"},
                 "interview_progress": {},
+                "conscience_include": {"ref": "/library/2025/kitchen-table/"},
+                "conscience_exclude": {"contains": "zzz-none"},
+                "set_rule": {"kind": "reaction", "tags": "father", "instruction": "Just listen."},
+                "remove_rule": {"rule_id_or_text": "zzz-none"},
+                "list_rules": {},
+                "check_disclosure": {"audience": "anyone", "tags": "health"},
+                "guidance_for": {"tags": "father"},
             }[name]
             out = dispatch_tool(name, sample)
             assert out is not None, name
@@ -1403,7 +1504,25 @@ def selftest() -> None:
                 _iv.record_answer(nq["id"], "…")
         print(f"  ✓ interview: depth earned 1→{_iv.trust()['max_depth']}, declines final, never repeats")
 
-        # 15. The system prompt carries directives + live store.
+        # 15. The rules: specific beats general, deny beats allow, silence is a no.
+        from rules import ConscienceRules as _CR
+        _R = _CR(Conscience(Path(td) / "rules.json"))
+        _R.set_rule("disclosure", "health", "My health is mine.", audience="anyone", allow=False)
+        _R.set_rule("disclosure", "health", "Karen can know.", audience="karen", allow=True)
+        _R.set_rule("representation", "work", "Say I'm retired and leave it.", audience="anyone")
+        _R.set_rule("reaction", "father", "Don't fix it. Listen.")
+        assert _R.check_disclosure("karen", "health")["allowed"], "specific allow lost to general deny"
+        assert not _R.check_disclosure("my sister", "health")["allowed"], "general deny ignored"
+        w = _R.check_disclosure("a neighbour", "work")
+        assert w["allowed"] and w.get("limited_to"), "representation rule not treated as scoped permission"
+        assert not _R.check_disclosure("a stranger", "hobbies")["allowed"], "silence was not a no"
+        assert _R.check_disclosure("me", "health")["allowed"], "owner blocked from own conscience"
+        assert _R.guidance_for("father", "me")["react_this_way"] == ["Don't fix it. Listen."]
+        _R.include("/library/x/"); assert len(_R.included()) == 1
+        assert _R.remove_rule("retired")["removed"] == 1
+        print("  ✓ rules: precedence, scoped representation, silence=no, intake gate, erase")
+
+        # 16. The system prompt carries directives + live store.
         sp = system_prompt()
         assert "JEFFEREY" in sp and "Live conscience" in sp and "priorities" in sp
         print("  ✓ system prompt assembly")
