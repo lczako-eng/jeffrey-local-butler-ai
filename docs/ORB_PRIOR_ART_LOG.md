@@ -15,6 +15,12 @@ any party; it records facts with dates and sources.
   System", 18 pp) and novelty analysis — both dated **February 6, 2026**.
   Filing status: **patent pending per founder — confirm application number,
   filing date, and publication status with patent agent and record here.**
+- **Public defensive disclosure, 2026-01-21:** `github.com/lczako-eng/Self-Cloud`
+  (README, LEGAL.md, five whitepapers) publicly states the Self-Cloud system,
+  physical authority over digital existence, consent-bound intelligence, and
+  **the term "digital conscience"** — with LEGAL.md asserting authorship and
+  prior art. This is the earliest dated *public* disclosure of the Digital
+  Conscience concept found so far (predates the Feb 2026 filings).
 - Public notice "Emotional-state interface — patent pending" displayed on
   jeffereyai.com orb section as of 2026-08-04 (site repo, main branch).
 

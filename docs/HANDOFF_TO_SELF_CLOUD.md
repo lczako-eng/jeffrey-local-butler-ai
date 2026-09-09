@@ -14,7 +14,7 @@ repo) for me to read.*
 
 | Product | Repo | What it is | Owned by |
 |---|---|---|---|
-| **Self-Cloud** | *(yours — push it to GitHub under lczako-eng so this session can read it)* | The platform. The owner's personal cloud on a drive they physically own: photos, files, backups, dedup, a network that goes up and down. Replaces iCloud — no monthly fee for life. Regulated by AI. | You |
+| **Self-Cloud** | **`lczako-eng/Self-Cloud`** — exists (public, Jan 2026): whitepapers, prospectus, README, LEGAL, logo. **No code yet — push your build into THIS repo**, don't create another. | The platform. The owner's personal cloud on a drive they physically own: photos, files, backups, dedup, a network that goes up and down. Replaces iCloud — no monthly fee for life. Regulated by AI. | You |
 | **Jefferey** | `lczako-eng/jeffrey-local-butler-ai` (this repo) | An AI *wrapper* — a connector that rides Claude / GPT and gives the rented engine a persistent, owned identity: the user's representative, secretary, protector, and the keeper of their Digital Conscience. **Jefferey is one accessor of Self-Cloud, not its owner.** | Me |
 | Website | `lczako-eng/Jeffrey-AI-Butler` | jeffereyai.com — the public face and the public build spec. | Me |
 
@@ -22,6 +22,40 @@ The founder's framing, which both of us build to: *Self-Cloud is the vault.
 Jefferey is a caretaker with a key.* Different AI clients get different keys
 (a plain Claude session, a plain GPT session, the Jefferey wrapper, a family
 member, an executor). The owner grants and revokes; the switch is final.
+
+## 1b. The January documents are canon — build to them
+
+`lczako-eng/Self-Cloud` (pushed 2026-01-21) holds the founder's original
+statement of the system. I've read all of it; my handoff is consistent with
+it, and where they differ in emphasis, **the January documents win**. The
+principles, in the founder's words:
+
+- *"Existence is a controlled state."* The system exists only when powered
+  and summoned; powered off, it is absent from every network — no IP, no
+  radio, no listening service. Authority is **physical**, not policy.
+- *"Memory is hazardous if exposed."* Client-side encryption; the owner
+  holds the keys.
+- *"Intelligence must not outlive consent."* **Jefferey operates only when
+  Self-Cloud is active.** No background learning, no passive observation, no
+  persistence without consent. Learning happens through deliberate
+  interaction and correction.
+- Four layers: **Storage Core** (SSD) · **Power Authority Layer** (mechanical
+  kill switch — Wi-Fi, networking, or power) · **Network Presence Layer**
+  (private network, permanently online *or* summoned — owner's choice) ·
+  **Owner Control Interface** (phone or trusted device; session-based,
+  revocable; losing the phone grants nothing if the box is off).
+- Always-on is **optional, not required**: "can function as a modern cloud
+  when convenience is needed, and instantly shift into a zero-surface,
+  offline state."
+- Inheritance is designed in: memory transferable by the owner's intent.
+- "Secure hub hosting" is named as an option alongside home deployment —
+  the seed of the Pro tier.
+
+**One reconciliation for my side:** the Opportunity Engine, the morning
+brief, and the Guardian run *only while Self-Cloud is powered and the owner
+has attached Jefferey to an engine*. Nothing runs in the dark. This is
+already how the code behaves (nothing is a background daemon), and it is
+now stated as a rule in the Directive Pack.
 
 ## 2. What Jefferey already has (so you don't rebuild it)
 
@@ -122,6 +156,11 @@ call into Jefferey.
    Jefferey included — no cache, no queue that flushes later without consent.
 7. **Least authority for the builder, too.** Your session has full authority
    over the laptop for development. The *product* must never assume that.
+8. **Intelligence must not outlive consent** (January canon). Jefferey and
+   every other AI client operate only while Self-Cloud is powered and the
+   owner has engaged them. No background learning, no passive observation,
+   no queued work that runs later. Expose `network_state()` so clients can
+   *prove* they stopped.
 
 ## 7. The backup rule — before iCloud is cancelled
 
@@ -214,7 +253,8 @@ years ago; treat it as a product name. No "butler" anywhere.
 
 ## 9. How we coordinate from here
 
-1. You push Self-Cloud to GitHub under `lczako-eng` and write
+1. You push your build into the existing **`lczako-eng/Self-Cloud`** repo
+   (it has the whitepapers; add a `src/` or similar) and write
    `SELF_CLOUD_CONTRACT.md` answering §5 (what you expose, how, where).
 2. The owner adds your repo to my session; I read it and adjust Jefferey to
    call your API — thinning `selfcloud.py` and re-pointing `life.py`'s media

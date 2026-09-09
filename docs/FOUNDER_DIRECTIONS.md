@@ -147,7 +147,11 @@ the phone isn't burdened, and losing or replacing a phone loses nothing.
 
 - **JEFFEREY**, never "Jeff". No "butler" anywhere.
 - Jefferey is a **wrapper** over rented engines, not a model of our own.
-- **Self-Cloud is its own product**; Jefferey is a caretaker with a key.
+- **Self-Cloud is its own product**; Jefferey is a caretaker with a key. Its
+  repo exists — `lczako-eng/Self-Cloud` (Jan 2026 whitepapers, no code yet);
+  the laptop build pushes there. The January documents are canon.
+- **Intelligence must not outlive consent** — Jefferey operates only while
+  Self-Cloud is powered. Always-on is the owner's option, never a requirement.
 - The **Digital Conscience is the person's journal** — daily and family —
   curated (only what they let in), with rules they write: who may hear what,
   how to react to them, how to speak of them to others. Silence is a no.
