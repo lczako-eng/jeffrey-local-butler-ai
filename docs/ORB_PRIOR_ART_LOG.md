@@ -7,14 +7,18 @@ reconstruct the timeline quickly. This document makes no accusation against
 any party; it records facts with dates and sources.
 
 **Status of protection (documents reviewed 2026-08-14):**
-- Trademark application **PERSONAL AI SHADOW** — filed with the Canadian
-  Trademarks Office **February 7, 2026**, application **#2454960**, Nice
-  class 42 (SaaS featuring AI software). (Jefferey AI and Self Cloud
-  applications: per founder; record application numbers/dates here.)
-- Patent claims document ("Description of a Physically Sovereign AI
-  System", 18 pp) and novelty analysis — both dated **February 6, 2026**.
-  Filing status: **patent pending per founder — confirm application number,
-  filing date, and publication status with patent agent and record here.**
+- **Three trademark applications, all filed 2026-02-07** with CIPO (Canada),
+  Nice class 42, standard characters (numbers per `Self-Cloud/docs/CANON.md`
+  §8): **2454959 JEFFEREY AI · 2454960 PERSONAL AI SHADOW · 2454961 SELF-CLOUD.**
+- **Patent application CA 3,301,233** — "Physically Sovereign Artificial
+  Intelligence System with Digital Conscience Architecture"; fee paid
+  2026-02-06. **⚑ Status at risk:** CANON §8 records a CIPO Commissioner's
+  Notice (2026-02-26) that the required *description* was missing, with the
+  application deemed never filed unless cured by **2026-04-27**. **Confirm
+  with the patent agent whether it was cured; if not, stop saying "patent
+  pending" (the public orb notice included) and take counsel's advice on
+  refiling.** The claims document (18 pp) and novelty analysis are dated
+  2026-02-06.
 - **Public defensive disclosure, 2026-01-21:** `github.com/lczako-eng/Self-Cloud`
   (README, LEGAL.md, five whitepapers) publicly states the Self-Cloud system,
   physical authority over digital existence, consent-bound intelligence, and

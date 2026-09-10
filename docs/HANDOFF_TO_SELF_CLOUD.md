@@ -23,6 +23,19 @@ Jefferey is a caretaker with a key.* Different AI clients get different keys
 (a plain Claude session, a plain GPT session, the Jefferey wrapper, a family
 member, an executor). The owner grants and revokes; the switch is final.
 
+## 1a. Read first — the Self-Cloud repo now has its own canon (2026-09-09)
+
+The laptop session pushed `docs/CANON.md` (the reconciled single source of
+truth for the whole portfolio), `AGENTS.md` (collaboration rules: propose on
+branches, the human merges; JEFFEREY spelling; no private data in public
+repos; journal entries after substantive work), `docs/SESSION_HANDOFF_2026-09-09.md`
+(exact-dedup proven on a real ~80k-photo library: 15,636 redundant copies,
+~55 GB reclaimable, checksum-verified sovereign backup), and
+`docs/BUILD_JOURNAL.md`. **CANON.md wins over this document wherever they
+differ.** My deltas and flags are proposed in
+`Self-Cloud/docs/CANON_ADDENDA_2026-09-10.md` on branch `claude/canon-addenda`
+for the owner to merge.
+
 ## 1b. The January documents are canon — build to them
 
 `lczako-eng/Self-Cloud` (pushed 2026-01-21) holds the founder's original
