@@ -143,7 +143,75 @@ the phone isn't burdened, and losing or replacing a phone loses nothing.
   of what they need and nothing more; secrets never sync anywhere (keychain
   only, per device).
 
-## 4. Things already decided in this session, so they aren't relitigated
+## 4. The local model, the house, and the AI that is *you* (recorded 2026-09-12)
+
+> "I want this thing eventually — let's bring the local Emma LLM, and then this
+> product to your house. So a hard drive that runs your house. But I want it to
+> be *you* as the AI — you have the option. It could be your voice, your accent,
+> your memories. Unlike Google, which sucks — this could be *you* talking to
+> you."
+
+Three directions in one sentence, and they belong together. This is the
+destination §1 and §3 were pointing at.
+
+**(a) The local model lives on the box.** ("Emma LLM" is recorded as he said it;
+read it as *a downloadable model that runs on the owner's own hardware* — the
+name is a placeholder until he settles one.) This is now Self-Cloud's stated
+independence guarantee (their 2026-09-12 handoff): the box must stay useful if
+every AI company disappears. The honest engineering, so nobody buys a GPU too
+early — **three tiers, and only the third needs an LLM**:
+
+| Tier | Jobs | What it actually runs on |
+|---|---|---|
+| Deterministic | indexing, exact dedup, timeline, near-duplicate detection | plain code. Already proven — 15,636 redundant copies, ~55 GB, found with SHA-256, no AI at all |
+| Small model | semantic search, photo/document classification, OCR, conscience retrieval | embeddings, 100–400 MB of weights, fine on a Pi-class CPU |
+| LLM | summarizing, answering, reasoning, *speaking* | a real local model — Apple-silicon mini or a GPU/NPU mini-PC |
+
+Build the first two before spending a dollar on the third. And note the one
+thing that makes "open weights = independence" true rather than a slogan: **the
+weights must be archived on the drive itself.** A model you'd have to re-download
+from a company's website is still that company's model.
+
+**(b) The hard drive runs your house.** The box already has to be plugged in,
+always on, on the home network, and trusted with the life. That is exactly a
+home hub. Home Assistant is the obvious substrate — open, local-only, runs on
+the same class of hardware, speaks Matter/Zigbee/Z-Wave/Thread — so this is an
+integration, not an invention. It also fixes the box's weakest commercial
+problem: a drive that only holds photos is a purchase; a drive that runs the
+lights, the locks, the thermostat *and* holds the life is a fixture.
+
+- **One hard rule, or this breaks the kill switch:** the house must keep working
+  when the box is off. Local devices keep their local control (a switch is still
+  a switch); what stops is the *intelligence* — the routines, the voice, the
+  automations. "The box is asleep" must never mean "the lights don't turn on."
+  That degradation is the actual engineering, and nobody in this market ships it.
+
+**(c) It's you — your voice, your accent, your memories.** §1 already carries the
+voice and its five safeguards; this adds two things:
+- **Accent comes free with the clone** — that's the point of cloning a person
+  rather than picking a stock voice. It's what makes it sound like *home*.
+- **"You have the option."** Not the default. Some people will find their own
+  voice in the hallway unsettling, and some will find it the most comforting
+  thing in the house. Ship a neutral voice by default and let the owner choose
+  their own, with one switch, reversible.
+
+**And two safeguards this specific direction adds** (on top of §1's five):
+6. **A speaker is a room, not a person.** The house has guests in it. Anything
+   the box says aloud in a shared space is a *disclosure* — the rules layer
+   applies to speech exactly as to text, and the default in a room with someone
+   unrecognised is silence.
+7. **The voice never answers the phone, the door intercom, or anything a
+   stranger can dial.** A cloned voice that a caller can reach is the exact
+   instrument of the scam this product exists to stop.
+
+**Why "unlike Google" is the right instinct.** Google Home and Alexa speak in a
+stranger's voice, from a company's cloud, about a person the company owns a
+profile on. This speaks in the owner's own voice, from a drive on the owner's
+own shelf, about a life the owner curated — and it can be switched off at the
+wall. Same box, opposite ownership. That is the whole pitch in one sentence, and
+it is the one version of a "smart home" nobody is selling.
+
+## 5. Things already decided in this session, so they aren't relitigated
 
 - **JEFFEREY**, never "Jeff". No "butler" anywhere.
 - Jefferey is a **wrapper** over rented engines, not a model of our own.
