@@ -19,13 +19,39 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl  # POSIX only; Windows falls back to no cross-process lock
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+
 DEFAULT_STORE = Path(
     os.environ.get("JEFFEREY_CONSCIENCE_PATH", "~/.jefferey/conscience.json")
 ).expanduser()
+
+# How many previous versions of the store to keep beside it. Twenty is a few
+# hundred kilobytes and buys back weeks of accidents.
+HISTORY_KEEP = 20
+
+
+class ConscienceCorrupt(RuntimeError):
+    """The store on disk is unreadable and no snapshot could replace it.
+
+    Raised instead of silently starting from an empty conscience — losing a
+    life quietly is worse than refusing to start loudly.
+    """
+
+
+class ConscienceConflict(RuntimeError):
+    """Another process wrote to this conscience since we loaded it.
+
+    Refusing the write is the point: two surfaces each holding the whole
+    store in memory would otherwise overwrite each other's changes.
+    """
 
 # Confidence learning rates
 _REINFORCE = 0.15   # consistent correction: conf += (1 - conf) * RATE
@@ -50,20 +76,164 @@ class Conscience:
             "actions": [],      # [{category, description, amount, outcome, added, ts}]
             "observations": [],   # [{note, category, added, ts}] — Opportunity Engine
             "opportunities": [],  # [{what, ..., score, status, added, ts}]
+            "_rev": 0,          # bumped on every write; guards against clobber
         }
+        self._rev_seen = 0
         self._load()
 
     # ------------------------------------------------------------ storage
+    #
+    # Durability rules, because the product's headline feature is a switch
+    # that cuts power:
+    #   * every write is atomic  — temp file, fsync, os.replace, fsync dir;
+    #   * every write is locked  — one writer at a time across processes;
+    #   * every write is versioned — the previous copy lands in history/;
+    #   * a corrupt store recovers from history, or REFUSES TO START.
+    # A truncated file must never quietly become an empty conscience.
+
+    @property
+    def history_dir(self) -> Path:
+        return self.path.parent / (self.path.stem + ".history")
+
+    @property
+    def _lock_path(self) -> Path:
+        return self.path.with_suffix(self.path.suffix + ".lock")
+
+    def _lock(self):
+        """Exclusive cross-process lock, as a context manager."""
+        class _Lock:
+            def __init__(self, path):
+                self.path, self.fh = path, None
+
+            def __enter__(self):
+                if fcntl is None:
+                    return self
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self.fh = open(self.path, "w")
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+                return self
+
+            def __exit__(self, *exc):
+                if self.fh is not None:
+                    fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+                    self.fh.close()
+                return False
+
+        return _Lock(self._lock_path)
+
+    def _snapshots(self) -> list[Path]:
+        if not self.history_dir.exists():
+            return []
+        return sorted(self.history_dir.glob("*.json"), reverse=True)
+
     def _load(self) -> None:
-        if self.path.exists():
+        if not self.path.exists():
+            return
+        raw = self.path.read_text()
+        try:
+            parsed = json.loads(raw) if raw.strip() else None
+            if parsed is None:
+                raise ValueError("store is empty")
+        except Exception as exc:
+            parsed = self._recover(reason=str(exc))
+        self.data.update(parsed)
+        self._rev_seen = int(self.data.get("_rev", 0))
+
+    def _recover(self, reason: str) -> dict:
+        """The live store is unreadable. Try the newest good snapshot; if there
+        isn't one, stop — do not start from an empty conscience."""
+        for snap in self._snapshots():
             try:
-                self.data.update(json.loads(self.path.read_text()))
+                parsed = json.loads(snap.read_text())
             except Exception:
-                pass  # a corrupt store must never crash the conscience
+                continue
+            broken = self.path.with_suffix(self.path.suffix + ".corrupt")
+            try:
+                self.path.replace(broken)
+            except OSError:
+                broken = None
+            print(
+                f"\n  ⚠  {self.path} was unreadable ({reason}).\n"
+                f"     Recovered from snapshot {snap.name}."
+                + (f"\n     The damaged file is kept at {broken}." if broken else "")
+                + "\n     Check what you may have said since that snapshot.\n",
+                file=sys.stderr,
+            )
+            return parsed
+        if os.environ.get("JEFFEREY_ALLOW_RESET") == "1":
+            print(f"\n  ⚠  {self.path} unreadable ({reason}); "
+                  f"JEFFEREY_ALLOW_RESET=1 — starting empty.\n", file=sys.stderr)
+            return {}
+        raise ConscienceCorrupt(
+            f"{self.path} is unreadable ({reason}) and no usable snapshot exists "
+            f"in {self.history_dir}.\n"
+            "Refusing to start from an empty conscience — that would silently "
+            "erase everything this person told Jefferey.\n"
+            "Restore the file from your backup, or, if you truly mean to start "
+            "over, run again with JEFFEREY_ALLOW_RESET=1."
+        )
+
+    def _on_disk_rev(self) -> int:
+        try:
+            return int(json.loads(self.path.read_text()).get("_rev", 0))
+        except Exception:
+            return self._rev_seen  # unreadable: _load/_recover owns that problem
+
+    def _archive(self) -> None:
+        """Snapshot the store as it now stands on disk.
+
+        Taken *after* the atomic replace, not before: a snapshot that lagged
+        one write behind would lose the newest change in exactly the case it
+        exists for — recovering a file torn by a power cut.
+        """
+        if not self.path.exists():
+            return
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%dT%H%M%S")
+        dest = self.history_dir / f"{self.path.stem}-{stamp}-{self._rev_seen:06d}.json"
+        try:
+            dest.write_bytes(self.path.read_bytes())
+        except OSError:
+            return
+        for old in self._snapshots()[HISTORY_KEEP:]:
+            old.unlink(missing_ok=True)
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2, ensure_ascii=False))
+        with self._lock():
+            disk_rev = self._on_disk_rev()
+            if disk_rev != self._rev_seen:
+                raise ConscienceConflict(
+                    f"{self.path} was written by another Jefferey "
+                    f"(disk revision {disk_rev}, this session loaded {self._rev_seen}). "
+                    "Nothing was written, so neither set of changes is lost. "
+                    "Restart this surface so it reloads the conscience."
+                )
+            self.data["_rev"] = self._rev_seen + 1
+            payload = json.dumps(self.data, indent=2, ensure_ascii=False)
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)          # atomic: readers see old or new
+            try:                                 # make the rename itself durable
+                dir_fd = os.open(self.path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except (OSError, AttributeError):
+                pass                             # not all platforms allow this
+            self._rev_seen = self.data["_rev"]
+            self._archive()
+
+    # ------------------------------------------------------------ recovery
+    def snapshots(self) -> list[dict]:
+        """What versions of this conscience are recoverable, newest first."""
+        return [{"file": str(p), "saved": time.strftime(
+            "%Y-%m-%dT%H:%M:%S", time.localtime(p.stat().st_mtime))}
+            for p in self._snapshots()]
 
     # ------------------------------------------------------------ facts
     def remember_fact(self, fact: str, category: str = "general") -> dict:

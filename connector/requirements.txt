@@ -4,3 +4,11 @@ fastapi
 uvicorn
 pypdf
 keyring
+
+# Local semantic photo search (tools/photo_index.py) — tier B, the small-model
+# tier. Optional: nothing in the connector imports these.
+# open_clip_torch
+# torch
+# pillow
+# pillow-heif      # iPhone libraries are full of HEIC
+# numpy

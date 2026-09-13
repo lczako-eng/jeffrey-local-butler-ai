@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -36,6 +37,8 @@ from life import Life
 from selfcloud import SelfCloud
 from interview import Interview
 from rules import ConscienceRules
+import access
+from access import AccessDenied, OwnerOnly
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 4096
@@ -49,6 +52,13 @@ life = Life(conscience)
 cloud = SelfCloud(conscience)
 interview = Interview(conscience, life)
 rules = ConscienceRules(conscience)
+
+# THE DOOR. This surface is the OWNER'S OWN TERMINAL, so it binds the
+# caretaker key and sets the owner console — the one place where widening an
+# authority is allowed at all. An MCP host or the HTTP server does neither.
+os.environ.setdefault("JEFFEREY_CLIENT", "jefferey")
+os.environ.setdefault("JEFFEREY_OWNER_CONSOLE", "1")
+access.bind(cloud, announce=False)
 
 
 # --------------------------------------------------------------------- tools
@@ -571,25 +581,19 @@ TOOLS = [
             "matters to them, the moments recorded, the pictures, what they "
             "value. Speak from this — never invent a memory or a feeling."
         ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"include": {"type": "string", "default": "private"}},
-        },
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "tell_story",
         "description": (
             "Gather what's needed to tell a piece of this person's story — "
-            "for them now, or for the people they named, later. audience: "
-            "'self', 'family', or 'legacy'. Tell it in their voice, in order, "
-            "using only what is here."
+            "for them now, or for the people they named, later. Tell it in "
+            "their voice, in order, using only what is here. How much is in "
+            "reach is set by the key this session holds, not by you."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {
-                "theme": {"type": "string"},
-                "audience": {"type": "string", "enum": ["self", "family", "legacy"]},
-            },
+            "properties": {"theme": {"type": "string"}},
         },
     },
     {
@@ -813,7 +817,23 @@ TOOLS = [
 
 
 def dispatch_tool(name: str, args: dict) -> dict | list:
-    """Route a tool call from the engine into the owned store."""
+    """Route a tool call from the engine into the owned store — through the
+    door. A refusal comes back as a result the model must report, not as a
+    crash and not as something it can retry differently."""
+    try:
+        if name in access.OWNER_ONLY_TOOLS:
+            access.owner_only(lambda: None)()
+        scope = access.TOOL_SCOPES.get(name)
+        if scope:
+            access.GATE.require(scope)
+        return _dispatch_tool(name, args)
+    except (AccessDenied, OwnerOnly) as e:
+        return {"refused": True, "tool": name, "reason": str(e),
+                "tell_the_user": "Say plainly that this is not something your "
+                                 "key permits, and do not attempt it another way."}
+
+
+def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "record_correction":
         return conscience.record_correction(
             args["context"], args["what_was_suggested"], args["what_user_chose"],
@@ -906,9 +926,9 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
         return life.add_media(args["path"], args.get("caption", ""), args.get("when", ""),
                               args.get("people", ""), args.get("visibility", "private"))
     if name == "who_am_i":
-        return life.who_am_i(args.get("include", "private"))
+        return life.who_am_i(access.ceiling())
     if name == "tell_story":
-        return life.tell_story(args.get("theme", ""), args.get("audience", "family"))
+        return life.tell_story(access.ceiling(), args.get("theme", ""))
     if name == "story_gaps":
         return life.story_gaps()
     if name == "forget_life":
@@ -1227,7 +1247,7 @@ def selftest() -> None:
     """
     import tempfile
 
-    global conscience, rep, guard, life
+    global conscience, rep, guard, life, cloud, interview, rules
     with tempfile.TemporaryDirectory() as td:
         # Rebind EVERY helper — they each hold a reference to the store, and
         # a self-test must never touch the user's real conscience.
@@ -1235,6 +1255,10 @@ def selftest() -> None:
         rep = Representative(conscience)
         guard = Guardian(conscience)
         life = Life(conscience)
+        cloud = SelfCloud(conscience)
+        interview = Interview(conscience, life)
+        rules = ConscienceRules(conscience)
+        access.bind(cloud, "jefferey", announce=False)
 
         # 1. Every declared tool dispatches.
         for tool in TOOLS:
@@ -1455,13 +1479,13 @@ def selftest() -> None:
                          when="2025-07", people="Karen", tags="origin", visibility="legacy")
         _life.add_memory("Something told in confidence.", visibility="private")
         _life.add_memory("The orb made her laugh until she cried.", visibility="family")
-        assert len(_life.tell_story("", audience="legacy")["moments"]) == 1, "legacy leaked!"
-        assert len(_life.tell_story("", audience="family")["moments"]) == 2, "family saw private!"
-        assert len(_life.tell_story("", audience="self")["moments"]) == 3
+        assert len(_life.tell_story("legacy")["moments"]) == 1, "legacy leaked!"
+        assert len(_life.tell_story("family")["moments"]) == 2, "family saw private!"
+        assert len(_life.tell_story("private")["moments"]) == 3
         media = _life.add_media("~/SelfCloud/photos/kitchen.jpg", caption="Where it started",
                                 visibility="legacy")
         assert media["path"].endswith("kitchen.jpg") and "copy" in media["note"]
-        assert _life.who_am_i()["depth"]["people"] == 1
+        assert _life.who_am_i("private")["depth"]["people"] == 1
         # A life with nothing in it should notice, and ask.
         _empty = _Life(Conscience(Path(td) / "empty.json"))
         assert _empty.story_gaps()["gaps"], "an empty story should prompt questions"
@@ -1526,6 +1550,106 @@ def selftest() -> None:
         sp = system_prompt()
         assert "JEFFEREY" in sp and "Live conscience" in sp and "priorities" in sp
         print("  ✓ system prompt assembly")
+
+        # 16. THE DOOR — the gate is structural, not advisory.
+        _c = Conscience(Path(td) / "door.json")
+        _cloud = SelfCloud(_c)
+        _life2 = Life(_c)
+        _life2.add_memory("a private thing", visibility="private")
+        _life2.add_memory("a family thing", visibility="family")
+        _life2.add_memory("for after", visibility="legacy")
+
+        # the ceiling comes from the KEY, and each key sees only its level
+        seen = {}
+        for who, expect in (("jefferey", "private"), ("family", "family"),
+                            ("executor", "legacy")):
+            g = access.bind(_cloud, who, announce=False)
+            assert g.ceiling() == expect, f"{who} ceiling was {g.ceiling()}"
+            seen[who] = len(_life2.who_am_i(g.ceiling())["moments"])
+        assert seen == {"jefferey": 3, "family": 2, "executor": 1}, seen
+
+        # a plain Claude session has NO key to the life layer at all — this is
+        # the hole the old code left wide open
+        g = access.bind(_cloud, "claude-raw", announce=False)
+        try:
+            g.ceiling()
+            raise AssertionError("claude-raw reached the life layer!")
+        except AccessDenied:
+            pass
+        assert g.check("facts.read")["allowed"] is True
+        assert g.check("facts.write")["allowed"] is False
+        assert g.check("money.read")["allowed"] is False
+        assert dispatch_tool("who_am_i", {})["refused"] is True
+        assert dispatch_tool("remember_fact", {"fact": "x"})["refused"] is True
+        assert not dispatch_tool("explain_basis", {"topic": "travel"}).get("refused")
+
+        # an unknown client gets nothing, and no preset invents one for it
+        g_unknown = access.bind(_cloud, "some-random-agent", announce=False)
+        assert g_unknown.check("facts.read")["allowed"] is False
+
+        # widening needs the owner's own console; narrowing never does
+        _console = os.environ.pop("JEFFEREY_OWNER_CONSOLE", None)
+        assert dispatch_tool("selfcloud_add_scope",
+                             {"client": "claude-raw", "scope": "life.read"})["refused"]
+        assert dispatch_tool("set_permission",
+                             {"category": "purchases", "level": "act"})["refused"]
+        assert _cloud.check_access("claude-raw", "life.read")["allowed"] is False
+        if _console:
+            os.environ["JEFFEREY_OWNER_CONSOLE"] = _console
+        assert not dispatch_tool("selfcloud_revoke", {"client": "gpt-raw"}).get("refused")
+
+        # the decorators on the MCP surface must not drift from the table
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "_mcp_probe", Path(__file__).parent / "jefferey_mcp.py")
+        _src = (Path(__file__).parent / "jefferey_mcp.py").read_text()
+        for _name, _scope in access.TOOL_SCOPES.items():
+            assert f'@gate("{_scope}")\ndef {_name}(' in _src, \
+                f"jefferey_mcp.py: {_name} is not gated on {_scope}"
+        for _name in access.OWNER_ONLY_TOOLS:
+            assert f"@owner_only\ndef {_name}(" in _src, \
+                f"jefferey_mcp.py: {_name} is not owner-only"
+        access.bind(cloud, "jefferey", announce=False)
+        print("  ✓ the door: ceiling from the key, guests denied, "
+              "no self-widening, decorators match the table")
+
+        # 17. DURABILITY — the kill switch must not be able to eat a life.
+        from conscience import ConscienceCorrupt, ConscienceConflict
+        dpath = Path(td) / "durable.json"
+        d1 = Conscience(dpath)
+        for i in range(4):
+            d1.remember_fact(f"fact {i}")
+        assert not list(dpath.parent.glob("*.tmp")), "a temp file survived a write"
+        assert len(d1.snapshots()) == 4, d1.snapshots()   # every write is recoverable
+        assert d1.data["_rev"] == 4
+
+        # two surfaces holding the same store: the second write is refused,
+        # loudly, instead of silently overwriting the first
+        d2 = Conscience(dpath)
+        d1.remember_fact("written by surface one")
+        try:
+            d2.remember_fact("written by surface two")
+            raise AssertionError("a stale writer clobbered the store!")
+        except ConscienceConflict:
+            pass
+        assert len(Conscience(dpath).data["facts"]) == 5
+
+        # a torn write (power cut mid-save) recovers from the last snapshot
+        dpath.write_text('{"facts": [{"fact": "trunca')
+        d3 = Conscience(dpath)
+        assert len(d3.data["facts"]) == 5, "did not recover the whole store"
+        assert dpath.with_suffix(".json.corrupt").exists()
+
+        # and with nothing to recover from, it REFUSES rather than starting empty
+        lone = Path(td) / "lone.json"
+        lone.write_text("{ not json")
+        try:
+            Conscience(lone)
+            raise AssertionError("started from an empty conscience!")
+        except ConscienceCorrupt:
+            pass
+        print("  ✓ durability: atomic writes, every write recoverable, stale writer "
+              "refused, torn file recovered, unrecoverable file refuses to start")
 
     print("\nAll offline checks passed. Add an API key and he talks.")
 

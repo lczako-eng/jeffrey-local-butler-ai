@@ -34,6 +34,7 @@ import sys
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -44,6 +45,8 @@ from life import Life
 from selfcloud import SelfCloud
 from interview import Interview
 from rules import ConscienceRules
+import access
+from access import AccessDenied, OwnerOnly, gate, owner_only
 
 conscience = Conscience()
 rep = Representative(conscience)
@@ -59,11 +62,46 @@ PUBLIC_URL = os.environ.get("JEFFEREY_PUBLIC_URL", "").rstrip("/")
 PORT = int(os.environ.get("JEFFEREY_HTTP_PORT", "8377"))
 
 
+def _token_map() -> dict[str, str]:
+    """token -> client. One process here legitimately serves several engines
+    (a Custom GPT, a Claude session, a family member's app), so the token is
+    not just a password — it says WHICH KEY the caller holds.
+
+        JEFFEREY_HTTP_TOKENS="jefferey:s3cr3t,gpt-raw:other,family:third"
+
+    With nothing set, the single JEFFEREY_HTTP_TOKEN maps to JEFFEREY_CLIENT
+    (default `claude-raw` — the narrow key, per access.py)."""
+    raw = os.environ.get("JEFFEREY_HTTP_TOKENS", "").strip()
+    if not raw:
+        return {TOKEN: os.environ.get("JEFFEREY_CLIENT", access.DEFAULT_CLIENT)}
+    out: dict[str, str] = {}
+    for pair in raw.split(","):
+        if ":" not in pair:
+            continue
+        client, tok = pair.split(":", 1)
+        if client.strip() and tok.strip():
+            out[tok.strip()] = client.strip().lower()
+    return out
+
+
+TOKENS = _token_map()
+
+# THE DOOR. A process-wide fallback identity; each authenticated request then
+# rebinds to the client its own token names (require_owner, below). Nothing
+# the model says can change either one.
+access.bind(cloud)
+access.provision(cloud, set(TOKENS.values()))
+
+
 async def require_owner(request: Request) -> None:
-    """Every byte in the store is personal. No token, no access."""
+    """Every byte in the store is personal. No token, no access — and the
+    token decides which key you hold for the rest of this request."""
     auth = request.headers.get("authorization", "")
-    if not secrets.compare_digest(auth, f"Bearer {TOKEN}"):
-        raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+    for tok, client in TOKENS.items():
+        if secrets.compare_digest(auth, f"Bearer {tok}"):
+            access.use_client(client)   # per-request identity, not per-call
+            return
+    raise HTTPException(status_code=401, detail="missing or invalid bearer token")
 
 
 app = FastAPI(
@@ -79,6 +117,17 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(AccessDenied)
+async def _denied(request: Request, exc: AccessDenied):
+    """A refusal is an answer, not an error to route around."""
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(OwnerOnly)
+async def _owner_only(request: Request, exc: OwnerOnly):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
 # ---------------------------------------------------------------- identity
 @app.get("/directives", operation_id="get_directives")
 def get_directives() -> dict:
@@ -89,6 +138,7 @@ def get_directives() -> dict:
 
 
 @app.get("/conscience", operation_id="get_conscience")
+@gate("facts.read")
 def get_conscience() -> dict:
     """Read the full conscience: the user's priority hierarchy (with
     confidence scores), remembered facts, active goals, and how many
@@ -106,6 +156,7 @@ class CorrectionIn(BaseModel):
 
 
 @app.post("/corrections", operation_id="record_correction")
+@gate("priorities.write")
 def record_correction(c: CorrectionIn) -> dict:
     """THE core learning act. The user overrode a recommendation — learn WHY.
     Record which value they were protecting and which they traded away in
@@ -126,6 +177,7 @@ class PriorityIn(BaseModel):
 
 
 @app.post("/priorities", operation_id="set_priority")
+@gate("priorities.write")
 def set_priority(p: PriorityIn) -> dict:
     """The user explicitly stated a priority (e.g. context='travel',
     higher='direct flights', lower='saving money'). Store it with the given
@@ -140,6 +192,7 @@ class FactIn(BaseModel):
 
 
 @app.post("/facts", operation_id="remember_fact")
+@gate("facts.write")
 def remember_fact(f: FactIn) -> dict:
     """Remember a durable FACT about the user (people, dates, situations,
     constraints). Facts are stored separately from values — never mix the
@@ -148,6 +201,7 @@ def remember_fact(f: FactIn) -> dict:
 
 
 @app.delete("/facts", operation_id="forget")
+@gate("facts.write")
 def forget(contains: str) -> dict:
     """Delete every remembered fact containing this text. The user's right
     to erase is absolute — never argue, always confirm what was removed."""
@@ -156,6 +210,7 @@ def forget(contains: str) -> dict:
 
 # ---------------------------------------------------------------- representing
 @app.get("/basis", operation_id="explain_basis")
+@gate("priorities.read")
 def explain_basis(topic: str) -> dict:
     """Before recommending anything, fetch the user's OWN priorities and
     facts relevant to this topic. Ground the recommendation and its
@@ -166,6 +221,7 @@ def explain_basis(topic: str) -> dict:
 
 
 @app.get("/priorities", operation_id="priorities_for")
+@gate("priorities.read")
 def priorities_for(context: str = "") -> list:
     """List the user's learned priority hierarchy, highest confidence first,
     optionally filtered to a context (e.g. 'travel', 'money', 'family')."""
@@ -178,6 +234,7 @@ class GoalIn(BaseModel):
 
 
 @app.post("/goals", operation_id="add_goal")
+@gate("goals.write")
 def add_goal(g: GoalIn) -> dict:
     """Register a long-term goal the user has approved. Goals drive the
     Opportunity Engine: what can be done today to move these forward,
@@ -186,6 +243,7 @@ def add_goal(g: GoalIn) -> dict:
 
 
 @app.delete("/goals", operation_id="close_goal")
+@gate("goals.write")
 def close_goal(contains: str) -> dict:
     """Mark active goals containing this text as done/retired."""
     return {"closed": conscience.close_goal(contains)}
@@ -199,6 +257,7 @@ class PermissionIn(BaseModel):
 
 
 @app.post("/permissions", operation_id="set_permission")
+@owner_only
 def set_permission(p: PermissionIn) -> dict:
     """ONLY when the user explicitly grants or changes authority, in their
     own words. Jefferey never expands his own permissions."""
@@ -237,6 +296,7 @@ def log_action(a: ActionLogIn) -> dict:
 
 
 @app.get("/actions", operation_id="action_log")
+@gate("facts.read")
 def action_log(limit: int = 20) -> list:
     """The audit trail: recent acts, denials, and permission changes,
     newest first."""
@@ -250,6 +310,7 @@ class ObservationIn(BaseModel):
 
 
 @app.post("/observations", operation_id="log_observation")
+@gate("goals.write")
 def log_observation(o: ObservationIn) -> dict:
     """Note something observed that might matter later. Observations feed
     the Opportunity Engine."""
@@ -266,6 +327,7 @@ class OpportunityIn(BaseModel):
 
 
 @app.post("/opportunities", operation_id="record_opportunity")
+@gate("goals.read")
 def record_opportunity(o: OpportunityIn) -> dict:
     """Score a way to make the user's life better against THEIR priorities.
     Returns the score and whether it earns an interrupt (>=0.75), waits for
@@ -277,12 +339,14 @@ def record_opportunity(o: OpportunityIn) -> dict:
 
 
 @app.delete("/opportunities", operation_id="resolve_opportunity")
+@gate("goals.write")
 def resolve_opportunity(contains: str, outcome: str = "done") -> dict:
     """Close pending opportunities containing this text."""
     return {"resolved": conscience.resolve_opportunity(contains, outcome)}
 
 
 @app.get("/brief", operation_id="daily_brief")
+@gate("facts.read")
 def daily_brief() -> dict:
     """One screen: orb mood, active goals, ranked opportunities, recent
     actions and observations."""
@@ -318,6 +382,7 @@ class DraftIn(BaseModel):
 
 
 @app.post("/draft-guidance", operation_id="draft_guidance")
+@gate("priorities.read")
 def draft_guidance(d: DraftIn) -> dict:
     """Call BEFORE writing anything in the user's name. Returns their voice,
     the priorities and facts that apply, who to sign as, and the hard limits.
@@ -330,6 +395,7 @@ class FormIn(BaseModel):
 
 
 @app.post("/forms/fill", operation_id="fill_form")
+@gate("facts.read")
 def fill_form(f: FormIn) -> dict:
     """Given a form's field labels, return what Jefferey can fill from the
     user's own profile and exactly what he cannot. He never guesses, and
@@ -338,6 +404,7 @@ def fill_form(f: FormIn) -> dict:
 
 
 @app.get("/vault", operation_id="vault_status")
+@gate("vault.names")
 def vault_status() -> dict:
     """Where the user's secrets live (their platform keychain) and which
     exist, by NAME only. You never see a value and must never ask. Use a
@@ -351,6 +418,7 @@ class ProfileIn(BaseModel):
 
 
 @app.post("/profile", operation_id="set_profile_field")
+@gate("facts.write")
 def set_profile_field(p: ProfileIn) -> dict:
     """Store one identity detail Jefferey may reuse on forms. Sensitive
     identifiers (SIN/SSN, cards, PINs) are refused by design."""
@@ -358,12 +426,14 @@ def set_profile_field(p: ProfileIn) -> dict:
 
 
 @app.get("/profile", operation_id="get_profile")
+@gate("facts.read")
 def get_profile() -> dict:
     """Everything Jefferey can put on a form for this user. They own all of it."""
     return rep.get_profile()
 
 
 @app.delete("/profile", operation_id="forget_profile_field")
+@gate("facts.write")
 def forget_profile_field(field: str) -> dict:
     """Delete one profile detail. The right to erase is absolute."""
     return rep.forget_profile_field(field)
@@ -379,6 +449,7 @@ class ExpectIn(BaseModel):
 
 
 @app.post("/charges/expected", operation_id="expect_charge")
+@gate("money.write")
 def expect_charge(e: ExpectIn) -> dict:
     """Register a charge the user has actually agreed to. Anything not in
     this register becomes a question later."""
@@ -392,6 +463,7 @@ class CancelIn(BaseModel):
 
 
 @app.post("/charges/cancelled", operation_id="mark_cancelled")
+@gate("money.write")
 def mark_cancelled(c: CancelIn) -> dict:
     """Record that the user cancelled something — any charge after this date
     is unauthorized."""
@@ -405,6 +477,7 @@ class ChargeIn(BaseModel):
 
 
 @app.post("/charges/check", operation_id="check_charge")
+@gate("money.read")
 def check_charge(c: ChargeIn) -> dict:
     """Hold one charge up against what the user agreed to. Returns a verdict
     in plain words with the dollars at stake."""
@@ -416,18 +489,21 @@ class StatementIn(BaseModel):
 
 
 @app.post("/charges/review", operation_id="review_statement")
+@gate("money.read")
 def review_statement(s: StatementIn) -> dict:
     """Run a whole statement through at once and report the total at stake."""
     return guard.review_statement([c.model_dump() for c in s.charges])
 
 
 @app.get("/charges/expected", operation_id="expected_charges")
+@gate("money.read")
 def expected_charges() -> list:
     """What the user has agreed to pay, and what they've cancelled."""
     return guard.expected_charges()
 
 
 @app.get("/charges/dispute", operation_id="dispute_pack")
+@gate("money.read")
 def dispute_pack(merchant: str) -> dict:
     """Everything needed to get money back from one merchant."""
     return guard.dispute_pack(merchant)
@@ -442,6 +518,7 @@ class PersonIn(BaseModel):
 
 
 @app.post("/life/people", operation_id="add_person")
+@gate("life.write")
 def add_person(p: PersonIn) -> dict:
     """Record someone who matters to the user. Only when they offer it."""
     return life.add_person(p.name, p.relationship, p.notes, p.important_dates)
@@ -456,6 +533,7 @@ class MemoryIn(BaseModel):
 
 
 @app.post("/life/memories", operation_id="add_memory")
+@gate("life.write")
 def add_memory(m: MemoryIn) -> dict:
     """Record a snippet of the user's life in their own words. Never invent
     one; only record what they actually said."""
@@ -474,6 +552,7 @@ class MediaIn(BaseModel):
 
 
 @app.post("/life/media", operation_id="add_media")
+@gate("life.write")
 def add_media(m: MediaIn) -> dict:
     """Reference a photo where it already lives on the user's Self-Cloud —
     never a copy, never an upload."""
@@ -484,25 +563,30 @@ def add_media(m: MediaIn) -> dict:
 
 
 @app.get("/life", operation_id="who_am_i")
-def who_am_i(include: str = "private") -> dict:
-    """What Jefferey understands about this person as a human being."""
-    return life.who_am_i(include)
+def who_am_i() -> dict:
+    """What Jefferey understands about this person as a human being. How much
+    of it you see is decided by the key your token carries — there is no
+    parameter to widen it."""
+    return life.who_am_i(access.ceiling())
 
 
 @app.get("/life/story", operation_id="tell_story")
-def tell_story(theme: str = "", audience: str = "family") -> dict:
-    """Gather what's needed to tell a piece of their story, for the audience
-    they permitted."""
-    return life.tell_story(theme, audience)
+def tell_story(theme: str = "") -> dict:
+    """Gather what's needed to tell a piece of their story. Which moments are
+    in reach is decided by the key your token carries — private, family or
+    legacy. You cannot ask for a wider audience."""
+    return life.tell_story(access.ceiling(), theme)
 
 
 @app.get("/life/gaps", operation_id="story_gaps")
+@gate("life.read")
 def story_gaps() -> dict:
     """What's missing from their story. Ask for at most one at a time."""
     return life.story_gaps()
 
 
 @app.delete("/life", operation_id="forget_life")
+@gate("life.write")
 def forget_life(contains: str) -> dict:
     """Erase anything in the life layer matching this text."""
     return life.forget_life(contains)
@@ -530,6 +614,7 @@ class GrantIn(BaseModel):
 
 
 @app.post("/selfcloud/grants", operation_id="selfcloud_grant")
+@owner_only
 def selfcloud_grant(g: GrantIn) -> dict:
     """ONLY at the owner's explicit word. Never grant a key on your own
     initiative, and never widen your own."""
@@ -542,6 +627,7 @@ class ScopeIn(BaseModel):
 
 
 @app.post("/selfcloud/scopes/add", operation_id="selfcloud_add_scope")
+@owner_only
 def selfcloud_add_scope(s: ScopeIn) -> dict:
     """Widen one key by exactly one scope, at the owner's word."""
     return cloud.add_scope(s.client, s.scope)
@@ -573,6 +659,7 @@ def selfcloud_access_log(limit: int = 30) -> list:
 
 # ---------------------------------------------------------------- interview
 @app.get("/interview/next", operation_id="next_question")
+@gate("life.read")
 def next_question(domain: str = "") -> dict:
     """ONE question to weave into conversation — never a list, never
     announced. Only what the relationship has earned."""
@@ -587,6 +674,7 @@ class AnswerIn(BaseModel):
 
 
 @app.post("/interview/answer", operation_id="record_answer")
+@gate("life.write")
 def record_answer(a: AnswerIn) -> dict:
     """Keep what they said under the visibility they chose. If they
     deflected, declined=True retires the question permanently."""
@@ -594,6 +682,7 @@ def record_answer(a: AnswerIn) -> dict:
 
 
 @app.get("/interview/progress", operation_id="interview_progress")
+@gate("life.read")
 def interview_progress() -> dict:
     """What you know, what's missing, and the depth you've earned."""
     return interview.progress()
@@ -606,12 +695,14 @@ class IncludeIn(BaseModel):
 
 
 @app.post("/conscience/include", operation_id="conscience_include")
+@gate("facts.write")
 def conscience_include(i: IncludeIn) -> dict:
     """The owner chose to let something from Self-Cloud into their conscience."""
     return rules.include(i.ref, i.note)
 
 
 @app.delete("/conscience/include", operation_id="conscience_exclude")
+@gate("facts.write")
 def conscience_exclude(contains: str) -> dict:
     """Take something back out of the conscience; it stays on Self-Cloud."""
     return rules.exclude(contains)
@@ -626,6 +717,7 @@ class RuleIn(BaseModel):
 
 
 @app.post("/rules", operation_id="set_rule")
+@gate("facts.write")
 def set_rule(r: RuleIn) -> dict:
     """Write one of the owner's standing rules, in their words. Only at their word."""
     try:
@@ -635,12 +727,14 @@ def set_rule(r: RuleIn) -> dict:
 
 
 @app.delete("/rules", operation_id="remove_rule")
+@gate("facts.write")
 def remove_rule(rule_id_or_text: str) -> dict:
     """Delete a rule. Never argued with."""
     return rules.remove_rule(rule_id_or_text)
 
 
 @app.get("/rules", operation_id="list_rules")
+@gate("facts.read")
 def list_rules(kind: str = "") -> list:
     """Every standing rule the owner has written."""
     return rules.rules(kind)

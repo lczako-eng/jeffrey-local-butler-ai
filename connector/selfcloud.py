@@ -41,9 +41,11 @@ import time
 # should be able to look at their own grants and understand them.
 SCOPES = {
     "facts.read":      "durable facts about the owner (dates, constraints, situations)",
+    "facts.write":     "may record and erase facts, profile fields and rules",
     "priorities.read": "the learned value hierarchy, with confidence",
     "priorities.write": "may learn new priorities from corrections",
     "goals.read":      "active long-term goals",
+    "goals.write":     "may open and close goals, and log observations",
     "life.read":       "the people who matter and recorded moments (private + family)",
     "life.write":      "may record new people and moments",
     "media.read":      "references to photos and recordings on the drive",
@@ -71,7 +73,8 @@ PRESETS: dict[str, dict] = {
     "jefferey": {
         "label": "Jefferey (the wrapped connector — the caretaker)",
         "scopes": [
-            "facts.read", "priorities.read", "priorities.write", "goals.read",
+            "facts.read", "facts.write", "priorities.read", "priorities.write",
+            "goals.read", "goals.write",
             "life.read", "life.write", "media.read", "family.read", "legacy.read",
             "money.read", "money.write", "vault.names",
         ],

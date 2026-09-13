@@ -133,11 +133,16 @@ class Life:
                 "people_removed": before[2] - after[2]}
 
     # ------------------------------------------------------------ the story
-    def who_am_i(self, include: str = "private") -> dict:
+    def who_am_i(self, ceiling: str) -> dict:
         """What Jefferey understands about this person as a human being —
-        not as a set of preferences."""
+        not as a set of preferences.
+
+        `ceiling` has no default on purpose: it comes from the bound client's
+        key (`access.ceiling()`), never from a caller's choice. An unknown
+        value falls to `legacy` — the narrowest, not the widest.
+        """
         allowed = {"private": VISIBILITY, "family": ("family", "legacy"),
-                   "legacy": ("legacy",)}.get(include, ("legacy",))
+                   "legacy": ("legacy",)}.get(ceiling, ("legacy",))
         mems = [m for m in self.c.data["memories"] if m["visibility"] in allowed]
         media = [m for m in self.c.data["media"] if m["visibility"] in allowed]
         prios = sorted(self.c.data.get("priorities", []),
@@ -165,11 +170,16 @@ class Life:
             ),
         }
 
-    def tell_story(self, theme: str = "", audience: str = "family") -> dict:
+    def tell_story(self, ceiling: str, theme: str = "") -> dict:
         """Gather what's relevant to tell a piece of this person's story —
-        for them now, or for the people they name, later."""
-        allowed = {"self": VISIBILITY, "family": ("family", "legacy"),
-                   "legacy": ("legacy",)}.get(audience, ("legacy",))
+        for them now, or for the people they name, later.
+
+        `ceiling` comes from the bound client's key, never from an argument
+        the model picks. Unknown values fall to `legacy`.
+        """
+        allowed = {"private": VISIBILITY, "self": VISIBILITY,
+                   "family": ("family", "legacy"),
+                   "legacy": ("legacy",)}.get(ceiling, ("legacy",))
         t = theme.lower().strip()
         mems = [m for m in self.c.data["memories"] if m["visibility"] in allowed]
         media = [m for m in self.c.data["media"] if m["visibility"] in allowed]
@@ -185,7 +195,7 @@ class Life:
         mems = sorted(mems, key=lambda m: m.get("when", ""))
         return {
             "theme": theme or "their life",
-            "audience": audience,
+            "visible_at": ceiling,
             "moments": mems,
             "pictures": media,
             "people": self.c.data.get("people", []),
