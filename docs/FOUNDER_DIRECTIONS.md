@@ -211,6 +211,49 @@ own shelf, about a life the owner curated — and it can be switched off at the
 wall. Same box, opposite ownership. That is the whole pitch in one sentence, and
 it is the one version of a "smart home" nobody is selling.
 
+**(d) — added 2026-09-13 — "or your mom's voice."**
+
+> "Wouldn't that be cool, to talk to your own voice, or your mom's voice, or
+> whatever."
+
+This is the emotional endpoint of the whole system, and every part needed to
+reach it already exists somewhere in the build: `legacy` visibility in the life
+layer, the 21 interview questions, answers stored in the person's own words. Add
+a voice and it stops being a product feature — it is a grandmother telling her
+own stories, in her own voice, to grandchildren who never met her. Nobody is
+selling that. It is also the direction that can do the most harm if built
+carelessly, so it carries one rule above all others:
+
+> **Her voice, her words. The system never generates new sentences as a person
+> who is not here to object.**
+
+That single line is the difference between a memorial and a puppet. A memorial
+*replays and reads what she actually said and permitted* — the conscience is the
+script, exactly as safeguard 3 already requires. A griefbot *improvises as her*:
+invents opinions she never held, comfort she never gave, answers to questions
+she never heard. The first helps people; the second is consistently what the
+reporting on grief technology finds to be damaging. When the speaker belongs to
+someone who has died, safeguard 3 stops being a policy and becomes the product's
+spine.
+
+Consent does not weaken after death, it hardens. Safeguard 4 stands unchanged:
+**the clone is created by that person, present, consenting, reading the
+enrolment phrases themselves.** You cannot enrol a parent from their voicemails,
+and the system must refuse to try. That sounds like a limitation and is actually
+the product:
+
+> **Record the people you love while they are still here.**
+
+It is the most honest call to action this company could have, it is the one
+thing that genuinely cannot be done later, and it is what sells the box to a
+fifty-year-old with aging parents. It also means the enrolment flow is not an
+afterthought in the legacy tier — it is the reason someone buys in year one.
+
+**And a note on the name.** "Self-Cloud" used to mean *your cloud instead of
+theirs*. With the house on it, it means **the cloud came home** — the thing that
+used to live in someone else's data centre is now a box on a shelf that answers
+when you walk in. Same word, larger claim. Worth using that framing publicly.
+
 ## 5. Things already decided in this session, so they aren't relitigated
 
 - **JEFFEREY**, never "Jeff". No "butler" anywhere.
