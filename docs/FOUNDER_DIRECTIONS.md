@@ -262,11 +262,22 @@ when you walk in. Same word, larger claim. Worth using that framing publicly.
 
 This changes §4(d)'s "record them while they're here" from a plan into a
 regret, and it changes what the urgent item is. **The window did not close. It
-moved.** Magnetic tape decays: VHS, Hi8 and MiniDV from the 1980s and 90s are
-at the age where the binder absorbs moisture and sheds — and a shed tape's
-audio is gone for good, not degraded. **Those tapes are now the single item in
-this entire project that can become impossible.** Digitizing them outranks
-everything else that is not a safety fix.
+moved.**
+
+*Corrected 2026-09-14 — "it's on the DVDs".* The tapes were already
+transferred, which is better news than tape and still urgent. A pressed
+commercial DVD is stamped metal; a **home-burned DVD-R is a photosensitive dye
+that fades**, faster on cheap discs and faster still in a warm or humid house.
+Discs burned in the 2000s are already failing, and the failure is quiet — the
+disc looks perfect, plays for eleven minutes, and stops. But unlike tape:
+ripping is **not real-time**, needs no deck, and costs a $25 USB drive. The
+video is already a file; copying it verbatim preserves it exactly, with nothing
+decided now that cannot be decided later.
+
+**One question still open for the owner: do the original tapes still exist?**
+If they do, they are the better master — the DVD transfer is compressed MPEG-2
+and threw detail away permanently. The DVDs are the urgent, easy win; the tapes,
+if they survive, are the one worth doing properly afterwards.
 
 **Two different things, and the difference is the whole ethic:**
 
@@ -281,13 +292,19 @@ is added here is that **a dead person's voice is an archive, not an instrument**
 
 **What the archive actually needs** (each piece is ordinary, none is research):
 
-1. **Capture** — a USB video capture device and a working deck. Real time:
-   a 2-hour tape takes 2 hours. This cannot be hurried and it cannot be
-   parallelised, which is another reason to start.
-2. **Never touch the master.** The captured file is an original in the
-   `/originals` sense: read-only, checksummed, never re-encoded in place.
-   Everything downstream works on copies.
-3. **Audio extraction and cleaning** — pull the audio track, reduce tape hiss.
+1. **Rip the discs, verbatim** — ✅ **BUILT: `tools/disc_archive.py`.** A $25
+   USB DVD drive is the only purchase. It copies `VIDEO_TS` byte for byte (no
+   re-encoding, nothing lost), and **survives a damaged disc**: one bad sector
+   must not cost the whole evening, so it records which byte ranges failed,
+   fills them, and keeps going — a scratched disc yields 98% of her birthday
+   instead of an error.
+2. **Never touch the master.** The archived copy is an original in the
+   `/originals` sense: read-only (enforced), checksummed, never re-encoded in
+   place. Everything downstream works on copies. And **keep the discs** — the
+   copy does not replace them, it outlives them.
+3. **Audio extraction** — pull the sound out losslessly (FLAC), so nothing is
+   thrown away before transcription. Her voice is the point; the video is a
+   bonus.
 4. **Local transcription** — whisper.cpp, on his own machine. Her words become
    searchable text without a single second of her voice leaving the house.
 5. **Index it like everything else** — same when/where/meaning index as the

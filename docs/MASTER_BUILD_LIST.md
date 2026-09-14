@@ -162,10 +162,18 @@ TV when there are guests is a disclosure decision, not a display decision.
 *Added 2026-09-14. His mother has died. Her voice exists on old videotape.*
 
 **This replaces voice enrolment as the thing that can become impossible.**
-Magnetic tape from the 1980s and 90s is at the age where the binder absorbs
-moisture and the oxide sheds off the backing; once a tape sheds, the audio is
-not degraded, it is gone. Capture is also real-time — a two-hour tape takes two
-hours and cannot be parallelised. Both facts argue for starting now.
+
+*Corrected 2026-09-14: the tapes were already transferred — it's on DVDs.*
+Better news, still urgent. A home-burned DVD-R is a **photosensitive dye that
+fades**, not stamped metal, and discs from the 2000s are already failing —
+quietly, playing fine for eleven minutes and then stopping. But ripping is not
+real-time, needs no deck, and the video is already a file, so copying it
+verbatim loses nothing.
+
+**Open question for the owner: do the original tapes still exist?** If so they
+are the better master — the DVD transfer is compressed MPEG-2 and discarded
+detail permanently. Discs first (fast, cheap, urgent); tapes afterwards, if
+they survived.
 
 The line that governs all of it, from `FOUNDER_DIRECTIONS.md` §4(e): **a dead
 person's voice is an archive, not an instrument.** Recovering what she actually
@@ -174,10 +182,10 @@ never spoke is a separate decision, made deliberately, never drifted into.
 
 | # | What | Who | Notes |
 |---|---|---|---|
-| 3c.1 | **Buy a USB capture device and find a working deck** | owner | ~$30–60 for the capture stick; a VHS/Hi8/MiniDV deck may be borrowable. If the tapes are already visibly damaged, a professional transfer house is the right call, not a DIY rig |
-| 3c.2 | **Capture, in real time, to a lossless file** | owner | Start with the oldest and the ones with the most of her on them |
-| 3c.3 | **Treat captures as `/originals`** — read-only, checksummed, never re-encoded in place | me | Same rule as the photos. Everything downstream works on copies |
-| 3c.4 | **Audio extraction + hiss reduction** | me | ffmpeg; keep the untouched original alongside |
+| 3c.1 | **Buy a USB DVD drive** (~$25) | owner | The only purchase. Most Macs no longer have an optical drive |
+| 3c.2 | **Rip every disc, verbatim** — ✅ **BUILT: `tools/disc_archive.py`** | both | `rip /Volumes/DISC --label "Mum's birthday 1994"`. Copies byte for byte, checksums everything, makes the copy read-only, and **survives scratches**: records which byte ranges failed, fills them, keeps going — you get everything on both sides of the damage. A disc that reads badly is worth a second try in a different drive; different lasers read different discs |
+| 3c.3 | **Archived copies are `/originals`** — ✅ built into the ripper | me | Read-only enforced, `verify` re-checks every checksum years later and reports anything that changed |
+| 3c.4 | **Audio extraction (lossless FLAC)** — ✅ built, needs `brew install ffmpeg` | me | Nothing thrown away before transcription |
 | 3c.5 | **Local transcription** (whisper.cpp) | me | On his machine. Not one second of her voice leaves the house |
 | 3c.6 | **Index it like the photos** — when, where, meaning | me | So "what did mum say about the house" is a question with an answer, and the answer plays *in her voice* |
 | 3c.7 | **`legacy` visibility by default** | me | This is precisely what that tier was built for |
