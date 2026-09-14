@@ -254,6 +254,93 @@ theirs*. With the house on it, it means **the cloud came home** — the thing th
 used to live in someone else's data centre is now a box on a shelf that answers
 when you walk in. Same word, larger claim. Worth using that framing publicly.
 
+**(e) — 2026-09-14 — his mother has died, and her voice is on videotape.**
+
+> "No, she doesn't [live] — so I'm not sure how we can get it off of old
+> videotape and stuff like that, but it'd be super cool… that's one thing
+> we're going to have to work on."
+
+This changes §4(d)'s "record them while they're here" from a plan into a
+regret, and it changes what the urgent item is. **The window did not close. It
+moved.** Magnetic tape decays: VHS, Hi8 and MiniDV from the 1980s and 90s are
+at the age where the binder absorbs moisture and sheds — and a shed tape's
+audio is gone for good, not degraded. **Those tapes are now the single item in
+this entire project that can become impossible.** Digitizing them outranks
+everything else that is not a safety fix.
+
+**Two different things, and the difference is the whole ethic:**
+
+| | What it is | Verdict |
+|---|---|---|
+| **The archive** | Digitize the tapes. Separate the audio. Clean it. Transcribe it locally. Index it so he can *find* the moment she said a thing, and hear **her actually saying it**. | **Build it.** This IS "her voice, her words" — the rule at its purest. No consent question arises: replaying what a person really said to the family they said it to is what a family photograph has always been. |
+| **The synthesis** | A model trained on those tapes, generating sentences she never spoke. | **A separate decision, made deliberately, never drifted into.** Safeguard 4 (the person present, consenting, reading the phrases) cannot be satisfied by someone who has died. If he ever chooses this, it is his choice as her son to make with his eyes open — and it must still never produce a sentence she did not say to someone who might believe she did. |
+
+Everything §4(c) and (d) said about the *owner's* voice stands unchanged. What
+is added here is that **a dead person's voice is an archive, not an instrument**
+— and an archive is worth building well, urgently, and with care.
+
+**What the archive actually needs** (each piece is ordinary, none is research):
+
+1. **Capture** — a USB video capture device and a working deck. Real time:
+   a 2-hour tape takes 2 hours. This cannot be hurried and it cannot be
+   parallelised, which is another reason to start.
+2. **Never touch the master.** The captured file is an original in the
+   `/originals` sense: read-only, checksummed, never re-encoded in place.
+   Everything downstream works on copies.
+3. **Audio extraction and cleaning** — pull the audio track, reduce tape hiss.
+4. **Local transcription** — whisper.cpp, on his own machine. Her words become
+   searchable text without a single second of her voice leaving the house.
+5. **Index it like everything else** — same when/where/meaning index as the
+   photos, so "what did mum say about the house on Westhill" is a question
+   with an answer, and the answer plays in her voice.
+6. **Visibility** — `legacy` by default, because this is exactly what the
+   legacy tier was built for.
+
+**A hard rule for this material:** the transcription is a convenience, never a
+substitute. What gets played back is **the recording**. A transcript can be
+wrong; a recording cannot lie about what she said.
+
+**(f) — 2026-09-14 — it re-indexes itself, forever.**
+
+> "This thing should be constantly re-indexing itself so it knows you very
+> well… great for dementia and Alzheimer's patients as well. But this is
+> Self-Cloud. This is you. This is your property. This is your own ecosystem."
+
+**The living index.** A library that is indexed once is a snapshot; a life is
+not. New photos arrive, documents are written, recordings are made, things are
+corrected. The index must keep up on its own, without being asked — and without
+becoming surveillance. The reconciliation with "intelligence must not outlive
+consent" is already written in the review: *owner-initiated digestion of the
+owner's own data on the owner's own hardware is consented work.* It runs while
+his machine is on, it logs exactly what it touched, it stops when the machine
+stops, and it never reaches beyond the folders he named.
+
+**Never delete on absence.** A file that has gone missing is far more often an
+unplugged drive than a deleted photo. Missing is a *state*, recorded with a
+date — never a reason to drop what is known about something.
+
+**Dementia and Alzheimer's — take this seriously, it is not a nice-to-have.**
+Reminiscence and life-story work are established non-pharmacological practice
+in dementia care, and what they need is precisely what this system produces: a
+person's own photographs, their own recordings, their own people, organised so
+a carer or family member can bring the right thing to hand at the right moment.
+Two things follow:
+
+- It argues for **the archive, not the synthesis.** Reminiscence work uses real
+  material. A confused person, a synthesised voice, and a relative who has died
+  is the worst combination this technology can produce, and the line in (e) is
+  what prevents it.
+- It argues for **the surfaces** (§3b of the build list). A person with memory
+  loss does not type a search query. They look at a screen on the wall, and
+  someone they love says "look — that's Cuba, that's you." The wall, the clock
+  and the TV are the interface for this, not a chat box.
+
+**And the framing he closed with, which is the thesis in four sentences:**
+*This is Self-Cloud. This is you. This is your property. This is your own
+ecosystem.* Every capability above — the archive, the living index, the wall,
+the voice — is built on hardware he owns, from data he owns, and it stops when
+he says stop. That is not a feature list. That is the product.
+
 ## 5. Things already decided in this session, so they aren't relitigated
 
 - **JEFFEREY**, never "Jeff". No "butler" anywhere.

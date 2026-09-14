@@ -89,6 +89,12 @@ class PhotoIndex:
                 sha256 TEXT PRIMARY KEY, dim INTEGER, vec BLOB);
             CREATE TABLE IF NOT EXISTS failures (
                 path TEXT PRIMARY KEY, reason TEXT, at TEXT);
+            CREATE TABLE IF NOT EXISTS sources (
+                path TEXT PRIMARY KEY, added_at TEXT, last_scan TEXT,
+                last_seen_files INTEGER);
+            CREATE TABLE IF NOT EXISTS scans (
+                at TEXT, source TEXT, added INTEGER, missing INTEGER,
+                returned INTEGER, failed INTEGER, seconds REAL);
             CREATE INDEX IF NOT EXISTS photos_path ON photos(path);
             CREATE INDEX IF NOT EXISTS photos_taken ON photos(taken_at);
             CREATE INDEX IF NOT EXISTS photos_place ON photos(place);
@@ -96,7 +102,8 @@ class PhotoIndex:
         # An index built before when/where existed gets the columns added
         # rather than rebuilt — the embeddings in it are still perfectly good.
         for col, typ in (("taken_at", "TEXT"), ("lat", "REAL"), ("lon", "REAL"),
-                         ("place", "TEXT"), ("country", "TEXT")):
+                         ("place", "TEXT"), ("country", "TEXT"),
+                         ("missing_since", "TEXT")):
             try:
                 self.db.execute(f"ALTER TABLE photos ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
@@ -141,8 +148,12 @@ class PhotoIndex:
 
     def add(self, sha: str, path: Path, vec, facts: dict | None = None) -> None:
         st, f = path.stat(), facts or {}
+        # Columns named explicitly: the table grows over time, and a
+        # positional INSERT silently rots the moment one is added.
         self.db.execute(
-            "INSERT OR REPLACE INTO photos VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO photos (sha256, path, bytes, mtime, "
+            "seen_at, taken_at, lat, lon, place, country, missing_since) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,NULL)",
             (sha, str(path), st.st_size, st.st_mtime,
              time.strftime("%Y-%m-%dT%H:%M:%S"),
              f.get("taken_at"), f.get("lat"), f.get("lon"),
@@ -477,6 +488,144 @@ def cmd_verify(a) -> int:
     return 0
 
 
+def cmd_watch(a) -> int:
+    """Keep the index alive. A library indexed once is a snapshot; a life
+    is not.
+
+    Three promises this makes, because "constantly indexing your life" is
+    one word away from surveillance:
+
+      * it looks ONLY in the folders the owner named, and it lists them
+        every time it runs;
+      * it stops when the machine stops — there is no service phoning
+        home, no queue that flushes later, no work done in the dark;
+      * it NEVER deletes. A file that has gone is far more often an
+        unplugged drive than a deleted photo, so absence is recorded as a
+        dated state and the knowledge is kept. When the drive comes back,
+        the photo comes back with everything already known about it.
+    """
+    idx = PhotoIndex(a.index)
+    if a.source:
+        idx.db.execute(
+            "INSERT OR IGNORE INTO sources (path, added_at) VALUES (?,?)",
+            (str(Path(a.source).expanduser().resolve()),
+             time.strftime("%Y-%m-%dT%H:%M:%S")))
+        idx.db.commit()
+    sources = [r[0] for r in idx.db.execute("SELECT path FROM sources")]
+    if not sources:
+        raise SystemExit(
+            "\nNothing to watch yet. Name a folder:\n"
+            f"    python {Path(__file__).name} watch ~/Pictures --index {a.index}\n")
+
+    man = idx.manifest()
+    emb = Embedder(idx, man.get("model", a.model),
+                   man.get("pretrained", a.pretrained), offline=True) if man else None
+
+    print(f"\n  Watching {len(sources)} folder(s) — and only these:")
+    for s in sources:
+        print(f"    {s}")
+    print(f"  Every {a.every}s while this machine is awake. Ctrl-C stops it,"
+          f"\n  and nothing runs once it has.\n")
+
+    round_no = 0
+    while True:
+        round_no += 1
+        total_new = total_gone = total_back = 0
+        for src in sources:
+            n, gone, back, failed, secs = scan_once(idx, Path(src), emb, a.batch)
+            total_new += n
+            total_gone += gone
+            total_back += back
+            idx.db.execute("INSERT INTO scans VALUES (?,?,?,?,?,?,?)",
+                           (time.strftime("%Y-%m-%dT%H:%M:%S"), src, n, gone,
+                            back, failed, round(secs, 2)))
+            idx.db.execute("UPDATE sources SET last_scan=? WHERE path=?",
+                           (time.strftime("%Y-%m-%dT%H:%M:%S"), src))
+        idx.db.commit()
+        stamp = time.strftime("%H:%M:%S")
+        if total_new or total_gone or total_back:
+            bits = []
+            if total_new:
+                bits.append(f"{total_new} new")
+            if total_back:
+                bits.append(f"{total_back} back (drive reconnected)")
+            if total_gone:
+                bits.append(f"{total_gone} not reachable — kept, not deleted")
+            print(f"  {stamp}  " + ", ".join(bits))
+        elif a.verbose:
+            print(f"  {stamp}  nothing changed")
+        if a.once:
+            return 0
+        try:
+            time.sleep(a.every)
+        except KeyboardInterrupt:
+            print("\n  Stopped. Nothing is running in the background.\n")
+            return 0
+
+
+def scan_once(idx: PhotoIndex, source: Path, emb, batch_size: int = 16):
+    """One pass over one folder. Returns (new, gone, returned, failed, secs)."""
+    t0 = time.time()
+    known = idx.have()
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    if not source.exists():
+        # The whole folder is unreachable — an unplugged drive, not a
+        # hundred deletions. Say so and change nothing.
+        return 0, 0, 0, 0, time.time() - t0
+
+    on_disk, new, failed = set(), 0, 0
+    imgs, meta = [], []
+
+    def flush():
+        nonlocal new
+        if not imgs or emb is None:
+            imgs.clear(); meta.clear(); return
+        vecs = emb.embed_images(imgs)
+        facts = [f for _, _, f in meta]
+        name_places(facts)
+        for (sha, path, f), vec in zip(meta, vecs):
+            idx.add(sha, path, vec, f)
+        new += len(meta)
+        imgs.clear(); meta.clear()
+
+    for path in walk(source):
+        try:
+            sha = sha256(path)
+            on_disk.add(sha)
+            if sha in known:
+                continue
+            imgs.append(open_image(path))
+            meta.append((sha, path, read_when_where(path)))
+            known.add(sha)
+        except Exception as exc:
+            idx.fail(path, f"{type(exc).__name__}: {exc}")
+            failed += 1
+            continue
+        if len(imgs) >= batch_size:
+            flush()
+    flush()
+
+    # Anything under this source that we did not see is marked missing —
+    # dated, reversible, and never deleted.
+    prefix = str(source) + os.sep
+    gone = back = 0
+    for sha, p, miss in list(idx.db.execute(
+            "SELECT sha256, path, missing_since FROM photos WHERE path LIKE ?",
+            (prefix + "%",))):
+        here = sha in on_disk
+        if not here and miss is None:
+            idx.db.execute("UPDATE photos SET missing_since=? WHERE sha256=?",
+                           (now, sha))
+            gone += 1
+        elif here and miss is not None:
+            idx.db.execute("UPDATE photos SET missing_since=NULL WHERE sha256=?",
+                           (sha,))
+            back += 1
+    idx.db.commit()
+    return new, gone, back, failed, time.time() - t0
+
+
 def cmd_stats(a) -> int:
     idx = PhotoIndex(a.index)
     n, = next(idx.db.execute("SELECT COUNT(*) FROM vectors"))
@@ -626,6 +775,40 @@ def cmd_selftest(a) -> int:
                 q2 = recall.parse("2023", known, dt.date(2026, 9, 14))
                 hits2 = recall.run(idx2, q2, None, top=10)
                 assert [Path(h["path"]).name for h in hits2] == ["home.jpg"], hits2
+                # 8. THE LIVING INDEX — it keeps up, and it never deletes.
+                w = argparse.Namespace(index=str(td / "idx"), source=str(pix),
+                                       every=1, once=True, batch=4, verbose=False,
+                                       model=DEFAULT_MODEL, pretrained="none")
+                cmd_watch(w)                       # registers the source
+                before = next(idx2.db.execute("SELECT COUNT(*) FROM vectors"))[0]
+
+                Image.new("RGB", (48, 48), "purple").save(pix / "later.png")
+                cmd_watch(w)
+                idx3 = PhotoIndex(td / "idx")
+                assert next(idx3.db.execute("SELECT COUNT(*) FROM vectors"))[0] == before + 1
+
+                # a file disappears: recorded as missing, NOT deleted
+                (pix / "later.png").unlink()
+                cmd_watch(w)
+                idx3 = PhotoIndex(td / "idx")
+                assert next(idx3.db.execute("SELECT COUNT(*) FROM vectors"))[0] == before + 1, \
+                    "a vanished file was deleted from the index"
+                miss = next(idx3.db.execute(
+                    "SELECT COUNT(*) FROM photos WHERE missing_since IS NOT NULL"))[0]
+                assert miss == 1, f"expected 1 missing, got {miss}"
+
+                # ...and when the drive comes back, so does the photo, with
+                # everything already known about it
+                Image.new("RGB", (48, 48), "purple").save(pix / "later.png")
+                cmd_watch(w)
+                idx3 = PhotoIndex(td / "idx")
+                assert next(idx3.db.execute(
+                    "SELECT COUNT(*) FROM photos WHERE missing_since IS NOT NULL"))[0] == 0
+                assert next(idx3.db.execute("SELECT COUNT(*) FROM scans"))[0] >= 4
+                print("  ✓ living index: re-scans on its own, marks absent files")
+                print("    missing instead of deleting them, and restores them")
+                print("    untouched when the drive comes back")
+
                 print("  ✓ when & where: EXIF date + GPS read, geocoded offline to")
                 print("    Cuba/Canada, and \"vacation ten years ago in Cuba\" returns")
                 print("    exactly the Varadero photo")
@@ -667,6 +850,16 @@ def main() -> int:
 
     st = sub.add_parser("stats", help="what is in the index")
     st.set_defaults(fn=cmd_stats)
+
+    w = sub.add_parser("watch", help="keep the index alive as the library changes")
+    w.add_argument("source", nargs="?", help="a folder to watch (remembered)")
+    w.add_argument("--every", type=int, default=300, help="seconds between passes")
+    w.add_argument("--once", action="store_true", help="one pass, then exit (for cron/launchd)")
+    w.add_argument("--batch", type=int, default=16)
+    w.add_argument("--verbose", action="store_true", help="say so even when nothing changed")
+    w.add_argument("--model", default=DEFAULT_MODEL)
+    w.add_argument("--pretrained", default=DEFAULT_PRETRAINED)
+    w.set_defaults(fn=cmd_watch)
 
     t = sub.add_parser("selftest", help="prove the pipeline, no download needed")
     t.set_defaults(fn=cmd_selftest)

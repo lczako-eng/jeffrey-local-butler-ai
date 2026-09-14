@@ -99,6 +99,8 @@ All of this runs on the machine that exists. No purchase.
 | 2.6 | **Local web UI on the home wifi** | Opens on his phone. Makes the laptop reachable like a cloud account, and is the honest ancestor of the box | 2–3 days |
 | 2.7 | **First-run onboarding** | The three tiers start empty; the only onboarding artifact today is a 13-question essay. Needs to be a conversation | 2 days |
 | 2.8 | **Morning brief as a habit** | `daily_brief` exists; this is scheduling and delivery | hours |
+| 2.9 | **The living index** — ✅ **BUILT 2026-09-14.** `photo_index.py watch` re-scans the named folders on its own, embeds what's new, and **never deletes**: a file that has gone is marked missing with a date, and comes back untouched when the drive is reconnected | Only the folders he named, listed on every run; stops when the machine stops; every pass logged to a `scans` table | done |
+| 2.10 | **Run the watcher automatically** — a launchd job so it runs while the Mac is awake | `watch --once` is built for exactly this | hours |
 
 ---
 
@@ -155,6 +157,58 @@ TV when there are guests is a disclosure decision, not a display decision.
 
 ---
 
+## 3c. The tape archive — the new urgent item
+
+*Added 2026-09-14. His mother has died. Her voice exists on old videotape.*
+
+**This replaces voice enrolment as the thing that can become impossible.**
+Magnetic tape from the 1980s and 90s is at the age where the binder absorbs
+moisture and the oxide sheds off the backing; once a tape sheds, the audio is
+not degraded, it is gone. Capture is also real-time — a two-hour tape takes two
+hours and cannot be parallelised. Both facts argue for starting now.
+
+The line that governs all of it, from `FOUNDER_DIRECTIONS.md` §4(e): **a dead
+person's voice is an archive, not an instrument.** Recovering what she actually
+said is the rule "her voice, her words" at its purest. Generating sentences she
+never spoke is a separate decision, made deliberately, never drifted into.
+
+| # | What | Who | Notes |
+|---|---|---|---|
+| 3c.1 | **Buy a USB capture device and find a working deck** | owner | ~$30–60 for the capture stick; a VHS/Hi8/MiniDV deck may be borrowable. If the tapes are already visibly damaged, a professional transfer house is the right call, not a DIY rig |
+| 3c.2 | **Capture, in real time, to a lossless file** | owner | Start with the oldest and the ones with the most of her on them |
+| 3c.3 | **Treat captures as `/originals`** — read-only, checksummed, never re-encoded in place | me | Same rule as the photos. Everything downstream works on copies |
+| 3c.4 | **Audio extraction + hiss reduction** | me | ffmpeg; keep the untouched original alongside |
+| 3c.5 | **Local transcription** (whisper.cpp) | me | On his machine. Not one second of her voice leaves the house |
+| 3c.6 | **Index it like the photos** — when, where, meaning | me | So "what did mum say about the house" is a question with an answer, and the answer plays *in her voice* |
+| 3c.7 | **`legacy` visibility by default** | me | This is precisely what that tier was built for |
+
+**A hard rule for this material:** the transcript is a convenience, never a
+substitute. What gets played back is **the recording**. A transcript can be
+wrong; a recording cannot lie about what she said.
+
+---
+
+## 3d. Who this is really for
+
+*Added 2026-09-14: "great for dementia and Alzheimer's patients as well."*
+
+Reminiscence and life-story work are established non-pharmacological practice in
+dementia care, and what they need is exactly what this system produces: a
+person's own photographs, their own recordings, their own people, organised so
+that a carer or a family member can bring the right thing to hand at the right
+moment. Two consequences that change the build, not just the pitch:
+
+- **It argues for the archive, not the synthesis.** Reminiscence work uses real
+  material. A confused person, a synthesised voice, and a relative who has died
+  is the worst combination this technology can produce. The line in 3c is what
+  prevents it.
+- **It argues for the surfaces (§3b), not the chat box.** Someone with memory
+  loss does not type a search query. They look at a screen on the wall while
+  someone who loves them says "look — that's Cuba, that's you." The wall, the
+  clock and the TV *are* the interface for this.
+
+---
+
 ## 4. Owner only — nobody else can do these
 
 | # | What | Time |
@@ -163,6 +217,7 @@ TV when there are guests is a disclosure decision, not a display decision.
 | 4.2 | **Turn on FileVault** on the Mac. Same photos, and the laptop leaves the house more than the drive does | 5 min |
 | 4.3 | **Install and use JEFFEREY daily** — the conscience only fills if he talks to it | ongoing |
 | 4.4 | **Merge `claude/canon-addenda`** in the Self-Cloud repo | 1 min |
+| **4.1b** | **Get a USB capture stick and a working tape deck.** See §3c — the tapes are now the only thing here that can become impossible | this month |
 | 4.5 | **iCloud library size** — needed to size the drive layout | 2 min |
 | 4.6 | **Original Pages file date** for the orb whitepaper — the PDF export is dated 2025-12-01, so if summer 2025 is real the evidence is the source file | 10 min |
 | 4.7 | Patents and filings | **his, out of scope for this list** |
@@ -202,7 +257,11 @@ owner-controlled system on the laptop.
 
 1. **4.1 — encrypt the drive.** Owner. Highest-probability harm in the whole
    portfolio and it is an afternoon with no code.
-2. **1.1 + 1.2 — the egress door and the "what left the house" log.** Mine.
+2. **4.1b — start the tapes.** Owner. Buy the capture stick, find a deck, begin
+   with the oldest. This is now the only item on the list where waiting can make
+   it impossible — tape sheds, and capture is real-time.
+3. **1.1 + 1.2 — the egress door and the "what left the house" log.** Mine.
    The last structural hole; everything downstream sends more data, not less.
-3. **3.1 — voice enrolment.** Mine to build, his to use. The only item on this
-   entire list where waiting can make it impossible.
+
+*(Voice enrolment for a living person, formerly item 3, is still built next for
+his own voice — but the closing window moved to the tapes.)*
