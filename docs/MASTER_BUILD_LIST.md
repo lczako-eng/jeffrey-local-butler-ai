@@ -92,11 +92,11 @@ All of this runs on the machine that exists. No purchase.
 | # | What | Notes | Effort |
 |---|---|---|---|
 | 2.1 | **Photo index with real weights** | Code is done; this container can't reach HuggingFace, the laptop can. 3 commands | owner, 30 min |
-| 2.2 | **Photo viewer** — thumbnails in a local web page, not file paths | A list of paths is not a demo. This is what makes local search feel real | 1 day |
+| 2.2 | ~~Photo viewer~~ → ✅ **done as the wall (§3b.1)** | | done |
 | 2.3 | **Land the dedup code in the repo** | The only proven capability lives on one machine. Package it, add a test, commit | 1 day |
 | 2.4 | **Near-duplicate detection (pHash)** | Tier A — no model needed. Catches the burst-of-twelve-almost-identical-shots case that exact dedup misses | 1 day |
 | 2.5 | **Timeline / "on this day"** | Deterministic, from EXIF. Feeds the morning brief and the story layer | 1 day |
-| 2.6 | **Local web UI on the home wifi** | Opens on his phone. Makes the laptop reachable like a cloud account, and is the honest ancestor of the box | 2–3 days |
+| 2.6 | ~~Local web UI on the home wifi~~ → ✅ **done as the wall (§3b.1)**, `--lan` | | done |
 | 2.7 | **First-run onboarding** | The three tiers start empty; the only onboarding artifact today is a 13-question essay. Needs to be a conversation | 2 days |
 | 2.8 | **Morning brief as a habit** | `daily_brief` exists; this is scheduling and delivery | hours |
 | 2.9 | **The living index** — ✅ **BUILT 2026-09-14.** `photo_index.py watch` re-scans the named folders on its own, embeds what's new, and **never deletes**: a file that has gone is marked missing with a date, and comes back untouched when the drive is reconnected | Only the folders he named, listed on every run; stops when the machine stops; every pass logged to a `scans` table | done |
@@ -143,8 +143,8 @@ neural network:
 
 | # | What | Notes | Effort |
 |---|---|---|---|
-| 3b.1 | **The wall** — one local page that shows results as photographs, big, with the date and place under each | Serves to laptop, phone, TV browser, old tablet. This is also item 2.2 and 2.6; they were always the same thing | 2 days |
-| 3b.2 | **Listening** — wake word + whisper.cpp speech-to-text, entirely local | Never a cloud speech API: the whole point is that "our holiday in Cuba" is not somebody else's search query | 2 days |
+| 3b.1 | **The wall** — ✅ **BUILT 2026-09-14.** `tools/wall.py`: one local page, photographs big, date and place under each, one box you can type or talk into, opens on "on this day". Serves to laptop, phone, TV browser, old tablet in kiosk mode. Localhost only unless `--lan`, and `--lan` demands a passcode printed in the terminal — being on the wifi is not being allowed. Escape clears the screen. Supersedes items 2.2 and 2.6; they were always the same thing | done |
+| 3b.2 | **Listening** — the wall already has a microphone button using the browser's own recogniser. Next: whisper.cpp on the machine, so nothing is spoken to a vendor, plus a wake word | Never a cloud speech API: "our holiday in Cuba" is not somebody else's search query | 2 days |
 | 3b.3 | **The clock** — an old phone or tablet in kiosk mode showing the wall, always on | v1 costs nothing and uses a device already in a drawer. Purpose-built hardware is a later packaging decision, not a prerequisite | hours |
 | 3b.4 | **Casting** — AirPlay from the box to Apple TV, or just open the wall's URL in the TV's own browser | The browser route needs no code at all | hours |
 | 3b.5 | **Answering out loud** — the reply spoken in his own voice | same build as 3.4 | — |
