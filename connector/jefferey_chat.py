@@ -1598,6 +1598,25 @@ def selftest() -> None:
             os.environ["JEFFEREY_OWNER_CONSOLE"] = _console
         assert not dispatch_tool("selfcloud_revoke", {"client": "gpt-raw"}).get("refused")
 
+        # STARTING Jefferey must not write to the person's conscience. Only
+        # something they actually did should change that file — otherwise the
+        # revision number is noise and a self-test can silently pollute a real
+        # life. (It could, and did: a stray "Laszlo" memory and an auto-grant
+        # both reached a live store before this test existed.)
+        quiet = Path(td) / "quiet.json"
+        qc = Conscience(quiet)
+        assert not quiet.exists(), "a bare Conscience() wrote a file"
+        qcloud = SelfCloud(qc)
+        access.bind(qcloud, "jefferey", announce=False)
+        access.bind(qcloud, "claude-raw", announce=False)
+        assert not quiet.exists(), "binding an identity wrote to the conscience"
+        Life(qc), ConscienceRules(qc), Interview(qc, Life(qc))
+        Guardian(qc), Representative(qc)
+        assert not quiet.exists(), "constructing the helpers wrote to the conscience"
+        # ...and the first real access DOES record itself
+        access.GATE.require("facts.read")
+        assert quiet.exists() and json.loads(quiet.read_text())["selfcloud_grants"]
+
         # the decorators on the MCP surface must not drift from the table
         import importlib.util as _ilu
         _spec = _ilu.spec_from_file_location(

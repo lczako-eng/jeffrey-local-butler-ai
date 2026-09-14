@@ -106,17 +106,37 @@ class Gate:
     def __init__(self, cloud, client: str, announce: bool = True):
         self.cloud = cloud
         self.client = (client or DEFAULT_CLIENT).strip().lower()
-        self._provision()
+        self._provisioned = False
         if announce:
             self.announce()
 
     # -- setup ------------------------------------------------------------
-    def _provision(self) -> None:
-        """A bound client with no key yet gets its preset — the owner's own
-        default, written down in selfcloud.py where he can read it. Never a
-        scope beyond the preset, and never for a name that has no preset."""
+    def _effective_scopes(self) -> list[str]:
+        """What this client's key holds — stored grant if there is one, else
+        the preset it WOULD get. Read-only: works out the answer without
+        writing anything."""
         from selfcloud import PRESETS
 
+        g = self.cloud.c.data.get("selfcloud_grants", {}).get(self.client)
+        if g is not None:
+            return list(g["scopes"]) if g.get("active") else []
+        return list(PRESETS.get(self.client, {}).get("scopes", []))
+
+    def _provision(self) -> None:
+        """Issue this client its preset key, once, on FIRST REAL USE.
+
+        Deliberately lazy. Starting a process must not write to the person's
+        conscience — importing a module, running a self-test, or launching a
+        server the user never speaks to should leave the file untouched, and
+        its revision number should mean 'things actually happened'. The first
+        scoped call is a real access event and is worth recording; a startup
+        is not.
+        """
+        from selfcloud import PRESETS
+
+        if self._provisioned:
+            return
+        self._provisioned = True
         grants = self.cloud.c.data.get("selfcloud_grants", {})
         if self.client in grants:
             return
@@ -127,11 +147,10 @@ class Gate:
                   file=sys.stderr)
             return
         self.cloud.grant(self.client, note="auto-issued from its preset on "
-                                           "first run; the owner may narrow it")
+                                           "first use; the owner may narrow it")
 
     def announce(self) -> None:
-        key = self.cloud.c.data.get("selfcloud_grants", {}).get(self.client, {})
-        scopes = key.get("scopes", [])
+        scopes = self._effective_scopes()          # no write on startup
         print(f"  Jefferey is running as '{self.client}' "
               f"({len(scopes)} scope{'s' if len(scopes) != 1 else ''}: "
               f"{', '.join(scopes) or 'none'})."
@@ -143,6 +162,7 @@ class Gate:
         return _request_client.get() or self.client
 
     def check(self, scope: str) -> dict:
+        self._provision()
         return self.cloud.check_access(self.current_client(), scope)
 
     def require(self, scope: str) -> None:
@@ -157,6 +177,7 @@ class Gate:
     def ceiling(self) -> str:
         """How deep into the life layer this key may see: private > family >
         legacy. Derived from the key, never from an argument."""
+        self._provision()
         client = self.current_client()
         for scope, level in _CEILINGS:
             if self.cloud.check_access(client, scope, log=False)["allowed"]:
