@@ -116,6 +116,45 @@ All of this runs on the machine that exists. No purchase.
 
 ---
 
+## 3b. Surfaces — in the room, not in a chat window
+
+*Added 2026-09-14, from: "I want to be able to talk to it, and cast to TVs —
+'show me the part of me that was on vacation ten years ago in Cuba' — and it
+should be able to read all my data."*
+
+**The insight that keeps this cheap: "show me on the TV" and "show me on my
+phone" are the same build.** One page the box serves; a phone opens it, a TV
+browser opens it, an old tablet on the kitchen counter opens it in kiosk mode
+and *is* the clock. One page, many screens — never three products.
+
+That sentence about Cuba decomposes into four parts, and only one needs a
+neural network:
+
+| Part of the sentence | What it really is | State |
+|---|---|---|
+| "ten years ago" | EXIF `DateTimeOriginal` | **built** (`read_when_where`) |
+| "in Cuba" | EXIF GPS + offline city database | **built** (`name_places`) |
+| "on vacation" | CLIP embedding | **built** (`photo_index`) |
+| taking the sentence apart | a parser, not a model | **built** (`tools/recall.py`) |
+| "show me" | a web page | 3b.1 |
+| saying it out loud | local speech-to-text | 3b.2 |
+
+| # | What | Notes | Effort |
+|---|---|---|---|
+| 3b.1 | **The wall** — one local page that shows results as photographs, big, with the date and place under each | Serves to laptop, phone, TV browser, old tablet. This is also item 2.2 and 2.6; they were always the same thing | 2 days |
+| 3b.2 | **Listening** — wake word + whisper.cpp speech-to-text, entirely local | Never a cloud speech API: the whole point is that "our holiday in Cuba" is not somebody else's search query | 2 days |
+| 3b.3 | **The clock** — an old phone or tablet in kiosk mode showing the wall, always on | v1 costs nothing and uses a device already in a drawer. Purpose-built hardware is a later packaging decision, not a prerequisite | hours |
+| 3b.4 | **Casting** — AirPlay from the box to Apple TV, or just open the wall's URL in the TV's own browser | The browser route needs no code at all | hours |
+| 3b.5 | **Answering out loud** — the reply spoken in his own voice | same build as 3.4 | — |
+| 3b.6 | **"Read all my data"** — the same when/where/meaning index over documents, messages, health and transactions, not only photos | The index is already content-addressed and general; this is new *readers*, not a new index. Do it after 3.5 ingestion | 1 week |
+
+**Rules this layer inherits, non-negotiably:** a speaker is a room, not a
+person — anything said aloud in a shared space is a disclosure and the rules
+layer governs it. A screen in a living room is the same. "Show me Cuba" on the
+TV when there are guests is a disclosure decision, not a display decision.
+
+---
+
 ## 4. Owner only — nobody else can do these
 
 | # | What | Time |

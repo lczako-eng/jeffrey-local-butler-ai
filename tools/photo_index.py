@@ -50,6 +50,7 @@ import argparse
 import hashlib
 import json
 import os
+import datetime as dt
 import sqlite3
 import sys
 import time
@@ -82,13 +83,24 @@ class PhotoIndex:
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS photos (
                 sha256 TEXT PRIMARY KEY, path TEXT, bytes INTEGER,
-                mtime REAL, seen_at TEXT);
+                mtime REAL, seen_at TEXT,
+                taken_at TEXT, lat REAL, lon REAL, place TEXT, country TEXT);
             CREATE TABLE IF NOT EXISTS vectors (
                 sha256 TEXT PRIMARY KEY, dim INTEGER, vec BLOB);
             CREATE TABLE IF NOT EXISTS failures (
                 path TEXT PRIMARY KEY, reason TEXT, at TEXT);
             CREATE INDEX IF NOT EXISTS photos_path ON photos(path);
+            CREATE INDEX IF NOT EXISTS photos_taken ON photos(taken_at);
+            CREATE INDEX IF NOT EXISTS photos_place ON photos(place);
         """)
+        # An index built before when/where existed gets the columns added
+        # rather than rebuilt — the embeddings in it are still perfectly good.
+        for col, typ in (("taken_at", "TEXT"), ("lat", "REAL"), ("lon", "REAL"),
+                         ("place", "TEXT"), ("country", "TEXT")):
+            try:
+                self.db.execute(f"ALTER TABLE photos ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass                                  # already there
         self.db.commit()
 
     # -- the manifest: what produced these vectors ------------------------
@@ -127,12 +139,14 @@ class PhotoIndex:
     def have(self) -> set[str]:
         return {r[0] for r in self.db.execute("SELECT sha256 FROM vectors")}
 
-    def add(self, sha: str, path: Path, vec) -> None:
-        st = path.stat()
+    def add(self, sha: str, path: Path, vec, facts: dict | None = None) -> None:
+        st, f = path.stat(), facts or {}
         self.db.execute(
-            "INSERT OR REPLACE INTO photos VALUES (?,?,?,?,?)",
+            "INSERT OR REPLACE INTO photos VALUES (?,?,?,?,?,?,?,?,?,?)",
             (sha, str(path), st.st_size, st.st_mtime,
-             time.strftime("%Y-%m-%dT%H:%M:%S")))
+             time.strftime("%Y-%m-%dT%H:%M:%S"),
+             f.get("taken_at"), f.get("lat"), f.get("lon"),
+             f.get("place"), f.get("country")))
         self.db.execute("INSERT OR REPLACE INTO vectors VALUES (?,?,?)",
                         (sha, len(vec), vec.astype("float16").tobytes()))
 
@@ -257,6 +271,106 @@ def open_image(path: Path):
     return Image.open(path).convert("RGB")
 
 
+# --------------------------------------------------------- when, and where
+#
+# Two thirds of "show me the vacation ten years ago in Cuba" is answered
+# here, with no model at all: the camera already wrote down the date and the
+# coordinates. Only "vacation" needs the neural network.
+
+def _ratio(v) -> float:
+    try:
+        return float(v[0]) / float(v[1]) if isinstance(v, tuple) else float(v)
+    except (TypeError, ZeroDivisionError, ValueError):
+        return 0.0
+
+
+def _dms(values, ref: str) -> float | None:
+    """EXIF stores degrees/minutes/seconds; the world uses decimals."""
+    try:
+        d, m, s = (_ratio(v) for v in values)
+    except (TypeError, ValueError):
+        return None
+    deg = d + m / 60 + s / 3600
+    return -deg if str(ref).upper() in ("S", "W") else deg
+
+
+def read_when_where(path: Path) -> dict:
+    """Date taken and GPS, straight from the file. Never fatal: a photo with
+    no EXIF is still a photo, it just cannot answer a 'where' question."""
+    from PIL import Image
+
+    facts: dict = {"taken_at": None, "lat": None, "lon": None}
+    try:
+        with Image.open(path) as im:
+            exif = im.getexif()
+            if not exif:
+                return facts
+            # 36867 DateTimeOriginal, 36868 DateTimeDigitized, 306 DateTime
+            sub = exif.get_ifd(0x8769) or {}
+            raw = sub.get(36867) or sub.get(36868) or exif.get(306)
+            if raw:
+                try:                        # EXIF format: 2016:07:14 12:00:00
+                    facts["taken_at"] = dt.datetime.strptime(
+                        str(raw).strip(), "%Y:%m:%d %H:%M:%S").isoformat()
+                except ValueError:
+                    pass
+            gps = exif.get_ifd(0x8825) or {}
+            if gps:
+                lat = _dms(gps.get(2), gps.get(1, "N"))
+                lon = _dms(gps.get(4), gps.get(3, "E"))
+                if lat is not None and lon is not None and (lat or lon):
+                    facts["lat"], facts["lon"] = lat, lon
+    except Exception:
+        pass                                # unreadable metadata is not an error
+    if facts["taken_at"] is None:           # fall back to the file's own date
+        try:
+            facts["taken_at"] = dt.datetime.fromtimestamp(
+                path.stat().st_mtime).isoformat()
+        except OSError:
+            pass
+    return facts
+
+
+def name_places(rows: list[dict]) -> None:
+    """Turn coordinates into names people say out loud — 'Varadero', 'Cuba' —
+    using a city database bundled on this machine. Offline by construction:
+    where you were on holiday is nobody else's search query.
+
+    Fills `place` and `country` in place. A silent no-op if the optional
+    library isn't installed; coordinates are still stored either way.
+    """
+    pts = [(r["lat"], r["lon"]) for r in rows
+           if r.get("lat") is not None and r.get("lon") is not None]
+    if not pts:
+        return
+    try:
+        import reverse_geocoder
+    except ImportError:
+        return
+    try:
+        found = reverse_geocoder.search(pts, mode=1, verbose=False)
+    except Exception:
+        return
+    try:
+        import pycountry
+    except ImportError:
+        pycountry = None
+    it = iter(found)
+    for r in rows:
+        if r.get("lat") is None or r.get("lon") is None:
+            continue
+        hit = next(it, None)
+        if not hit:
+            break
+        r["place"] = hit.get("name") or None
+        cc = hit.get("cc")
+        country = None
+        if cc and pycountry:
+            c = pycountry.countries.get(alpha_2=cc)
+            country = c.name if c else cc
+        r["country"] = country or cc
+
+
 # --------------------------------------------------------------- commands
 def cmd_build(a) -> int:
     idx = PhotoIndex(a.index)
@@ -278,8 +392,10 @@ def cmd_build(a) -> int:
         if not batch_imgs:
             return
         vecs = emb.embed_images(batch_imgs)
-        for (sha, path), vec in zip(batch_meta, vecs):
-            idx.add(sha, path, vec)
+        facts = [f for _, _, f in batch_meta]
+        name_places(facts)                 # one batched lookup, not one per photo
+        for (sha, path, f), vec in zip(batch_meta, vecs):
+            idx.add(sha, path, vec, f)
         idx.db.commit()
         done += len(batch_meta)
         batch_imgs.clear()
@@ -294,7 +410,7 @@ def cmd_build(a) -> int:
                 skipped += 1
                 continue
             batch_imgs.append(open_image(path))
-            batch_meta.append((sha, path))
+            batch_meta.append((sha, path, read_when_where(path)))
             known.add(sha)
         except Exception as exc:                      # a bad file is not fatal
             idx.fail(path, f"{type(exc).__name__}: {exc}")
@@ -449,6 +565,72 @@ def cmd_selftest(a) -> int:
 
         # 6. the whole thing ran with the network refused
         assert os.environ.get("HF_HUB_OFFLINE") == "1"
+
+        # 7. WHEN and WHERE — the two thirds of the Cuba question that need
+        #    no model at all. Two photos with real EXIF: one shot in Varadero
+        #    in 2016, one in Toronto in 2023.
+        try:
+            import piexif
+        except ImportError:
+            print("  (skipped the when/where test — pip install piexif)")
+        else:
+            def _stamp(name, when, lat, lon):
+                p = pix / name
+                Image.new("RGB", (64, 64), "gray").save(p, "JPEG")
+                def dms(v):
+                    v = abs(v)
+                    d = int(v); m = int((v - d) * 60)
+                    s = round((v - d - m / 60) * 3600 * 100)
+                    return ((d, 1), (m, 1), (s, 100))
+                ex = {"Exif": {piexif.ExifIFD.DateTimeOriginal: when.encode()},
+                      "GPS": {piexif.GPSIFD.GPSLatitudeRef: b"N" if lat >= 0 else b"S",
+                              piexif.GPSIFD.GPSLatitude: dms(lat),
+                              piexif.GPSIFD.GPSLongitudeRef: b"E" if lon >= 0 else b"W",
+                              piexif.GPSIFD.GPSLongitude: dms(lon)}}
+                piexif.insert(piexif.dump(ex), str(p))
+                return p
+
+            cuba = _stamp("varadero.jpg", "2016:07:14 12:30:00", 23.1394, -81.2714)
+            home = _stamp("home.jpg", "2023:11:02 09:00:00", 43.6532, -79.3832)
+
+            facts = read_when_where(cuba)
+            assert facts["taken_at"].startswith("2016-07-14"), facts
+            assert abs(facts["lat"] - 23.1394) < 0.01, facts
+            assert abs(facts["lon"] + 81.2714) < 0.01, facts
+
+            rows = [read_when_where(cuba), read_when_where(home)]
+            name_places(rows)
+            if rows[0].get("country"):          # needs reverse_geocoder installed
+                assert rows[0]["country"] == "Cuba", rows[0]
+                assert rows[1]["country"] == "Canada", rows[1]
+
+                cmd_build(args)                 # index the two new photos
+                idx2 = PhotoIndex(td / "idx")
+                import recall
+                known = {r[0] for r in idx2.db.execute(
+                    "SELECT DISTINCT country FROM photos WHERE country IS NOT NULL")}
+                known |= {r[0] for r in idx2.db.execute(
+                    "SELECT DISTINCT place FROM photos WHERE place IS NOT NULL")}
+                assert "Cuba" in known, known
+
+                # THE question, parsed and answered end to end
+                q = recall.parse(
+                    "show me the part of me that was on vacation ten years ago in Cuba",
+                    known, dt.date(2026, 9, 14))
+                assert q.places == ["Cuba"] and q.semantic == "vacation"
+                hits = recall.run(idx2, q, emb, top=10)
+                assert len(hits) == 1, [h["path"] for h in hits]
+                assert Path(hits[0]["path"]).name == "varadero.jpg"
+
+                # and the time filter alone excludes the Toronto photo
+                q2 = recall.parse("2023", known, dt.date(2026, 9, 14))
+                hits2 = recall.run(idx2, q2, None, top=10)
+                assert [Path(h["path"]).name for h in hits2] == ["home.jpg"], hits2
+                print("  ✓ when & where: EXIF date + GPS read, geocoded offline to")
+                print("    Cuba/Canada, and \"vacation ten years ago in Cuba\" returns")
+                print("    exactly the Varadero photo")
+            else:
+                print("  (skipped geocoding — pip install reverse_geocoder pycountry)")
         print("\n  ✓ pipeline: sha256 identity (duplicate collapsed), resumable,"
               "\n    unit vectors, ranked search, model-mismatch refused, offline."
               "\n  ⚠ untrained weights — search QUALITY still needs one run with"

@@ -12,3 +12,6 @@ keyring
 # pillow
 # pillow-heif      # iPhone libraries are full of HEIC
 # numpy
+# reverse_geocoder # offline place names from GPS — never a network lookup
+# pycountry        # country codes -> names people actually say
+# piexif           # test only: writes EXIF into fixture photos
