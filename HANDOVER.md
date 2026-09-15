@@ -133,11 +133,11 @@ Ordered. **Owner** = only Laszlo can do it. **SC** = Self-Cloud agent.
 |---|---|---|
 | C1 | **Run the index with real weights.** Proven offline but never with trained weights — this container cannot reach them, the laptop can | **Owner** |
 | C2 | **Finish Curator v0** (`FeaturePrint.swift`, `Report.swift`, `main.swift`). Use **Apple Vision feature-print** for near-duplicates, not pHash — measured 0.075 for a re-save vs 0.74+ unrelated. `Undated/` is **5,856 videos**, so triage must cover video | SC |
-| C3 | **Rip the DVDs.** The mother has died and her voice is on home-burned discs, which fade. `tools/disc_archive.py` is built; the owner needs a ~$25 USB DVD drive | **Owner** + JF |
-| C4 | **Local transcription** (whisper.cpp) over the ripped audio, indexed like the photos, `legacy` visibility. Then "what did mum say about the house" has an answer **in her voice** | JF |
+| C3 | ~~Rip the DVDs~~ — **stood down by the owner 2026-09-15**: *"we'll just use my voice."* `tools/disc_archive.py` is built and stays in the repo, ready if he changes his mind. Discs still fade; recorded, not argued | — |
+| C4 | **Local transcription** (whisper.cpp) — now aimed at the owner's own recordings and at video in the library, not at the discs | JF |
 | C5 | **Listening** — whisper.cpp on the machine plus a wake word, replacing the browser's recogniser | JF |
 | C6 | **Local LLM** as the internal trust zone, weights archived on the drive | SC |
-| C7 | **Voice enrolment and playback** for the owner's *own* voice | JF |
+| **C7** | **Voice enrolment and playback for the owner's OWN voice — now the whole voice path, and moved up.** A living person, present, consenting, reading the phrases: safeguard 4 satisfied by construction | **JF, next** |
 | C8 | **First-run onboarding.** The tiers start empty and the only artifact is a 13-question essay | JF |
 | C9 | **Ingestion** — Apple Health, bank CSV, wearables. Exports first; no partnership needed | JF |
 

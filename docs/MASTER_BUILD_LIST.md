@@ -157,7 +157,27 @@ TV when there are guests is a disclosure decision, not a display decision.
 
 ---
 
-## 3c. The tape archive — the new urgent item
+## 3c. The disc archive — BUILT, and stood down by the owner (2026-09-15)
+
+> *"Don't need DVD — we'll just use my voice somehow."*
+
+**Owner's decision: the voice work goes to HIS OWN voice, not his mother's
+discs.** That is the simpler, cleaner and more consentable path — a living
+person, present, reading the enrolment phrases, exactly as safeguard 4
+requires. It also removes a hardware purchase and hours of real-time work
+from the critical path.
+
+`tools/disc_archive.py` is built, tested and stays in the repo. It costs
+nothing to leave there and it is ready the day he wants it. The one fact that
+does not change with the decision: home-burned DVD-Rs fade, so the window is
+finite. Recorded, not argued.
+
+**The voice path is now §C7 — enrolment of the owner's own voice — and it
+moves up the order.**
+
+---
+
+## 3c-old. The tape archive — superseded by the decision above
 
 *Added 2026-09-14. His mother has died. Her voice exists on old videotape.*
 
