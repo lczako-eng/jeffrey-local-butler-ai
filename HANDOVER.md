@@ -19,11 +19,20 @@ Two products, two repos, two agents, one owner.
   **remote agent** (this side). *The intelligence is rented. The conscience is
   owned.*
 
-**Status this side:** the connector works and is installable — 74 offline
-checks, a double-click installer, a structural permission gate, crash-proof
-storage, local semantic photo search, and a screen. **It has NOT been
-adversarially audited** (see §7). Treat it the way their handover treats
-`connector/`: works ≠ shippable.
+**Status this side:** the connector works and is installable — a double-click
+installer, a structural permission gate, crash-proof storage, local semantic
+photo search, and a screen.
+
+**ADVERSARIALLY AUDITED 2026-09-15**, under your rule 6.4. Seven attackers,
+each required to produce a repro they actually ran; 48 findings raised, 31
+refuted by a skeptic, **17 survived — 5 of them HIGH. All five are fixed,
+each with a regression test.** The worst was mine and it was bad: the wall's
+LAN passcode was 24 bits with no lockout, measured at ~1,400 verified guesses
+a second, so the whole family library was reachable from the wifi in about
+ninety minutes. Now 128 bits with a five-strike lockout per address.
+
+Your §6.4 was right and it cost me five HIGHs to prove it: every suite passed
+before the attack, and the attack still found all of this.
 
 ---
 
@@ -109,7 +118,7 @@ Ordered. **Owner** = only Laszlo can do it. **SC** = Self-Cloud agent.
 |---|---|---|
 | A1 | **Encrypt the external SSD.** ~240 GB of the family's photos are plaintext on a portable drive. Runbook: `Self-Cloud/docs/ENCRYPT_THE_DRIVE.md`. Highest-probability harm in the portfolio | **Owner** |
 | A2 | **Fix §5.1 and §5.2** — drive-named path traversal, and hardlinks in `.selfcloud` writing into the owner's files | **SC** |
-| A3 | **Adversarial audit of JEFFEREY**, under their rule 6.4. Nothing on this side has been attacked | **JF** |
+| A3 | ~~Adversarial audit of JEFFEREY~~ — ✅ **DONE 2026-09-15.** 48 raised, 17 survived, all 5 HIGH fixed with regression tests. Details in §7 | ✅ JF |
 | A4 | **The egress door** — one function every outbound call passes through, field **allowlist** (fails closed; redaction fails open), full egress log, plus "show me what left the house" | **JF** |
 | A5 | **Split the Constitution** — `public-charter.md` (safe for any engine) vs `private-boundaries.md` (never leaves). Today §9 of the template — the owner's list of what must never leave — is injected into every session | **JF** + SC |
 | A6 | **Conscience cleaner** — a live store already carries junk written by an old self-test | JF |
@@ -207,28 +216,37 @@ Their §6 applies here too. These are additions, not replacements.
 
 ---
 
-## 7. Honest disclosure — what is NOT proven on this side
+## 7. What the audit found and what it means for your side
 
-Their §6.4 is correct and it indicts me: *every build passed its own tests and
-still had real holes; only agents told to attack it found them.*
+Run 2026-09-15: seven attackers, one per surface, each required to produce a
+repro it had actually executed. 48 raised, 31 refuted by an independent
+skeptic, 17 survived. **Every HIGH is fixed with a regression test.**
 
-**Nothing on this side has been adversarially audited.** My tests prove my code
-does what I intended, which is exactly the trap. Specific places I would attack
-first:
+**The five HIGHs, because three of them are classes that apply to your code too:**
 
-- **`wall.py` on `--lan`** serves the family's entire photo library. The
-  passcode is a query-string token compared with `compare_digest`; there is no
-  rate limit, no lockout, and the token lands in browser history. The thumbnail
-  route takes a client-supplied identifier.
-- **`access.py`** — the gate is only as good as its coverage. A tool added later
-  without `@gate` is an open door, and the drift test only covers the MCP
-  surface.
-- **`conscience.py`** — the recovery path deletes and replaces files. Attack the
-  history directory.
-- **`disc_archive.py`** — reads attacker-controlled media and writes paths
-  derived from it. Same class as their §5.1.
-- **`photo_index.py`** — parses EXIF from untrusted files and builds SQL from
-  place names.
+1. **The wall's LAN passcode was brute-forceable** — 24 bits, no lockout, a
+   200/403 oracle, ~1,400 verified guesses a second from one process. The
+   whole library from the wifi in ~90 minutes. Now 128 bits + five-strike
+   per-address lockout.
+2. **The visibility ceiling filtered the wrong things.** It filtered moments
+   but not facts, people or priorities — so an `executor` key holding
+   `legacy.read` alone read the whole conscience. *This is your hardlink bug's
+   cousin: a guard that checks something true but insufficient.*
+3. **Two tools that return the owner's private rules were never gated** —
+   and a refusal that quotes the rule IS the disclosure.
+4. **A recovered conscience was never written back**, so the next launch found
+   the same broken file and started an empty life. The recovery was real and
+   entirely in memory.
+5. **The photo walker followed symlinks out of the named folder** — the guard
+   constrained where it LOOKED, not what it OPENED. *Same class as your §5.1:
+   a path check that the attacker routes around.*
 
-**Until that audit is done, treat this side as their handover treats
-`connector/`: works on real hardware, not shippable.**
+**Three patterns worth carrying to your side:**
+
+- Guards that verify a property that is true but insufficient (2 and 5 here,
+  your hardlink find). Ask of every guard: *what does this NOT prove?*
+- Anything derived from untrusted input used as a path (5 here, your §5.1).
+- A refusal that explains itself in too much detail is a disclosure (3).
+
+Both halves of this project have now been attacked. Neither had been before,
+and both had HIGH holes.
