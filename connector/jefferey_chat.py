@@ -1670,6 +1670,68 @@ def selftest() -> None:
         print("  ✓ durability: atomic writes, every write recoverable, stale writer "
               "refused, torn file recovered, unrecoverable file refuses to start")
 
+        # 18. THE ADVERSARIAL FINDINGS — one test per HIGH, so none returns.
+        from conscience import ConscienceCorrupt
+        _a = Conscience(Path(td) / "audit.json")
+        _acloud, _alife = SelfCloud(_a), Life(_a)
+        _a.remember_fact("a private fact")
+        _a.set_priority("travel", "direct", "cheap")
+        _alife.add_person("Karen", "wife")
+        _alife.add_memory("private thing", visibility="private")
+        _alife.add_memory("for after", visibility="legacy")
+
+        # HIGH: the ceiling must filter facts, people and values — not just
+        # moments. An executor key holds legacy.read ALONE.
+        ex = _alife.who_am_i("legacy")
+        assert [m["text"] for m in ex["moments"]] == ["for after"], ex["moments"]
+        assert ex["facts"] == [] and ex["what_they_value"] == [], ex
+        assert ex["people_who_matter"] == [], ex["people_who_matter"]
+        fam = _alife.who_am_i("family")
+        assert fam["facts"] == [] and fam["people_who_matter"], fam
+        mine = _alife.who_am_i("private")
+        assert mine["facts"] and mine["what_they_value"] and mine["people_who_matter"]
+
+        # HIGH: a refusal that quotes the rule IS the disclosure, so the tools
+        # that return the owner's rules must be gated like any other read.
+        for _t in ("check_disclosure", "guidance_for", "triage_message",
+                   "log_action"):
+            assert _t in access.TOOL_SCOPES, f"{_t} is still ungated"
+            assert f'@gate("{access.TOOL_SCOPES[_t]}")\ndef {_t}(' in _src, _t
+
+        # HIGH: a recovered conscience must reach the disk, or the next launch
+        # starts from an empty life.
+        rp = Path(td) / "recover.json"
+        r1 = Conscience(rp)
+        r1.remember_fact("something worth keeping")
+        rp.write_text('{"facts": [{"fact": "trunca')
+        Conscience(rp)                            # recovers...
+        again = Conscience(rp)                    # ...and it STAYS recovered
+        assert [f["fact"] for f in again.data["facts"]] == ["something worth keeping"]
+
+        # HIGH: a store that vanished is a conflict, never permission to write
+        r3 = Conscience(rp)
+        rp.unlink()
+        try:
+            r3.remember_fact("written over a grave")
+            raise AssertionError("wrote to a store that had disappeared")
+        except ConscienceConflict:
+            pass
+        # ...and re-opening restores it from history rather than starting empty
+        assert Conscience(rp).data["facts"], "an existing life was not recovered"
+
+        # MEDIUM: JSON that is not a conscience is not a conscience
+        for junk in ("[]", "{}", '{"hello": 1}'):
+            jp = Path(td) / f"junk{abs(hash(junk))}.json"
+            jp.write_text(junk)
+            try:
+                Conscience(jp)
+                raise AssertionError(f"{junk} was accepted as a life")
+            except ConscienceCorrupt:
+                pass
+        print("  ✓ audit fixes: ceiling filters every field, the rule tools are")
+        print("    gated, recovery reaches the disk, a vanished store refuses,")
+        print("    and junk JSON is not mistaken for a life")
+
     print("\nAll offline checks passed. Add an API key and he talks.")
 
 

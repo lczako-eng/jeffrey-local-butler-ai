@@ -82,6 +82,15 @@ TOOL_SCOPES: dict[str, str] = {
     "story_gaps": "life.read", "forget_life": "life.write",
     "next_question": "life.read", "record_answer": "life.write",
     "interview_progress": "life.read",
+    # The owner's own rules about who may hear what. A REFUSAL that quotes
+    # the rule is itself the disclosure — these were ungated and returned the
+    # most sensitive sentences in the system verbatim.
+    "check_disclosure": "facts.read", "guidance_for": "facts.read",
+    # Returns the owner's relevant priorities alongside the verdict, which is
+    # the same payload the gated explain_basis refuses.
+    "triage_message": "priorities.read",
+    # A write into the owner's audit trail. An ungated write is a forgery.
+    "log_action": "facts.write",
     # secrets: names only, never values
     "vault_status": "vault.names",
 }

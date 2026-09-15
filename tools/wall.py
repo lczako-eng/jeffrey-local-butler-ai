@@ -44,6 +44,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 THUMB = 480          # long edge, in pixels — enough for a 4K TV at grid size
 STATE: dict = {}     # index, embedder (loaded lazily), passcode
+_MISSES: dict = {}   # client ip -> consecutive wrong passcodes
+_MISS_LOCK = threading.Lock()
+LOCKOUT_AFTER = 5    # wrong guesses before that address is refused outright
 
 
 # ------------------------------------------------------------------- data
@@ -86,7 +89,8 @@ def search(question: str, top: int = 120) -> dict:
     import recall
     q = recall.parse(question, known_places())
     emb = _embedder() if q.semantic else None
-    hits = recall.run(_index(), q, emb, top=top)
+    hits = [{k: v for k, v in h.items() if k != "path"}
+            for h in recall.run(_index(), q, emb, top=top)]
     return {"asked": question, "reading": q.describe(),
             "note": q.notes[0] if q.notes else "", "hits": hits}
 
@@ -99,7 +103,9 @@ def on_this_day(top: int = 120) -> dict:
         "WHERE taken_at IS NOT NULL AND substr(taken_at,6,5) = ? "
         "AND missing_since IS NULL ORDER BY taken_at DESC",
         (today.strftime("%m-%d"),)))
-    hits = [{"sha256": r[0], "path": r[1], "taken_at": r[2],
+    # No `path`: the page only needs the id, the date and the place, and an
+    # absolute filename ("2016_divorce_papers.jpg") is itself a disclosure.
+    hits = [{"sha256": r[0], "taken_at": r[2],
              "place": r[3], "country": r[4], "score": None} for r in rows[:top]]
     return {"asked": "on this day", "note": "",
             "reading": f"photographs taken on {today.strftime('%B %-d')}, "
@@ -257,11 +263,32 @@ class Wall(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj).encode(), "application/json")
 
     def _allowed(self, params) -> bool:
+        """The passcode, with a lockout.
+
+        A 24-bit code and no lockout was measured at ~1,400 verified guesses a
+        second from one process — the family's whole library in about an hour
+        and a half from the wifi. Two changes: the code is now 128 bits, and an
+        address that gets it wrong five times in a row is refused outright.
+        """
         code = STATE.get("passcode")
         if not code:
             return True                    # localhost only; nothing to guard
+        who = self.client_address[0]
+        with _MISS_LOCK:
+            if _MISSES.get(who, 0) >= LOCKOUT_AFTER:
+                return False               # no oracle, however long they try
         given = (params.get("k") or [""])[0]
-        return secrets.compare_digest(given, code)
+        good = secrets.compare_digest(given.encode(), code.encode())
+        with _MISS_LOCK:
+            if good:
+                _MISSES.pop(who, None)
+            else:
+                _MISSES[who] = _MISSES.get(who, 0) + 1
+                if _MISSES[who] == LOCKOUT_AFTER:
+                    print(f"  ! {who} got the passcode wrong {LOCKOUT_AFTER} "
+                          f"times — refusing that address until restart.",
+                          file=sys.stderr)
+        return good
 
     def do_GET(self):
         u = up.urlparse(self.path)
@@ -310,7 +337,9 @@ def lan_ip() -> str:
 
 def serve(index_path: str, port: int, lan: bool) -> ThreadingHTTPServer:
     STATE["index_path"] = index_path
-    STATE["passcode"] = secrets.token_hex(3) if lan else None
+    # 128 bits. Nobody types this — it is in the link you open or scan — so
+    # there is no reason for it to be guessable.
+    STATE["passcode"] = secrets.token_urlsafe(16) if lan else None
     host = "0.0.0.0" if lan else "127.0.0.1"
     srv = ThreadingHTTPServer((host, port), Wall)
     return srv
@@ -440,7 +469,7 @@ def selftest() -> int:
             get(f"/thumb/notarealsha?k={code}")
             raise AssertionError("a thumbnail that doesn't exist returned 200")
         except urllib.error.HTTPError as e:
-            assert e.code == 404, e.code
+            assert e.code == 404, (e.code, e.read()[:400])
 
         srv.shutdown()
         print("\n  ✓ the wall: passcode enforced (no code and wrong code both")

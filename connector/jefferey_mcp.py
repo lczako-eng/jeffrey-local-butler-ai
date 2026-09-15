@@ -197,6 +197,7 @@ def authorize_action(category: str, description: str, amount: float | None = Non
 
 
 @mcp.tool()
+@gate("facts.write")
 def log_action(category: str, description: str, outcome: str, amount: float | None = None) -> dict:
     """Write down an act just performed on the user's behalf. No silent
     actions, ever — the log lives in the user's own store."""
@@ -271,6 +272,7 @@ def orb_state() -> dict:
 # Correspondence and paperwork, done in the user's interest. Jefferey rides
 # the host's own mail/file connectors; these tools supply the representation.
 @mcp.tool()
+@gate("priorities.read")
 def triage_message(sender: str, subject: str, body: str) -> dict:
     """Read an incoming message the way a good friend would: what does it
     want, does it matter by THIS person's priorities, and is anyone trying to
@@ -630,6 +632,7 @@ def list_rules(kind: str = "") -> list:
 
 
 @mcp.tool()
+@gate("facts.read")
 def check_disclosure(audience: str, tags: str) -> dict:
     """Call BEFORE saying anything about the owner to anyone who is not them.
     A rule naming this audience beats a rule for 'anyone'; deny beats allow;
@@ -639,6 +642,7 @@ def check_disclosure(audience: str, tags: str) -> dict:
 
 
 @mcp.tool()
+@gate("facts.read")
 def guidance_for(tags: str, audience: str = "me") -> dict:
     """The owner's standing instructions that apply right now: how to react
     when speaking WITH them about this, or how to speak ABOUT them to someone

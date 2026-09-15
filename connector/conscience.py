@@ -109,7 +109,12 @@ class Conscience:
                 if fcntl is None:
                     return self
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                self.fh = open(self.path, "w")
+                # O_NOFOLLOW so a symlink here cannot aim the lock at one of
+                # the owner's files, and no O_TRUNC so opening never empties
+                # whatever is there.
+                fd = os.open(self.path,
+                             os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                self.fh = os.fdopen(fd, "r+")
                 fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
                 return self
 
@@ -121,23 +126,68 @@ class Conscience:
 
         return _Lock(self._lock_path)
 
+    @staticmethod
+    def _snap_rev(p: Path) -> int:
+        """The revision baked into a snapshot's name. Ordering by FILENAME
+        would order by local clock, so a timezone change or the hour that
+        repeats every autumn could make recovery restore an older life and
+        pruning delete the newest one."""
+        try:
+            return int(p.stem.rsplit("-", 1)[-1])
+        except ValueError:
+            return -1
+
     def _snapshots(self) -> list[Path]:
         if not self.history_dir.exists():
             return []
-        return sorted(self.history_dir.glob("*.json"), reverse=True)
+        return sorted(self.history_dir.glob("*.json"),
+                      key=lambda p: (self._snap_rev(p), p.stat().st_mtime),
+                      reverse=True)
+
+    _SHAPE = ("facts", "priorities", "goals", "corrections", "permissions",
+              "actions", "observations", "opportunities")
+
+    @classmethod
+    def _validate(cls, obj) -> dict:
+        """`[]`, `{}` and `{"facts": []}` all parse as JSON and none of them is
+        a life. Anything that is not recognisably a conscience is treated as
+        unreadable, so it routes to recovery instead of quietly replacing one."""
+        if not isinstance(obj, dict):
+            raise ValueError(f"not a conscience: top level is {type(obj).__name__}")
+        if isinstance(obj.get("_rev"), int):
+            return obj
+        if sum(1 for k in cls._SHAPE if k in obj) >= 3:
+            return obj                       # a store from before _rev existed
+        raise ValueError("not a conscience: no _rev and too few known fields")
 
     def _load(self) -> None:
+        corrupt_marker = self.path.with_suffix(self.path.suffix + ".corrupt")
         if not self.path.exists():
+            # A missing store is normal on the very first run — and is a
+            # catastrophe if there is evidence a life was here. Do not guess.
+            if self._snapshots() or corrupt_marker.exists():
+                parsed = self._recover(reason="the store is gone")
+                self.data.update(parsed)
+                self._rev_seen = int(self.data.get("_rev", 0))
+                self._write(self.data)       # put it back before anything else
             return
         raw = self.path.read_text()
+        recovered = False
         try:
             parsed = json.loads(raw) if raw.strip() else None
             if parsed is None:
                 raise ValueError("store is empty")
+            self._validate(parsed)
         except Exception as exc:
             parsed = self._recover(reason=str(exc))
+            recovered = True
         self.data.update(parsed)
         self._rev_seen = int(self.data.get("_rev", 0))
+        if recovered:
+            # Without this the recovery lives only in memory: close the app
+            # and the NEXT launch finds the same broken file, or nothing at
+            # all, and starts an empty life with no warning.
+            self._write(self.data)
 
     def _recover(self, reason: str) -> dict:
         """The live store is unreadable. Try the newest good snapshot; if there
@@ -174,10 +224,28 @@ class Conscience:
         )
 
     def _on_disk_rev(self) -> int:
+        """The revision actually on disk.
+
+        Returning our own revision when the file cannot be read would make the
+        anti-clobber guard a no-op in precisely the state where it matters —
+        the store replaced, truncated or deleted under us.
+        """
+        if not self.path.exists():
+            if self._rev_seen == 0 and not self._snapshots():
+                return 0                     # the very first write: nothing lost
+            raise ConscienceConflict(
+                f"{self.path} has disappeared since this session loaded it "
+                f"(revision {self._rev_seen}). Refusing to write over whatever "
+                f"replaced it. Restart so the store is re-read or recovered.")
         try:
-            return int(json.loads(self.path.read_text()).get("_rev", 0))
-        except Exception:
-            return self._rev_seen  # unreadable: _load/_recover owns that problem
+            return int(self._validate(json.loads(self.path.read_text()))
+                       .get("_rev", 0))
+        except ConscienceConflict:
+            raise
+        except Exception as exc:
+            raise ConscienceConflict(
+                f"{self.path} is no longer readable ({exc}). Nothing was "
+                f"written. Restart so it can be recovered from history.")
 
     def _archive(self) -> None:
         """Snapshot the store as it now stands on disk.
@@ -189,7 +257,7 @@ class Conscience:
         if not self.path.exists():
             return
         self.history_dir.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%dT%H%M%S")
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         dest = self.history_dir / f"{self.path.stem}-{stamp}-{self._rev_seen:06d}.json"
         try:
             dest.write_bytes(self.path.read_bytes())
@@ -210,23 +278,27 @@ class Conscience:
                     "Restart this surface so it reloads the conscience."
                 )
             self.data["_rev"] = self._rev_seen + 1
-            payload = json.dumps(self.data, indent=2, ensure_ascii=False)
-            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(payload)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, self.path)          # atomic: readers see old or new
-            try:                                 # make the rename itself durable
-                dir_fd = os.open(self.path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            except (OSError, AttributeError):
-                pass                             # not all platforms allow this
+            self._write(self.data)
             self._rev_seen = self.data["_rev"]
             self._archive()
+
+    def _write(self, payload: dict) -> None:
+        """One atomic, durable write. Temp file, fsync, rename, fsync dir."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, indent=2, ensure_ascii=False))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, self.path)              # readers see old or new, never half
+        try:                                     # make the rename itself durable
+            dir_fd = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except (OSError, AttributeError):
+            pass                                 # not all platforms allow this
 
     # ------------------------------------------------------------ recovery
     def snapshots(self) -> list[dict]:

@@ -259,7 +259,10 @@ def extract_audio(library: Path, disc_id: str) -> int:
     if not man_path.exists():
         print(f"\n  No disc called {disc_id}. Run `list` to see what's archived.\n")
         return 1
-    out = root / "audio"
+    # Beside the disc, never inside the verbatim copy — otherwise a hostile
+    # disc carrying audio/VTS_01_1.flac pre-occupies the destination and its
+    # file silently becomes "her voice".
+    out = root.parent / f"{disc_id}.audio"
     out.mkdir(exist_ok=True)
     sources = [root / e["path"] for e in json.loads(man_path.read_text())["files"]
                if Path(e["path"]).suffix.lower() in VIDEO_EXT
@@ -272,6 +275,7 @@ def extract_audio(library: Path, disc_id: str) -> int:
     for src in sources:
         dst = out / (src.stem + ".flac")
         if dst.exists():
+            print(f"  · {dst.name} already there — skipping (delete it to redo)")
             continue
         r = subprocess.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",

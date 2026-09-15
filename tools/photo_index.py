@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import datetime as dt
 import sqlite3
@@ -267,9 +268,24 @@ def sha256(path: Path, chunk: int = 1 << 20) -> str:
 
 
 def walk(root: Path):
+    """Only files that really live under the folder the owner named.
+
+    A symlink passes `is_file()` and `Image.open()` follows it, so without
+    this the guard constrains where we LOOKED, not what we OPENED — one link
+    in a photo folder and the index quietly reaches anywhere on the disk.
+    """
+    base = Path(root).expanduser().resolve()
     for p in sorted(Path(root).expanduser().rglob("*")):
-        if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES:
-            yield p
+        if p.is_symlink():
+            continue
+        if not (p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES):
+            continue
+        try:
+            if not p.resolve().is_relative_to(base):
+                continue
+        except OSError:
+            continue
+        yield p
 
 
 def open_image(path: Path):
@@ -350,8 +366,12 @@ def name_places(rows: list[dict]) -> None:
     Fills `place` and `country` in place. A silent no-op if the optional
     library isn't installed; coordinates are still stored either way.
     """
-    pts = [(r["lat"], r["lon"]) for r in rows
-           if r.get("lat") is not None and r.get("lon") is not None]
+    # One bad coordinate must not cost the whole batch its places.
+    usable = [r for r in rows
+              if isinstance(r.get("lat"), (int, float))
+              and isinstance(r.get("lon"), (int, float))
+              and math.isfinite(r["lat"]) and math.isfinite(r["lon"])]
+    pts = [(r["lat"], r["lon"]) for r in usable]
     if not pts:
         return
     try:
@@ -367,9 +387,7 @@ def name_places(rows: list[dict]) -> None:
     except ImportError:
         pycountry = None
     it = iter(found)
-    for r in rows:
-        if r.get("lat") is None or r.get("lon") is None:
-            continue
+    for r in usable:
         hit = next(it, None)
         if not hit:
             break

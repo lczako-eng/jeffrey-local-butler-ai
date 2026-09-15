@@ -147,15 +147,20 @@ class Life:
         media = [m for m in self.c.data["media"] if m["visibility"] in allowed]
         prios = sorted(self.c.data.get("priorities", []),
                        key=lambda p: -p.get("confidence", 0))[:8]
+        # The ceiling governs EVERYTHING here, not only the moments. An
+        # `executor` key holds legacy.read alone: it must see what the owner
+        # meant to outlive them, and not the facts, the people or the values.
+        full = ceiling == "private"
+        family = ceiling in ("private", "family")
         return {
-            "people_who_matter": self.c.data.get("people", []),
+            "people_who_matter": self.c.data.get("people", []) if family else [],
             "moments": mems,
             "pictures_and_recordings": media,
             "what_they_value": [
                 f"{p['higher']} over {p['lower']} ({p['context']}, "
                 f"{int(p['confidence'] * 100)}% confident)" for p in prios
-            ],
-            "facts": self.c.data.get("facts", []),
+            ] if full else [],
+            "facts": self.c.data.get("facts", []) if full else [],
             "depth": {
                 "people": len(self.c.data.get("people", [])),
                 "moments": len(self.c.data.get("memories", [])),
@@ -198,7 +203,8 @@ class Life:
             "visible_at": ceiling,
             "moments": mems,
             "pictures": media,
-            "people": self.c.data.get("people", []),
+            "people": (self.c.data.get("people", [])
+                       if ceiling in ("private", "self", "family") else []),
             "how_to_tell_it": (
                 "Tell it in their voice, in order, using only what is here. Name "
                 "the people by name. Where a picture belongs, say which one and "

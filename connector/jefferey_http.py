@@ -289,6 +289,7 @@ class ActionLogIn(BaseModel):
 
 
 @app.post("/actions", operation_id="log_action")
+@gate("facts.write")
 def log_action(a: ActionLogIn) -> dict:
     """Write down an act just performed on the user's behalf. No silent
     actions, ever."""
@@ -367,6 +368,7 @@ class TriageIn(BaseModel):
 
 
 @app.post("/triage", operation_id="triage_message")
+@gate("priorities.read")
 def triage_message(t: TriageIn) -> dict:
     """Read an incoming message the way a good friend would: what does it
     want, does it matter by THIS person's priorities, and is anyone trying to
@@ -741,12 +743,14 @@ def list_rules(kind: str = "") -> list:
 
 
 @app.get("/rules/check", operation_id="check_disclosure")
+@gate("facts.read")
 def check_disclosure(audience: str, tags: str) -> dict:
     """Before saying anything about the owner to anyone else. Silence is a no."""
     return rules.check_disclosure(audience, tags)
 
 
 @app.get("/rules/guidance", operation_id="guidance_for")
+@gate("facts.read")
 def guidance_for(tags: str, audience: str = "me") -> dict:
     """The owner's standing instructions that apply right now, verbatim."""
     return rules.guidance_for(tags, audience)
