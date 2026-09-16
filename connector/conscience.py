@@ -29,9 +29,8 @@ try:
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
-DEFAULT_STORE = Path(
-    os.environ.get("JEFFEREY_CONSCIENCE_PATH", "~/.jefferey/conscience.json")
-).expanduser()
+import home
+DEFAULT_STORE = home.conscience_path()   # on the drive if one is plugged in
 
 # How many previous versions of the store to keep beside it. Twenty is a few
 # hundred kilobytes and buys back weeks of accidents.

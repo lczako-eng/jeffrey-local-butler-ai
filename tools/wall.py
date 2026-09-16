@@ -41,6 +41,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
+import home  # noqa: E402
 
 THUMB = 480          # long edge, in pixels — enough for a 4K TV at grid size
 STATE: dict = {}     # index, embedder (loaded lazily), passcode
@@ -347,7 +349,7 @@ def serve(index_path: str, port: int, lan: bool) -> ThreadingHTTPServer:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--index", default="~/.selfcloud/photo-index")
+    ap.add_argument("--index", default=str(home.index_path()))
     ap.add_argument("--port", type=int, default=8378)
     ap.add_argument("--lan", action="store_true",
                     help="let the phone and the TV reach it (asks for a passcode)")

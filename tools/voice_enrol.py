@@ -49,8 +49,10 @@ import subprocess
 import sys
 import wave
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
+import home  # noqa: E402
 
-VOICE_ROOT = Path("~/.selfcloud/voice").expanduser()
+VOICE_ROOT = home.voice_path()          # on the drive, if one is plugged in
 RATE = 48000          # capture high; anything downstream can resample
 MIN_SECONDS = 0.6     # shorter than this is a mis-press, not a phrase
 

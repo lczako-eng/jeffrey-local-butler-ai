@@ -152,6 +152,14 @@ the phone isn't burdened, and losing or replacing a phone loses nothing.
   of what they need and nothing more; secrets never sync anywhere (keychain
   only, per device).
 
+**Built (2026-09-16) — the drive as the product.** *"We got the hard drive
+ready."* `tools/provision_drive.py` turns any drive into a Self-Cloud drive:
+the layout, a marker, the cloud logo as the Finder icon, and a launcher that
+binds every tool to that drive on whatever Mac it is plugged into.
+`connector/home.py` makes every tool keep the conscience, the index and the
+voice **on the drive** when one is present. The Mac keeps nothing but a
+Python. Unplug it and it is gone — which was always the point.
+
 ## 4. The local model, the house, and the AI that is *you* (recorded 2026-09-12)
 
 > "I want this thing eventually — let's bring the local Emma LLM, and then this

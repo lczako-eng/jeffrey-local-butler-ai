@@ -30,10 +30,12 @@ import webbrowser
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
+import home  # noqa: E402
 
 HOME = Path.home() / ".jefferey"
 CONF = HOME / "wall.conf"
-INDEX = Path.home() / ".selfcloud" / "photo-index"
+INDEX = home.index_path()            # on the drive, if one is plugged in
 FIRST_RUN_LIMIT = 3000          # see it working in minutes, not hours
 
 # What the seeing part needs. The connector's own requirements are separate
@@ -121,6 +123,7 @@ def count_indexed() -> int:
 def main() -> int:
     say(f"\n{B}Your life, on the screen{O}")
     say(f"{D}Everything below happens on this machine. Nothing is uploaded.{O}")
+    say(f"  {D}Life lives {home.describe()}.{O}")
 
     head("[1/4] Checking the pieces")
     need = missing(NEEDS)

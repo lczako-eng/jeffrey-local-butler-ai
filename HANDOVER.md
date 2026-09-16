@@ -65,6 +65,13 @@ the owner to confirm:
    unplugged drive, not a deletion.** Theirs is the more complete
    implementation. Adopt theirs; keep the rule.
 
+**The seam is now physical (2026-09-16).** The owner decided the drive IS the
+product, so every JEFFEREY tool asks `connector/home.py` where the life lives:
+`<drive>/.selfcloud/jefferey/…` when a provisioned drive is plugged in, the
+home folder when not. Your `.selfcloud/` top level (node.json, catalog.db,
+audit.jsonl) is untouched; mine is namespaced under `jefferey/`. Full layout,
+the marker, and two decisions for you: `Self-Cloud/docs/HANDOVER_FROM_JEFFEREY.md`.
+
 **What I need from their side to make this real:** a stable way to read the
 catalog. Either the door gains a `catalog_path(node_id)` tool, or their
 `search`/`stat` return enough to drive a viewer (path, size, mtime, node, and
@@ -104,6 +111,8 @@ key, no network**.
 | `wall.py` | One page: big pictures, date and place, one box to type or speak into, opens on "on this day". Localhost unless `--lan`; `--lan` demands a passcode; Escape clears the screen | passcode enforced against a real socket; model not loaded for a pure time+place question; thumbnails cache |
 | `voice_enrol.py` + `Record my voice.command` | Enrolment of the owner's own voice. Consent take first, read-only checksummed WAVs, resumable, TTY-only, real deletion | consent kept, integrity, containment, retry-on-short, deletion, and a no-network-import assertion |
 | `disc_archive.py` | Rips family DVDs **verbatim**, checksums, makes copies read-only, and **survives a scratched disc**: records the unreadable byte ranges, fills them, keeps going | verbatim copy, tampering detected, real data recovered on both sides of simulated damage |
+| `provision_drive.py` + `Make this drive a Self-Cloud.command` | Turns a drive into THE product: layout (`Self-Cloud/`, `originals/`, `library/`, `.selfcloud/jefferey/`) created without touching a file, marker with a stable id, the real logo keyed to a transparent `.icns` as the Finder icon, optional `diskutil` rename, and `Start Self-Cloud.command` that binds every tool to its own drive on any Mac | layout, user files untouched, marker id stable across `--force`, real ICNS with background keyed, launcher executable and self-binding, no-op re-run |
+| `connector/home.py` | One answer to "where does the life live": the drive if present (`SELFCLOUD_ROOT` or exactly one marked volume; two is refused), else `~/.jefferey` / `~/.selfcloud`. Explicit env vars always win | routing onto the drive and back, ambiguity refused, env override |
 | `install.py` + `Install JEFFEREY.command` | Double-click install; refuses to wire anything to Claude if the self-test fails; backs up and merges the host config; `--check`, `--uninstall` | run end to end |
 | `go.py` + `Show me my life.command` | One double-click: installs the seeing parts, asks once where the photos are, indexes, opens the wall | logic tested; full run is owner-side |
 

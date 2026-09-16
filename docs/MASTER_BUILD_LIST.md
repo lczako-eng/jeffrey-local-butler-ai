@@ -119,6 +119,31 @@ All of this runs on the machine that exists. No purchase.
 
 ---
 
+## 3a. The drive is the product (added 2026-09-16)
+
+> *"We got the hard drive ready… what kind of program do we have to do through
+> this hard drive?"*
+
+The laptop-is-v0 reframe becomes literal: **the drive carries the data AND the
+software**; the Mac lends a screen and a Python and keeps nothing.
+
+| # | What | State |
+|---|---|---|
+| 3a.1 | **`connector/home.py`** — every tool asks it where the life lives; drive if plugged in, home folder if not; explicit env vars win; two drives at once is refused, not guessed | ✅ built |
+| 3a.2 | **`tools/provision_drive.py`** — layout, marker, cloud icon from the real logo, optional rename, `Start Self-Cloud.command` on the drive | ✅ built |
+| 3a.3 | **`Make this drive a Self-Cloud.command`** — drag the drive in, done | ✅ built |
+| 3a.4 | **Put the software on the drive** — `Self-Cloud/app/` is a checkout of this repo; the launcher explains the one-time clone | owner, once |
+| 3a.5 | **Agree the marker with the Self-Cloud agent** — `selfcloud.json` vs their `node.json`; see `Self-Cloud/docs/HANDOVER_FROM_JEFFEREY.md` §1 | both |
+| 3a.6 | **Encrypt it** — a portable drive holding a life. `ENCRYPT_THE_DRIVE.md` | **owner** |
+| 3a.7 | **Second drive, off-site** — the two-copy rule made physical | owner, ~$80–200 |
+
+**On-disk layout** (shared with the Self-Cloud connector; theirs at the top of
+`.selfcloud/`, mine under `.selfcloud/jefferey/`, nothing collides):
+`Self-Cloud/` (launchers, README, `app/`) · `originals/` · `library/` ·
+`.selfcloud/` · `.VolumeIcon.icns`.
+
+---
+
 ## 3b. Surfaces — in the room, not in a chat window
 
 *Added 2026-09-14, from: "I want to be able to talk to it, and cast to TVs —

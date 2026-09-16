@@ -50,9 +50,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
+import home  # noqa: E402
 
 CHUNK = 1 << 16                      # 64 KiB: small enough to lose little
-DEFAULT_LIBRARY = "~/.selfcloud/discs"
+DEFAULT_LIBRARY = str(home.discs_path())   # on the drive, if one is plugged in
 VIDEO_EXT = {".vob", ".ifo", ".bup", ".mpg", ".mpeg", ".m2v", ".avi", ".mp4", ".mov"}
 
 

@@ -46,7 +46,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-DEFAULT_INDEX = Path("~/.selfcloud/photo-index").expanduser()
+import home
+DEFAULT_INDEX = home.index_path()
 MERGE_GAP_DAYS = 14   # same country, photos within two weeks = one trip
 MIN_PHOTOS = 3        # fewer than this is not a moment worth an interruption
 SHOW = 12             # how many photo ids a prompt carries for display

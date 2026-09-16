@@ -56,6 +56,8 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
+import home  # noqa: E402
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp",
                   ".bmp", ".tif", ".tiff", ".gif"}
@@ -844,7 +846,7 @@ def cmd_selftest(a) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--index", default="~/.selfcloud/photo-index",
+    ap.add_argument("--index", default=str(home.index_path()),
                     help="where the index and the model weights live")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
