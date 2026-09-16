@@ -367,6 +367,45 @@ ecosystem.* Every capability above — the archive, the living index, the wall,
 the voice — is built on hardware he owns, from data he owns, and it stops when
 he says stop. That is not a feature list. That is the product.
 
+## 4½. The album, opened by him (recorded 2026-09-16)
+
+> "I wanted to collect all my memories and ask me questions about it — like I
+> wanted to prompt the AI to say *hey, these pictures from Afghanistan, tell me
+> some stories* — so it remembers permanently."
+
+**This inverts the interview.** The 21 questions ask about a life in the
+abstract; this asks about *a specific afternoon*, with the pictures on the
+screen. Nobody remembers everything, but almost everybody remembers when
+shown — which is why reminiscence work in dementia care uses photographs and
+not questionnaires.
+
+**Built the same day: `connector/reminisce.py`**, on every JEFFEREY surface as
+`next_story_prompt` / `record_story` / `decline_story` / `story_progress`, and
+standalone from a terminal. It clusters the dated, placed photographs into
+moments — a trip, a season, a place ("Afghanistan · October 2011, 143
+photographs") — offers the biggest untold one first, keeps what he says
+**verbatim**, pinned to those exact photographs, privately, permanently, and
+returns one gentle follow-up chosen by what the story left out.
+
+**Rules that are code, not intention:**
+- **The prompt states only facts the index holds** — a count, a place, dates.
+  Never "this looks like a wedding." A guess offered as a memory is how a
+  false memory starts; the story comes from him, always.
+- **His words are kept exactly.** The test asserts the stored text equals what
+  was said.
+- **"Rather not" is final.** A declined moment is never offered again, and a
+  later attempt to record against it is refused.
+- **One question at a time**, at most once per conversation, the way a friend
+  flipping through an album would.
+- **Absence is not deletion** — a moment on an unplugged drive is simply not
+  offered until the drive is back.
+
+**Why it matters more than it looks.** This is the mechanism by which the
+Digital Conscience stops being a form he fills in and becomes a conversation
+he has with his own photographs — and it is exactly the interface a person
+with memory loss can still use: someone who loves them sits beside them and
+says *"look — tell me about this one."*
+
 ## 5. Things already decided in this session, so they aren't relitigated
 
 - **JEFFEREY**, never "Jeff". No "butler" anywhere.

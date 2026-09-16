@@ -109,6 +109,7 @@ All of this runs on the machine that exists. No purchase.
 | # | What | Depends on | Effort |
 |---|---|---|---|
 | 3.1 | **Voice enrolment — recording only, no playback** — ✅ **BUILT 2026-09-16.** `tools/voice_enrol.py` + `Record my voice.command`. Consent is the first take, in the person's own voice; every take a checksummed read-only WAV; resumable; refuses to run without a person at a keyboard; `delete` overwrites then unlinks; nothing in the file can reach a network (tested). ~55 phrases + 5 in his own words | **Owner: sit down and record.** ~10 min of speech is plenty | done |
+| 3.1b | **The album — reminiscence** — ✅ **BUILT 2026-09-16.** `connector/reminisce.py`: clusters dated+placed photos into moments, asks about the biggest untold one from facts alone, keeps the story verbatim pinned to those photos, one follow-up, "rather not" final. Four tools on every surface + a terminal sitting (`python connector/reminisce.py`) | needs 2.1 (real weights not required — this uses dates and places only) | done |
 | 3.2 | **Local LLM on the laptop** (Ollama/llama.cpp, weights archived on the drive) | 2.1 | 1–2 days |
 | 3.3 | **Ask-your-life** — questions answered from the conscience by the local model, with the network off | 3.2, 1.1 | 2 days |
 | 3.4 | **Voice playback** — the conscience speaks in his voice; "her words only" enforced in code, not policy | 3.1, 3.2 | 2–3 days |

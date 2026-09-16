@@ -77,9 +77,14 @@ class Life:
 
     # -------------------------------------------------------------- moments
     def add_memory(self, text: str, when: str = "", people: str = "",
-                   tags: str = "", visibility: str = "private") -> dict:
+                   tags: str = "", visibility: str = "private",
+                   photos: list[str] | None = None) -> dict:
         """A snippet of a life: a moment, a turning point, a lesson, a joke
-        only this family gets. This is what a story is made of."""
+        only this family gets. This is what a story is made of.
+
+        `photos` is a list of content hashes from the photo index — the
+        pictures this story was told about. References, never copies.
+        """
         if visibility not in VISIBILITY:
             raise ValueError(f"visibility must be one of {VISIBILITY}")
         entry = {
@@ -88,6 +93,8 @@ class Life:
             "tags": [t.strip().lower() for t in tags.split(",") if t.strip()],
             "visibility": visibility, "added": _now(),
         }
+        if photos:
+            entry["photos"] = [str(s) for s in photos]
         self.c.data["memories"].append(entry)
         self.c._save()
         return entry

@@ -37,6 +37,7 @@ from life import Life
 from selfcloud import SelfCloud
 from interview import Interview
 from rules import ConscienceRules
+from reminisce import Reminisce
 import access
 from access import AccessDenied, OwnerOnly
 
@@ -52,6 +53,7 @@ life = Life(conscience)
 cloud = SelfCloud(conscience)
 interview = Interview(conscience, life)
 rules = ConscienceRules(conscience)
+album = Reminisce(conscience, life)
 
 # THE DOOR. This surface is the OWNER'S OWN TERMINAL, so it binds the
 # caretaker key and sets the owner console — the one place where widening an
@@ -688,6 +690,50 @@ TOOLS = [
         },
     },
     {
+        "name": "next_story_prompt",
+        "description": (
+            "ONE moment from their photographs nobody has asked about — a "
+            "count, a place, dates, and the question, phrased as a friend "
+            "would. At most once per conversation, only when the moment is "
+            "right. State only the facts it returns; never guess what the "
+            "pictures show."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "record_story",
+        "description": (
+            "Keep what they said about a moment VERBATIM, pinned to those "
+            "photographs, permanently. Returns one gentle follow-up — ask it "
+            "or let it go, never two."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "moment_id": {"type": "string"},
+                "text": {"type": "string"},
+                "people": {"type": "string"},
+                "when": {"type": "string"},
+                "visibility": {"type": "string", "enum": ["private", "family", "legacy"]},
+            },
+            "required": ["moment_id", "text"],
+        },
+    },
+    {
+        "name": "decline_story",
+        "description": "They'd rather not. Final — never offered again.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"moment_id": {"type": "string"}},
+            "required": ["moment_id"],
+        },
+    },
+    {
+        "name": "story_progress",
+        "description": "How much of the album has been talked about.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "next_question",
         "description": (
             "Get ONE question to weave into the conversation — never a list, "
@@ -950,6 +996,15 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
         return cloud.check_access(args["client"], args["scope"])
     if name == "selfcloud_access_log":
         return cloud.access_log(args.get("limit", 30))
+    if name == "next_story_prompt":
+        return album.next_prompt()
+    if name == "record_story":
+        return album.record(args["moment_id"], args["text"], args.get("people", ""),
+                            args.get("when", ""), args.get("visibility", "private"))
+    if name == "decline_story":
+        return album.decline(args["moment_id"])
+    if name == "story_progress":
+        return album.progress()
     if name == "next_question":
         return interview.next_question(args.get("domain", ""))
     if name == "record_answer":
@@ -1076,6 +1131,19 @@ _TRACE = {
         f"{'✓' if r.get('allowed') else '✗'} {a.get('client')} → {a.get('scope')}"
     ),
     "selfcloud_access_log": lambda a, r: "reading the Self-Cloud audit trail",
+    "next_story_prompt": lambda a, r: (
+        f"opening the album: {r.get('label')} ({r.get('photos')} photos)"
+        if r.get("moment_id") else f"album: {r.get('note')}"
+    ),
+    "record_story": lambda a, r: (
+        f"kept his words, pinned to {r.get('pinned_to_photos')} photos"
+        if r.get("kept") else f"not kept: {r.get('error')}"
+    ),
+    "decline_story": lambda a, r: "he'd rather not — never again",
+    "story_progress": lambda a, r: (
+        f"album: {r.get('told')} told, {r.get('untold')} untold, {r.get('declined')} declined"
+        if r.get("indexed") else "album: no photos indexed yet"
+    ),
     "next_question": lambda a, r: (
         f"(earned depth {(r.get('trust') or {}).get('max_depth')}) "
         + (f"asking about {r.get('domain')}" if r.get("question") else "nothing to ask yet")
@@ -1247,7 +1315,7 @@ def selftest() -> None:
     """
     import tempfile
 
-    global conscience, rep, guard, life, cloud, interview, rules
+    global conscience, rep, guard, life, cloud, interview, rules, album
     with tempfile.TemporaryDirectory() as td:
         # Rebind EVERY helper — they each hold a reference to the store, and
         # a self-test must never touch the user's real conscience.
@@ -1258,6 +1326,7 @@ def selftest() -> None:
         cloud = SelfCloud(conscience)
         interview = Interview(conscience, life)
         rules = ConscienceRules(conscience)
+        album = Reminisce(conscience, life, Path(td) / "no-index-here")
         access.bind(cloud, "jefferey", announce=False)
 
         # 1. Every declared tool dispatches.
@@ -1328,6 +1397,10 @@ def selftest() -> None:
                 "selfcloud_revoke": {"client": "claude-raw"},
                 "selfcloud_check_access": {"client": "claude-raw", "scope": "facts.read"},
                 "selfcloud_access_log": {},
+                "next_story_prompt": {},
+                "record_story": {"moment_id": "none", "text": "x"},
+                "decline_story": {"moment_id": "none"},
+                "story_progress": {},
                 "next_question": {},
                 "record_answer": {"question_id": "how_address", "answer": "Laszlo"},
                 "interview_progress": {},

@@ -92,6 +92,7 @@ key, no network**.
 | `representative.py` | Mail triage with weighted scam signals, draft guidance, HTML + PDF form filling |
 | `vault.py` | Secrets in the OS keychain; the model uses `vault:<name>` and never sees a value; refuses to run rather than fall back to plaintext |
 | `interview.py` | 21 questions, 4 depths, depth earned by trust; "rather not" is final |
+| `reminisce.py` | **The album.** Clusters the photo index into moments (trip / season / place), offers the biggest untold one as a question phrased from facts only, keeps the answer verbatim pinned to those photos, one follow-up, "rather not" final. Reads the photo index; writes the life layer |
 | `jefferey_mcp.py` / `jefferey_http.py` / `jefferey_chat.py` | Claude, Custom-GPT Actions, and the owner's own terminal |
 
 ### `tools/` — local AI and the screen
@@ -149,6 +150,7 @@ Ordered. **Owner** = only Laszlo can do it. **SC** = Self-Cloud agent.
 | C6 | **Local LLM** as the internal trust zone, weights archived on the drive | SC |
 | **C7a** | ~~Voice enrolment~~ — ✅ **BUILT 2026-09-16**, `tools/voice_enrol.py`. Consent recorded first in the person's own voice; checksummed read-only WAVs; resumable; TTY required (a script or a model cannot enrol a voice); real deletion; no network-capable imports, asserted by test | ✅ JF |
 | **C7b** | **Voice playback** — the conscience speaking in the owner's voice. "Says only what is in the conscience"; never on a call or intercom; a speaker is a room. Needs a local TTS model that accepts a reference voice; weights archived on the drive per the local-AI rule | JF, after 3.2 |
+| C7c | ~~Reminiscence~~ — ✅ **BUILT 2026-09-16**, `connector/reminisce.py` + tools `next_story_prompt` / `record_story` / `decline_story` / `story_progress` on all three surfaces. Depends on the photo index having dates and places, which it does. **This is the first feature that needs your catalog and mine to agree** — see §1 | ✅ JF |
 | C8 | **First-run onboarding.** The tiers start empty and the only artifact is a 13-question essay | JF |
 | C9 | **Ingestion** — Apple Health, bank CSV, wearables. Exports first; no partnership needed | JF |
 

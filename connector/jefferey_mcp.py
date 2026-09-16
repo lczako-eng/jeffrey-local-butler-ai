@@ -50,6 +50,7 @@ from life import Life
 from selfcloud import SelfCloud
 from interview import Interview
 from rules import ConscienceRules
+from reminisce import Reminisce
 import access
 from access import gate, owner_only
 
@@ -61,6 +62,7 @@ life = Life(conscience)
 cloud = SelfCloud(conscience)
 interview = Interview(conscience, life)
 rules = ConscienceRules(conscience)
+album = Reminisce(conscience, life)
 
 # THE DOOR. One identity for the life of this process, taken from the host's
 # config (JEFFEREY_CLIENT) and never from anything the model says. Every tool
@@ -484,6 +486,42 @@ def forget_life(contains: str) -> dict:
     """Erase anything in the life layer matching this text — people, moments,
     media references. Never argued with."""
     return life.forget_life(contains)
+
+
+# ---------------------------------------------------------------- the album
+@mcp.tool()
+@gate("life.read")
+def next_story_prompt() -> dict:
+    """ONE moment from their photographs nobody has asked about — a count, a
+    place, dates, and the question, phrased as a friend would. Offer it at
+    most once per conversation, only when the moment is right. State only the
+    facts it returns; never guess what the pictures show. 'Rather not' →
+    decline_story, and never raise it again."""
+    return album.next_prompt()
+
+
+@mcp.tool()
+@gate("life.write")
+def record_story(moment_id: str, text: str, people: str = "", when: str = "",
+                 visibility: str = "private") -> dict:
+    """Keep what they said about a moment — VERBATIM, in their words, pinned to
+    those photographs, permanently. Returns one gentle follow-up: ask it or
+    let it go, never two."""
+    return album.record(moment_id, text, people, when, visibility)
+
+
+@mcp.tool()
+@gate("life.write")
+def decline_story(moment_id: str) -> dict:
+    """They'd rather not. Final — that moment is never offered again."""
+    return album.decline(moment_id)
+
+
+@mcp.tool()
+@gate("life.read")
+def story_progress() -> dict:
+    """How much of the album has been talked about: untold / told / declined."""
+    return album.progress()
 
 
 # ---------------------------------------------------------------- self-cloud

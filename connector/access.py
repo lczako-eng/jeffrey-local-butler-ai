@@ -91,6 +91,9 @@ TOOL_SCOPES: dict[str, str] = {
     "triage_message": "priorities.read",
     # A write into the owner's audit trail. An ungated write is a forgery.
     "log_action": "facts.write",
+    # the album: asking about his photographs and keeping what he says
+    "next_story_prompt": "life.read", "record_story": "life.write",
+    "decline_story": "life.write", "story_progress": "life.read",
     # secrets: names only, never values
     "vault_status": "vault.names",
 }

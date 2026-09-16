@@ -45,6 +45,7 @@ from life import Life
 from selfcloud import SelfCloud
 from interview import Interview
 from rules import ConscienceRules
+from reminisce import Reminisce
 import access
 from access import AccessDenied, OwnerOnly, gate, owner_only
 
@@ -55,6 +56,7 @@ life = Life(conscience)
 cloud = SelfCloud(conscience)
 interview = Interview(conscience, life)
 rules = ConscienceRules(conscience)
+album = Reminisce(conscience, life)
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
 TOKEN = os.environ.get("JEFFEREY_HTTP_TOKEN") or secrets.token_urlsafe(24)
@@ -592,6 +594,43 @@ def story_gaps() -> dict:
 def forget_life(contains: str) -> dict:
     """Erase anything in the life layer matching this text."""
     return life.forget_life(contains)
+
+
+# ---------------------------------------------------------------- the album
+class StoryIn(BaseModel):
+    moment_id: str
+    text: str
+    people: str = ""
+    when: str = ""
+    visibility: str = "private"
+
+
+@app.get("/album/next", operation_id="next_story_prompt")
+@gate("life.read")
+def next_story_prompt() -> dict:
+    """ONE moment from their photographs nobody has asked about. Offer it at
+    most once per conversation; state only the facts it returns."""
+    return album.next_prompt()
+
+
+@app.post("/album/story", operation_id="record_story")
+@gate("life.write")
+def record_story(s: StoryIn) -> dict:
+    """Keep what they said, verbatim, pinned to those photographs."""
+    return album.record(s.moment_id, s.text, s.people, s.when, s.visibility)
+
+
+@app.delete("/album/{moment_id}", operation_id="decline_story")
+@gate("life.write")
+def decline_story(moment_id: str) -> dict:
+    """They'd rather not. Final."""
+    return album.decline(moment_id)
+
+
+@app.get("/album/progress", operation_id="story_progress")
+@gate("life.read")
+def story_progress() -> dict:
+    return album.progress()
 
 
 # ---------------------------------------------------------------- self-cloud
