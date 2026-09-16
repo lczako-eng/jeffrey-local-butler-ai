@@ -145,7 +145,11 @@ def make_icns(logo: Path, out: Path, size: int = 1024) -> Path:
     corners = [px[0, 0], px[side - 1, 0], px[0, side - 1], px[side - 1, side - 1]]
     if all(sum(abs(a - b) for a, b in zip(c[:3], corners[0][:3])) < 40 for c in corners):
         bg = corners[0][:3]
-        data = im.getdata()
+        # Pillow renamed getdata -> get_flattened_data and removes the old name
+        # in 14 (2027-10). This drive has to still work then, so ask for the
+        # new one and fall back, rather than warning at the owner every run.
+        data = (im.get_flattened_data() if hasattr(im, "get_flattened_data")
+                else im.getdata())
         keyed = []
         for r, g, b, a in data:
             dist = abs(r - bg[0]) + abs(g - bg[1]) + abs(b - bg[2])
@@ -155,7 +159,8 @@ def make_icns(logo: Path, out: Path, size: int = 1024) -> Path:
                 keyed.append((r, g, b, int(a * (dist - 60) / 80)))
             else:
                 keyed.append((r, g, b, a))
-        im.putdata(keyed)
+        putdata = getattr(im, "put_flattened_data", None) or im.putdata
+        putdata(keyed)
 
     im = im.resize((size, size), Image.LANCZOS)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -261,19 +266,27 @@ def provision(volume: Path, name: str, rename: bool, force: bool,
     else:
         warn("no logo found to make the icon from")
 
-    # 5. name
+    # 5. name. A rename moves the mount point, so everything printed after it
+    # must use the NEW path — telling the owner to open a folder that no
+    # longer exists is how a working drive looks broken.
+    here = volume
     if rename and platform.system() == "Darwin" and volume.name != name:
         r = subprocess.run(["diskutil", "rename", str(volume), name],
                            capture_output=True, text=True)
         if r.returncode == 0:
-            ok(f"renamed the volume to '{name}' — it is now at /Volumes/{name}")
+            moved = volume.parent / name
+            here = moved if moved.is_dir() else volume
+            ok(f"renamed the volume to '{name}' — it is now at {here}")
         else:
             warn(f"couldn't rename: {r.stderr.strip()[:120]}")
     elif rename and platform.system() != "Darwin":
         warn("renaming needs a Mac (diskutil)")
 
-    say(f"\n  Done. Open {volume}/Self-Cloud/ and double-click "
+    say(f"\n  Done. Open {here}/Self-Cloud/ and double-click "
         f"Start Self-Cloud.command.\n")
+    say(f"  Next, in Terminal, so we can encrypt it:\n"
+        f"    diskutil info {str(here).replace(' ', chr(92) + ' ')} | "
+        f"grep -i 'personality\\|encrypted'\n")
     return info
 
 
