@@ -1,7 +1,21 @@
-# Jeffrey – Local Butler AI
+# JEFFEREY — Personal AI Shadow
 
-**Author:** Laszlo Czako  
-**Status:** Early MVP – Concept + reference implementation
+**Author / sole inventor:** Laszlo Czako
+**Status:** working connector, installable by double-click, adversarially audited
+
+> **Owner: read [`START_HERE.md`](START_HERE.md).** Preparing the drive,
+> installing, your photographs, your voice, and seeing what left the house —
+> in order, one double-click each.
+> Engineers and agents: [`HANDOVER.md`](HANDOVER.md) and
+> [`docs/MASTER_BUILD_LIST.md`](docs/MASTER_BUILD_LIST.md).
+
+*The intelligence is rented. The conscience is owned.*
+
+---
+
+## The original concept note (2025)
+
+**Status then:** Early MVP – Concept + reference implementation
 
 Jeffrey is a **local, on-device AI butler** designed to run on your own computer, with:
 

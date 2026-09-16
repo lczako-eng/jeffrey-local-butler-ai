@@ -52,9 +52,17 @@ from interview import Interview
 from rules import ConscienceRules
 from reminisce import Reminisce
 import access
+import egress
 from access import gate, owner_only
 
 mcp = _Server("jefferey")
+
+
+def door(register):
+    """The egress door around an MCP tool. Refusals come back as a RESULT the
+    model must report, because the MCP SDK reduces any exception raised in a
+    tool to 'Error executing tool <name>' and the reason would be lost."""
+    return egress.door(register, as_result=True)
 conscience = Conscience()
 rep = Representative(conscience)
 guard = Guardian(conscience)
@@ -69,11 +77,16 @@ album = Reminisce(conscience, life)
 # below that touches the owner's data is gated against the key it carries.
 access.bind(cloud)
 
+# THE EGRESS DOOR. Every tool below is registered with `@door(mcp.tool())`,
+# so its result passes egress.release() — allowlisted, scanned, logged word
+# for word — before the host model ever sees it. There is no other path out.
+egress.bind("mcp")
+
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
 
 # ---------------------------------------------------------------- identity
-@mcp.tool()
+@door(mcp.tool())
 def get_directives() -> str:
     """Load the Jefferey Directive Pack: the identity, mission, and operating
     rules the host model must adopt to BE Jefferey. Call this first in every
@@ -81,7 +94,7 @@ def get_directives() -> str:
     return DIRECTIVES
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.read")
 def get_conscience() -> dict:
     """Read the full conscience: the user's priority hierarchy (with
@@ -91,7 +104,7 @@ def get_conscience() -> dict:
 
 
 # ---------------------------------------------------------------- learning
-@mcp.tool()
+@door(mcp.tool())
 @gate("priorities.write")
 def record_correction(
     context: str,
@@ -112,7 +125,7 @@ def record_correction(
     )
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("priorities.write")
 def set_priority(context: str, higher: str, lower: str, confidence: float = 0.6) -> dict:
     """The user explicitly stated a priority (e.g. context='travel',
@@ -122,7 +135,7 @@ def set_priority(context: str, higher: str, lower: str, confidence: float = 0.6)
     return conscience.set_priority(context, higher, lower, confidence)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.write")
 def remember_fact(fact: str, category: str = "general") -> dict:
     """Remember a durable FACT about the user (people, dates, situations,
@@ -131,7 +144,7 @@ def remember_fact(fact: str, category: str = "general") -> dict:
     return conscience.remember_fact(fact, category)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.write")
 def forget(contains: str) -> dict:
     """Delete every remembered fact containing this text. The user's right
@@ -141,7 +154,7 @@ def forget(contains: str) -> dict:
 
 
 # ---------------------------------------------------------------- representing
-@mcp.tool()
+@door(mcp.tool())
 @gate("priorities.read")
 def explain_basis(topic: str) -> dict:
     """Before recommending anything, fetch the user's OWN priorities and
@@ -153,7 +166,7 @@ def explain_basis(topic: str) -> dict:
     return conscience.explain_basis(topic)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("priorities.read")
 def priorities_for(context: str = "") -> list:
     """List the user's learned priority hierarchy, highest confidence first,
@@ -162,7 +175,7 @@ def priorities_for(context: str = "") -> list:
 
 
 # ---------------------------------------------------------------- goals
-@mcp.tool()
+@door(mcp.tool())
 @gate("goals.write")
 def add_goal(goal: str) -> dict:
     """Register a long-term goal the user has approved (e.g. 'reduce monthly
@@ -171,7 +184,7 @@ def add_goal(goal: str) -> dict:
     return conscience.add_goal(goal)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("goals.write")
 def close_goal(contains: str) -> dict:
     """Mark active goals containing this text as done/retired."""
@@ -179,7 +192,7 @@ def close_goal(contains: str) -> dict:
 
 
 # ---------------------------------------------------------------- operational AI
-@mcp.tool()
+@door(mcp.tool())
 @owner_only
 def set_permission(category: str, level: str, cap: float | None = None) -> dict:
     """ONLY when the user explicitly grants or changes authority, in their own
@@ -190,7 +203,7 @@ def set_permission(category: str, level: str, cap: float | None = None) -> dict:
     return conscience.set_permission(category, level, cap)
 
 
-@mcp.tool()
+@door(mcp.tool())
 def authorize_action(category: str, description: str, amount: float | None = None) -> dict:
     """THE gate. Call before doing anything in the real world on the user's
     behalf. Returns allowed true/false with the reason. If denied, recommend
@@ -198,7 +211,7 @@ def authorize_action(category: str, description: str, amount: float | None = Non
     return conscience.authorize_action(category, description, amount)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.write")
 def log_action(category: str, description: str, outcome: str, amount: float | None = None) -> dict:
     """Write down an act just performed on the user's behalf. No silent
@@ -206,7 +219,7 @@ def log_action(category: str, description: str, outcome: str, amount: float | No
     return conscience.log_action(category, description, outcome, amount)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.read")
 def action_log(limit: int = 20) -> list:
     """The audit trail: recent acts, denials, and permission changes,
@@ -215,7 +228,7 @@ def action_log(limit: int = 20) -> list:
 
 
 # ---------------------------------------------------------------- opportunity engine
-@mcp.tool()
+@door(mcp.tool())
 @gate("goals.write")
 def log_observation(note: str, category: str = "general") -> dict:
     """Note something observed that might matter later (a price change, a
@@ -224,7 +237,7 @@ def log_observation(note: str, category: str = "general") -> dict:
     return conscience.log_observation(note, category)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("goals.read")
 def record_opportunity(
     what: str,
@@ -244,7 +257,7 @@ def record_opportunity(
     )
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("goals.write")
 def resolve_opportunity(contains: str, outcome: str = "done") -> dict:
     """Close pending opportunities containing this text (acted on, declined,
@@ -252,7 +265,7 @@ def resolve_opportunity(contains: str, outcome: str = "done") -> dict:
     return {"resolved": conscience.resolve_opportunity(contains, outcome)}
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.read")
 def daily_brief() -> dict:
     """One screen: the orb's current mood (the engine's real state), active
@@ -261,7 +274,7 @@ def daily_brief() -> dict:
     return conscience.daily_brief()
 
 
-@mcp.tool()
+@door(mcp.tool())
 def orb_state() -> dict:
     """The predictive cycle: the mood the orb should show right now —
     protective (risk found), charged (interrupt-worthy opportunity), curious
@@ -273,7 +286,7 @@ def orb_state() -> dict:
 # ---------------------------------------------------------------- representative
 # Correspondence and paperwork, done in the user's interest. Jefferey rides
 # the host's own mail/file connectors; these tools supply the representation.
-@mcp.tool()
+@door(mcp.tool())
 @gate("priorities.read")
 def triage_message(sender: str, subject: str, body: str) -> dict:
     """Read an incoming message the way a good friend would: what does it
@@ -286,7 +299,7 @@ def triage_message(sender: str, subject: str, body: str) -> dict:
     return rep.triage_message(sender, subject, body)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("priorities.read")
 def draft_guidance(purpose: str, recipient: str = "") -> dict:
     """Call BEFORE writing anything in the user's name (an email, a letter,
@@ -297,7 +310,7 @@ def draft_guidance(purpose: str, recipient: str = "") -> dict:
     return rep.draft_guidance(purpose, recipient)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.read")
 def fill_form(fields: list) -> dict:
     """Given the field labels on a form (HTML, PDF, or paper), return what
@@ -307,13 +320,13 @@ def fill_form(fields: list) -> dict:
     return rep.fill_form([str(f) for f in fields])
 
 
-@mcp.tool()
+@door(mcp.tool())
 def pdf_form_fields(pdf_path: str) -> dict:
     """List the fillable field names in a PDF form. Feed them to fill_form."""
     return rep.pdf_form_fields(pdf_path)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.read")
 def fill_pdf(pdf_path: str, values: dict, out_path: str = "") -> dict:
     """Write values into a PDF form, saving a NEW file — the user's original
@@ -322,7 +335,7 @@ def fill_pdf(pdf_path: str, values: dict, out_path: str = "") -> dict:
     return rep.fill_pdf(pdf_path, {str(k): str(v) for k, v in values.items()}, out_path)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("vault.names")
 def vault_status() -> dict:
     """Where the user's secrets live (their platform keychain — Apple
@@ -334,7 +347,7 @@ def vault_status() -> dict:
     return rep.vault_status()
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.write")
 def set_profile_field(field: str, value: str) -> dict:
     """Store one identity detail Jefferey may reuse on forms (name, address,
@@ -343,14 +356,14 @@ def set_profile_field(field: str, value: str) -> dict:
     return rep.set_profile_field(field, value)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.read")
 def get_profile() -> dict:
     """Everything Jefferey can put on a form for this user. They own all of it."""
     return rep.get_profile()
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.write")
 def forget_profile_field(field: str) -> dict:
     """Delete one profile detail. The right to erase is absolute."""
@@ -360,7 +373,7 @@ def forget_profile_field(field: str) -> dict:
 # ---------------------------------------------------------------- guardian
 # Money that leaves without asking. Jefferey never moves money — he catches
 # what moved, proves it, and helps the user get it back.
-@mcp.tool()
+@door(mcp.tool())
 @gate("money.write")
 def expect_charge(merchant: str, amount: float, cadence: str = "monthly",
                   authorized_recurring: bool = True, note: str = "") -> dict:
@@ -371,7 +384,7 @@ def expect_charge(merchant: str, amount: float, cadence: str = "monthly",
     return guard.expect_charge(merchant, amount, cadence, authorized_recurring, note)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("money.write")
 def mark_cancelled(merchant: str, on: str = "") -> dict:
     """The user cancelled something. Record it — any charge after this date
@@ -379,7 +392,7 @@ def mark_cancelled(merchant: str, on: str = "") -> dict:
     return guard.mark_cancelled(merchant, on)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("money.read")
 def check_charge(merchant: str, amount: float, date: str = "") -> dict:
     """Hold one charge up against what the user agreed to. Returns a verdict:
@@ -390,7 +403,7 @@ def check_charge(merchant: str, amount: float, date: str = "") -> dict:
     return guard.check_charge(merchant, amount, date)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("money.read")
 def review_statement(charges: list) -> dict:
     """Run a whole statement or transaction list through at once — each entry
@@ -399,14 +412,14 @@ def review_statement(charges: list) -> dict:
     return guard.review_statement([dict(c) for c in charges])
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("money.read")
 def expected_charges() -> list:
     """What the user has agreed to pay, and what they've cancelled."""
     return guard.expected_charges()
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("money.read")
 def dispute_pack(merchant: str) -> dict:
     """Assemble everything needed to get money back from one merchant: what
@@ -418,7 +431,7 @@ def dispute_pack(merchant: str) -> dict:
 # ---------------------------------------------------------------- the life layer
 # The Digital Conscience proper: who this person IS, so Jefferey can
 # represent them now and tell their story later.
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.write")
 def add_person(name: str, relationship: str, notes: str = "",
                important_dates: str = "") -> dict:
@@ -427,7 +440,7 @@ def add_person(name: str, relationship: str, notes: str = "",
     return life.add_person(name, relationship, notes, important_dates)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.write")
 def add_memory(text: str, when: str = "", people: str = "", tags: str = "",
                visibility: str = "private") -> dict:
@@ -439,7 +452,7 @@ def add_memory(text: str, when: str = "", people: str = "", tags: str = "",
     return life.add_memory(text, when, people, tags, visibility)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.write")
 def add_media(path: str, caption: str = "", when: str = "", people: str = "",
               visibility: str = "private") -> dict:
@@ -449,7 +462,7 @@ def add_media(path: str, caption: str = "", when: str = "", people: str = "",
     return life.add_media(path, caption, when, people, visibility)
 
 
-@mcp.tool()
+@door(mcp.tool())
 def who_am_i() -> dict:
     """What Jefferey understands about this person as a human being: the
     people who matter, the moments recorded, the pictures, and what they
@@ -460,7 +473,7 @@ def who_am_i() -> dict:
     return life.who_am_i(access.ceiling())
 
 
-@mcp.tool()
+@door(mcp.tool())
 def tell_story(theme: str = "") -> dict:
     """Gather what's needed to tell a piece of this person's story — for them
     now, or for the people they named, later. Tell it in their voice, in
@@ -471,7 +484,7 @@ def tell_story(theme: str = "") -> dict:
     return life.tell_story(access.ceiling(), theme)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.read")
 def story_gaps() -> dict:
     """What's missing from their story, so you can gently ask for it while
@@ -480,7 +493,7 @@ def story_gaps() -> dict:
     return life.story_gaps()
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.write")
 def forget_life(contains: str) -> dict:
     """Erase anything in the life layer matching this text — people, moments,
@@ -489,7 +502,7 @@ def forget_life(contains: str) -> dict:
 
 
 # ---------------------------------------------------------------- the album
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.read")
 def next_story_prompt() -> dict:
     """ONE moment from their photographs nobody has asked about — a count, a
@@ -500,7 +513,7 @@ def next_story_prompt() -> dict:
     return album.next_prompt()
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.write")
 def record_story(moment_id: str, text: str, people: str = "", when: str = "",
                  visibility: str = "private") -> dict:
@@ -510,14 +523,14 @@ def record_story(moment_id: str, text: str, people: str = "", when: str = "",
     return album.record(moment_id, text, people, when, visibility)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.write")
 def decline_story(moment_id: str) -> dict:
     """They'd rather not. Final — that moment is never offered again."""
     return album.decline(moment_id)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.read")
 def story_progress() -> dict:
     """How much of the album has been talked about: untold / told / declined."""
@@ -527,7 +540,7 @@ def story_progress() -> dict:
 # ---------------------------------------------------------------- self-cloud
 # Self-Cloud is the OWNER'S vault. Jefferey is a caretaker holding a key they
 # granted and can take back — not the owner of it.
-@mcp.tool()
+@door(mcp.tool())
 def selfcloud_status() -> dict:
     """Who currently holds a key to this person's Self-Cloud, what has been
     revoked, and any recent refusals. Show this whenever they ask who can see
@@ -535,7 +548,7 @@ def selfcloud_status() -> dict:
     return cloud.status()
 
 
-@mcp.tool()
+@door(mcp.tool())
 def selfcloud_grants() -> dict:
     """Every key to the Self-Cloud in full — client, scopes, and when it was
     granted or revoked — plus every scope that exists. Written to be read by
@@ -543,7 +556,7 @@ def selfcloud_grants() -> dict:
     return cloud.grants()
 
 
-@mcp.tool()
+@door(mcp.tool())
 @owner_only
 def selfcloud_grant(client: str, scopes: list | None = None, label: str = "",
                     note: str = "") -> dict:
@@ -555,7 +568,7 @@ def selfcloud_grant(client: str, scopes: list | None = None, label: str = "",
     return cloud.grant(client, list(scopes) if scopes else None, label, note)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @owner_only
 def selfcloud_add_scope(client: str, scope: str) -> dict:
     """Widen one key by exactly one scope — only when the owner says so.
@@ -563,27 +576,27 @@ def selfcloud_add_scope(client: str, scope: str) -> dict:
     return cloud.add_scope(client, scope)
 
 
-@mcp.tool()
+@door(mcp.tool())
 def selfcloud_remove_scope(client: str, scope: str) -> dict:
     """Narrow a key by one scope, at the owner's word."""
     return cloud.remove_scope(client, scope)
 
 
-@mcp.tool()
+@door(mcp.tool())
 def selfcloud_revoke(client: str) -> dict:
     """Kill a key completely. Instant and total; the record that it existed
     stays. Never argue with a revocation — including your own."""
     return cloud.revoke(client)
 
 
-@mcp.tool()
+@door(mcp.tool())
 def selfcloud_check_access(client: str, scope: str) -> dict:
     """Would this client be allowed this scope? Deny by default. Use it to
     answer 'can ChatGPT see my photos?' truthfully rather than from memory."""
     return cloud.check_access(client, scope)
 
 
-@mcp.tool()
+@door(mcp.tool())
 def selfcloud_access_log(limit: int = 30) -> list:
     """Who asked for what, and what happened. The owner's audit trail."""
     return cloud.access_log(limit)
@@ -592,7 +605,7 @@ def selfcloud_access_log(limit: int = 30) -> list:
 # ---------------------------------------------------------------- the interview
 # How the conscience actually gets built: not a form — a friendship, one
 # question at a time, at a depth that has been earned.
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.read")
 def next_question(domain: str = "") -> dict:
     """Get ONE question to weave into the conversation — never a list, never
@@ -602,7 +615,7 @@ def next_question(domain: str = "") -> dict:
     return interview.next_question(domain)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.write")
 def record_answer(question_id: str, answer: str = "", declined: bool = False,
                   visibility: str = "private") -> dict:
@@ -613,7 +626,7 @@ def record_answer(question_id: str, answer: str = "", declined: bool = False,
     return interview.record_answer(question_id, answer, declined, visibility)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("life.read")
 def interview_progress() -> dict:
     """What you know, what's still missing, and what depth you have earned
@@ -625,7 +638,7 @@ def interview_progress() -> dict:
 # ---------------------------------------------------------------- conscience rules
 # Storage is total; the conscience is curated — and over it, the owner writes
 # the rules for how Jefferey carries them. Silence is a no.
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.write")
 def conscience_include(ref: str, note: str = "") -> dict:
     """The owner chose to let something from Self-Cloud INTO their Digital
@@ -634,7 +647,7 @@ def conscience_include(ref: str, note: str = "") -> dict:
     return rules.include(ref, note)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.write")
 def conscience_exclude(contains: str) -> dict:
     """Take something back out of the conscience. It stays on Self-Cloud;
@@ -642,7 +655,7 @@ def conscience_exclude(contains: str) -> dict:
     return rules.exclude(contains)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.write")
 def set_rule(kind: str, tags: str, instruction: str, audience: str = "me",
              allow: bool = True) -> dict:
@@ -655,21 +668,21 @@ def set_rule(kind: str, tags: str, instruction: str, audience: str = "me",
     return rules.set_rule(kind, tags, instruction, audience, allow)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.write")
 def remove_rule(rule_id_or_text: str) -> dict:
     """Delete a rule by id or by text it contains. Never argued with."""
     return rules.remove_rule(rule_id_or_text)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.read")
 def list_rules(kind: str = "") -> list:
     """Every standing rule the owner has written, in plain language."""
     return rules.rules(kind)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.read")
 def check_disclosure(audience: str, tags: str) -> dict:
     """Call BEFORE saying anything about the owner to anyone who is not them.
@@ -679,13 +692,24 @@ def check_disclosure(audience: str, tags: str) -> dict:
     return rules.check_disclosure(audience, tags)
 
 
-@mcp.tool()
+@door(mcp.tool())
 @gate("facts.read")
 def guidance_for(tags: str, audience: str = "me") -> dict:
     """The owner's standing instructions that apply right now: how to react
     when speaking WITH them about this, or how to speak ABOUT them to someone
     else. Returned verbatim — follow their words, not your paraphrase."""
     return rules.guidance_for(tags, audience)
+
+
+# ---------------------------------------------------------------- the egress door
+@door(mcp.tool())
+@gate("facts.read")
+def what_left_the_house(days: int = 7) -> dict:
+    """What JEFFEREY has handed to rented engines: how many sends, to whom,
+    which tools, how many were refused at the door, and whether the door is
+    open or shut. Counts and destinations only — the owner reads every send
+    word for word on their own machine ('What left the house.command')."""
+    return egress.summary(days)
 
 
 if __name__ == "__main__":

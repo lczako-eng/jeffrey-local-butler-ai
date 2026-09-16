@@ -39,7 +39,9 @@ from interview import Interview
 from rules import ConscienceRules
 from reminisce import Reminisce
 import access
+import egress
 from access import AccessDenied, OwnerOnly
+from egress import EgressRefused
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 4096
@@ -61,6 +63,12 @@ album = Reminisce(conscience, life)
 os.environ.setdefault("JEFFEREY_CLIENT", "jefferey")
 os.environ.setdefault("JEFFEREY_OWNER_CONSOLE", "1")
 access.bind(cloud, announce=False)
+
+# THE EGRESS DOOR. This terminal is the one surface that calls the engine
+# itself, so it is where the door is most literal: the system prompt, what
+# the owner types, every tool result, and a receipt for every call all pass
+# through egress before the SDK sees a byte.
+egress.bind("chat", engine=f"Anthropic ({MODEL})")
 
 
 # --------------------------------------------------------------------- tools
@@ -859,24 +867,40 @@ TOOLS = [
             "required": ["field"],
         },
     },
+    {
+        "name": "what_left_the_house",
+        "description": (
+            "What JEFFEREY has handed to rented engines: sends, destinations, "
+            "tools, refusals at the door, and whether the door is open. Counts "
+            "only — the owner reads every send word for word on their own machine."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"days": {"type": "integer", "default": 7}},
+        },
+    },
 ]
 
 
 def dispatch_tool(name: str, args: dict) -> dict | list:
-    """Route a tool call from the engine into the owned store — through the
-    door. A refusal comes back as a result the model must report, not as a
-    crash and not as something it can retry differently."""
+    """Route a tool call from the engine into the owned store — through BOTH
+    doors: the access gate on the way in, the egress door on the way out. A
+    refusal comes back as a result the model must report, not as a crash and
+    not as something it can retry differently."""
     try:
         if name in access.OWNER_ONLY_TOOLS:
             access.owner_only(lambda: None)()
         scope = access.TOOL_SCOPES.get(name)
         if scope:
             access.GATE.require(scope)
-        return _dispatch_tool(name, args)
+        egress.admit(name, args)                       # what the engine hands in
+        return egress.release(name, _dispatch_tool(name, args), asked=args)  # what goes out
     except (AccessDenied, OwnerOnly) as e:
         return {"refused": True, "tool": name, "reason": str(e),
                 "tell_the_user": "Say plainly that this is not something your "
                                  "key permits, and do not attempt it another way."}
+    except EgressRefused as e:
+        return egress.refusal_result(name, e)
 
 
 def _dispatch_tool(name: str, args: dict) -> dict | list:
@@ -1028,6 +1052,8 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
         return rules.check_disclosure(args["audience"], args["tags"])
     if name == "guidance_for":
         return rules.guidance_for(args["tags"], args.get("audience", "me"))
+    if name == "what_left_the_house":
+        return egress.summary(int(args.get("days", 7)))
     raise ValueError(f"unknown tool: {name}")
 
 
@@ -1167,6 +1193,10 @@ _TRACE = {
         f"forgot {r.get('memories_removed',0)} moment(s), "
         f"{r.get('media_removed',0)} picture(s), {r.get('people_removed',0)} person/people"
     ),
+    "what_left_the_house": lambda a, r: (
+        f"{r.get('sends', 0)} send(s) left the house since {r.get('since')}, "
+        f"{r.get('refused', 0)} refused at the door · door {r.get('door')}"
+    ),
 }
 
 
@@ -1193,13 +1223,18 @@ def run_turn(client, history: list) -> None:
     """One user turn: stream Jefferey's reply, executing conscience tools
     until the engine ends its turn."""
     while True:
-        with client.messages.stream(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=system_prompt(),
-            tools=TOOLS,
-            messages=history,
-        ) as stream:
+        # Through the door, in this order: the system prompt (logged when it
+        # changes), then the receipt for this exact call. Tool results were
+        # released one by one as they were produced (dispatch_tool); what the
+        # owner typed was released in chat() before it joined the history.
+        payload = egress.request({
+            "model": MODEL,
+            "max_tokens": MAX_TOKENS,
+            "system": egress.system_prompt_once(system_prompt()),
+            "tools": TOOLS,
+            "messages": history,
+        }, MODEL)
+        with client.messages.stream(**payload) as stream:
             started = False
             for event in stream:
                 if event.type == "content_block_delta" and event.delta.type == "text_delta":
@@ -1275,12 +1310,19 @@ def chat(once: str | None = None) -> None:
         f"learned from {snap['corrections_learned_from']} corrections{RESET}"
     )
 
+    print(f"{DIM}egress: {'SHUT — nothing will leave' if egress.is_shut() else 'open'} · "
+          f"log: {egress.log_path()}{RESET}")
+
     if once is not None:
-        history.append({"role": "user", "content": once})
-        run_turn(client, history)
+        try:
+            history.append({"role": "user", "content": egress.release_text("you_said", once)})
+            run_turn(client, history)
+        except EgressRefused as e:
+            print(f"{DIM}(kept in the house: {e}){RESET}")
         return
 
-    print(f"{DIM}/conscience shows the store · /quit leaves (he keeps what he learned){RESET}\n")
+    print(f"{DIM}/conscience shows the store · /egress shows what left the house · "
+          f"/quit leaves (he keeps what he learned){RESET}\n")
     while True:
         try:
             user = input(f"{BOLD}You{RESET} ").strip()
@@ -1295,9 +1337,22 @@ def chat(once: str | None = None) -> None:
         if user.lower() == "/conscience":
             print(json.dumps(conscience.snapshot(), indent=2, ensure_ascii=False))
             continue
-        history.append({"role": "user", "content": user})
+        if user.lower() in ("/egress", "/left", "/what left the house"):
+            print(egress.report(7))
+            continue
+        try:
+            history.append({"role": "user", "content": egress.release_text("you_said", user)})
+        except EgressRefused as e:
+            # The owner typed something that must not reach a rented engine.
+            # It never joins the history, so it can never be sent later either.
+            print(f"{DIM}(kept in the house — {e}){RESET}")
+            continue
         try:
             run_turn(client, history)
+        except EgressRefused as e:
+            print(f"{DIM}(the door is shut: {e}){RESET}")
+            if history and history[-1]["role"] == "user" and isinstance(history[-1]["content"], str):
+                history.pop()
         except Exception as e:
             # Never lose the session to a transient engine error.
             print(f"{DIM}(engine error: {e} — your conscience is untouched; try again){RESET}")
@@ -1328,6 +1383,13 @@ def selftest() -> None:
         rules = ConscienceRules(conscience)
         album = Reminisce(conscience, life, Path(td) / "no-index-here")
         access.bind(cloud, "jefferey", announce=False)
+        # ...and the egress log is exactly as private as the conscience: a
+        # self-test writes its sends into the same throwaway directory.
+        import home
+        os.environ["JEFFEREY_EGRESS"] = str(Path(td) / "egress.jsonl")
+        os.environ["JEFFEREY_DOOR"] = str(Path(td) / "door-shut")
+        os.environ.pop("JEFFEREY_OFFLINE", None)
+        home.reset_for_tests()
 
         # 1. Every declared tool dispatches.
         for tool in TOOLS:
@@ -1411,10 +1473,44 @@ def selftest() -> None:
                 "list_rules": {},
                 "check_disclosure": {"audience": "anyone", "tags": "health"},
                 "guidance_for": {"tags": "father"},
+                "what_left_the_house": {},
             }[name]
             out = dispatch_tool(name, sample)
             assert out is not None, name
+            assert not (isinstance(out, dict) and out.get("refused")), (name, out)
             print(f"  ✓ {name}")
+
+        # 1b. Every tool this terminal offers has a release list, so nothing
+        #     it can return leaves the house unfiltered — and every release
+        #     list names a tool that exists on some surface.
+        names = {t["name"] for t in TOOLS}
+        missing = names - set(egress.RELEASE)
+        assert not missing, f"tools with no egress allowlist: {sorted(missing)}"
+        mcp_only = {"get_directives", "get_conscience"}
+        orphans = set(egress.RELEASE) - names - mcp_only
+        assert not orphans, f"release lists for tools that do not exist: {sorted(orphans)}"
+        scoped = set(access.TOOL_SCOPES) - names - mcp_only
+        assert not scoped, f"scopes for tools that do not exist: {sorted(scoped)}"
+        print(f"  ✓ every one of {len(names)} tools has a release list; none is orphaned")
+
+        # 1c. Every dispatch above went through the door and was logged.
+        logged = {e["tool"] for e in egress.entries() if e.get("kind") == "tool_result"}
+        assert names <= logged, f"dispatched but never logged: {sorted(names - logged)}"
+        print("  ✓ every tool result passed the egress door and is in the log")
+
+        # 1d. Both directions, end to end: the engine tries to store a card
+        #     number → refused before the write, nothing in the conscience,
+        #     nothing in the log but the reason; and the aggregate tools keep
+        #     working afterwards because nothing was poisoned.
+        r = dispatch_tool("remember_fact", {"fact": "my visa is 4111 1111 1111 1111"})
+        assert r.get("refused") and "4111" not in json.dumps(r)
+        assert "4111" not in json.dumps(conscience.data)
+        assert "4111" not in Path(os.environ["JEFFEREY_EGRESS"]).read_text()
+        assert not dispatch_tool("who_am_i", {}).get("refused")
+        # store_path never leaves; the owner's terminal still shows it locally
+        assert "store_path" not in dispatch_tool("daily_brief", {})
+        print("  ✓ a secret from the engine never reaches the conscience or the log,")
+        print("    and the aggregate tools are not poisoned by the attempt")
 
         # 2. Reinforcement: same correction again raises confidence.
         before = conscience.priorities_for("travel")[0]["confidence"]

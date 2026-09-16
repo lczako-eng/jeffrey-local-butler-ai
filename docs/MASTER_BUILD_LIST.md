@@ -47,8 +47,9 @@ Every item here has code in `connector/` or `tools/` and is covered by
 |---|---|
 | Self-Cloud grants | per-client keys with presets, deny by default, full audit, instant revocation |
 | Access gate | identity bound per process, `@gate(scope)` on every data tool, **no model-chosen visibility**, widening requires the owner's console, narrowing never does |
-| MCP surface | 59 tools for Claude Desktop / Claude Code |
-| HTTP surface | 57 operations for Custom GPT Actions, per-client bearer tokens |
+| **Egress door** (2026-09-16) | `connector/egress.py`. One way out: every tool on every surface is registered *through* the door, so a tool with no entry in the release list sends nothing. Per-tool **field allowlist** (fails closed), a hard scan that refuses the whole result on a card / SIN / SSN / password / API key, **the same scan on what the engine hands in** (a secret never reaches the conscience), an append-only log written and fsynced *before* anything leaves (no log, no send), a shut switch (`door-shut` file, `JEFFEREY_OFFLINE=1`, or `python connector/egress.py shut`), and the owner's report: `What left the house.command` / `what_left_the_house` tool / `/egress` in the terminal |
+| MCP surface | 64 tools for Claude Desktop / Claude Code — every one through the door; refusals come back as results because the MCP SDK swallows exceptions |
+| HTTP surface | 62 operations for Custom GPT Actions, per-client bearer tokens — every one through the door; a refusal is a 403 naming a field, never a value |
 | Chat surface | `jefferey_chat.py` — the owner's own terminal, streaming, tool-use loop |
 | Installer | `Install JEFFEREY.command` — double-click; refuses to connect if the self-test fails; `--check`, `--uninstall` |
 
@@ -76,8 +77,8 @@ Order matters here. These are the things that make it safe to keep going.
 
 | # | What | Why it's first | Effort |
 |---|---|---|---|
-| 1.1 | **The egress door** — one function every outbound call passes through, field **allowlist** (fails closed; redaction fails open), full egress log | The two-trust-zone model has no code behind it. Right now nothing stands between the conscience and a cloud model | 1 day |
-| 1.2 | **"Show me what left the house"** — a readable log of exactly what was sent, to whom, when, and why | The one report that makes the privacy claim checkable instead of promised | hours |
+| 1.1 | ~~**The egress door**~~ → ✅ **BUILT 2026-09-16.** `connector/egress.py`; every surface registers its tools through it; allowlist fails closed; secrets refused in both directions; nothing leaves unlogged; shut switch. 18 checks of its own + 5 in the connector self-test | The two-trust-zone model now has code behind it | done |
+| 1.2 | ~~**"Show me what left the house"**~~ → ✅ **BUILT 2026-09-16.** `What left the house.command`, `python connector/egress.py report [--all] [--full]`, the `what_left_the_house` tool (counts and destinations only), `/egress` in the owner's terminal | The privacy claim is now checkable, word for word, on the owner's own drive | done |
 | 1.3 | **Split the Constitution** — `public-charter.md` (safe for any engine) vs `private-boundaries.md` (never leaves) | The list of what must never leave is currently injected into every session. It's the most sensitive file in the system and it goes out first | hours |
 | 1.4 | **Conscience cleaner** — find and remove junk written by old self-tests | A live store already has three stray "Laszlo" memories and a revoked key from 2026-09-09 | hours |
 | 1.5 | **Backup verifier** — enforce two copies + a verified restore in software; refuse to say "safe to cancel iCloud" until both pass | The owner's own standing rule, currently only prose | 1 day |
@@ -314,8 +315,10 @@ owner-controlled system on the laptop.
 2. **4.1b — start the tapes.** Owner. Buy the capture stick, find a deck, begin
    with the oldest. This is now the only item on the list where waiting can make
    it impossible — tape sheds, and capture is real-time.
-3. **1.1 + 1.2 — the egress door and the "what left the house" log.** Mine.
-   The last structural hole; everything downstream sends more data, not less.
+3. ~~**1.1 + 1.2 — the egress door and the "what left the house" log.**~~
+   ✅ Built 2026-09-16. The next structural item on this side is **1.3, split
+   the Constitution** — the list of what must never leave is still the first
+   thing that leaves — and then **1.4, the conscience cleaner.**
 
 *(Voice enrolment for a living person, formerly item 3, is still built next for
 his own voice — but the closing window moved to the tapes.)*

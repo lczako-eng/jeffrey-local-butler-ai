@@ -25,6 +25,8 @@ Explicit environment variables always win:
     SELFCLOUD_INDEX            the photo index directory
     SELFCLOUD_VOICE            voice recordings
     SELFCLOUD_DISCS            archived discs
+    JEFFEREY_EGRESS            the egress log (what left the house)
+    JEFFEREY_DOOR              the door-shut switch file
 """
 
 from __future__ import annotations
@@ -122,6 +124,18 @@ def voice_path() -> Path:
 
 def discs_path() -> Path:
     return _pick("SELFCLOUD_DISCS", "discs", "~/.selfcloud/discs")
+
+
+def egress_path() -> Path:
+    """The egress log: everything that ever left for a rented engine, word
+    for word. Beside the conscience, because it is exactly as private."""
+    return _pick("JEFFEREY_EGRESS", "egress.jsonl", "~/.jefferey/egress.jsonl")
+
+
+def door_switch_path() -> Path:
+    """A file whose mere existence shuts the egress door. The owner can make
+    it by hand on the drive if every other switch has failed them."""
+    return _pick("JEFFEREY_DOOR", "door-shut", "~/.jefferey/door-shut")
 
 
 def describe() -> str:

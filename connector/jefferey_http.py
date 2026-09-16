@@ -47,7 +47,9 @@ from interview import Interview
 from rules import ConscienceRules
 from reminisce import Reminisce
 import access
+import egress
 from access import AccessDenied, OwnerOnly, gate, owner_only
+from egress import EgressRefused, door
 
 conscience = Conscience()
 rep = Representative(conscience)
@@ -94,6 +96,11 @@ TOKENS = _token_map()
 access.bind(cloud)
 access.provision(cloud, set(TOKENS.values()))
 
+# THE EGRESS DOOR. Every route below is registered with `@door(app.…(…))`, so
+# its result passes egress.release() — allowlisted, scanned, logged word for
+# word — before it is serialised to the caller. There is no other path out.
+egress.bind("http")
+
 
 async def require_owner(request: Request) -> None:
     """Every byte in the store is personal. No token, no access — and the
@@ -130,8 +137,15 @@ async def _owner_only(request: Request, exc: OwnerOnly):
     return JSONResponse(status_code=403, content={"detail": str(exc)})
 
 
+@app.exception_handler(EgressRefused)
+async def _withheld(request: Request, exc: EgressRefused):
+    """The door kept it — a secret handed in, or a result that may not leave.
+    The detail names a field or a reason, never a value."""
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
 # ---------------------------------------------------------------- identity
-@app.get("/directives", operation_id="get_directives")
+@door(app.get("/directives", operation_id="get_directives"))
 def get_directives() -> dict:
     """Load the Jefferey Directive Pack: the identity, mission, and operating
     rules the host model must adopt to BE Jefferey. Call this first in every
@@ -139,7 +153,7 @@ def get_directives() -> dict:
     return {"directives": DIRECTIVES}
 
 
-@app.get("/conscience", operation_id="get_conscience")
+@door(app.get("/conscience", operation_id="get_conscience"))
 @gate("facts.read")
 def get_conscience() -> dict:
     """Read the full conscience: the user's priority hierarchy (with
@@ -157,7 +171,7 @@ class CorrectionIn(BaseModel):
     value_traded_away: str = Field(description="e.g. 'lowest price'")
 
 
-@app.post("/corrections", operation_id="record_correction")
+@door(app.post("/corrections", operation_id="record_correction"))
 @gate("priorities.write")
 def record_correction(c: CorrectionIn) -> dict:
     """THE core learning act. The user overrode a recommendation — learn WHY.
@@ -178,7 +192,7 @@ class PriorityIn(BaseModel):
     confidence: float = 0.6
 
 
-@app.post("/priorities", operation_id="set_priority")
+@door(app.post("/priorities", operation_id="set_priority"))
 @gate("priorities.write")
 def set_priority(p: PriorityIn) -> dict:
     """The user explicitly stated a priority (e.g. context='travel',
@@ -193,7 +207,7 @@ class FactIn(BaseModel):
     category: str = "general"
 
 
-@app.post("/facts", operation_id="remember_fact")
+@door(app.post("/facts", operation_id="remember_fact"))
 @gate("facts.write")
 def remember_fact(f: FactIn) -> dict:
     """Remember a durable FACT about the user (people, dates, situations,
@@ -202,7 +216,7 @@ def remember_fact(f: FactIn) -> dict:
     return conscience.remember_fact(f.fact, f.category)
 
 
-@app.delete("/facts", operation_id="forget")
+@door(app.delete("/facts", operation_id="forget"))
 @gate("facts.write")
 def forget(contains: str) -> dict:
     """Delete every remembered fact containing this text. The user's right
@@ -211,7 +225,7 @@ def forget(contains: str) -> dict:
 
 
 # ---------------------------------------------------------------- representing
-@app.get("/basis", operation_id="explain_basis")
+@door(app.get("/basis", operation_id="explain_basis"))
 @gate("priorities.read")
 def explain_basis(topic: str) -> dict:
     """Before recommending anything, fetch the user's OWN priorities and
@@ -222,7 +236,7 @@ def explain_basis(topic: str) -> dict:
     return conscience.explain_basis(topic)
 
 
-@app.get("/priorities", operation_id="priorities_for")
+@door(app.get("/priorities", operation_id="priorities_for"))
 @gate("priorities.read")
 def priorities_for(context: str = "") -> list:
     """List the user's learned priority hierarchy, highest confidence first,
@@ -235,7 +249,7 @@ class GoalIn(BaseModel):
     goal: str
 
 
-@app.post("/goals", operation_id="add_goal")
+@door(app.post("/goals", operation_id="add_goal"))
 @gate("goals.write")
 def add_goal(g: GoalIn) -> dict:
     """Register a long-term goal the user has approved. Goals drive the
@@ -244,7 +258,7 @@ def add_goal(g: GoalIn) -> dict:
     return conscience.add_goal(g.goal)
 
 
-@app.delete("/goals", operation_id="close_goal")
+@door(app.delete("/goals", operation_id="close_goal"))
 @gate("goals.write")
 def close_goal(contains: str) -> dict:
     """Mark active goals containing this text as done/retired."""
@@ -258,7 +272,7 @@ class PermissionIn(BaseModel):
     cap: float | None = Field(default=None, description="spending cap for 'act'")
 
 
-@app.post("/permissions", operation_id="set_permission")
+@door(app.post("/permissions", operation_id="set_permission"))
 @owner_only
 def set_permission(p: PermissionIn) -> dict:
     """ONLY when the user explicitly grants or changes authority, in their
@@ -275,7 +289,7 @@ class ActionAskIn(BaseModel):
     amount: float | None = None
 
 
-@app.post("/actions/authorize", operation_id="authorize_action")
+@door(app.post("/actions/authorize", operation_id="authorize_action"))
 def authorize_action(a: ActionAskIn) -> dict:
     """THE gate. Call before doing anything in the real world on the user's
     behalf. If denied, recommend instead — only the user can raise the
@@ -290,7 +304,7 @@ class ActionLogIn(BaseModel):
     amount: float | None = None
 
 
-@app.post("/actions", operation_id="log_action")
+@door(app.post("/actions", operation_id="log_action"))
 @gate("facts.write")
 def log_action(a: ActionLogIn) -> dict:
     """Write down an act just performed on the user's behalf. No silent
@@ -298,7 +312,7 @@ def log_action(a: ActionLogIn) -> dict:
     return conscience.log_action(a.category, a.description, a.outcome, a.amount)
 
 
-@app.get("/actions", operation_id="action_log")
+@door(app.get("/actions", operation_id="action_log"))
 @gate("facts.read")
 def action_log(limit: int = 20) -> list:
     """The audit trail: recent acts, denials, and permission changes,
@@ -312,7 +326,7 @@ class ObservationIn(BaseModel):
     category: str = "general"
 
 
-@app.post("/observations", operation_id="log_observation")
+@door(app.post("/observations", operation_id="log_observation"))
 @gate("goals.write")
 def log_observation(o: ObservationIn) -> dict:
     """Note something observed that might matter later. Observations feed
@@ -329,7 +343,7 @@ class OpportunityIn(BaseModel):
     urgency: float = 0.5
 
 
-@app.post("/opportunities", operation_id="record_opportunity")
+@door(app.post("/opportunities", operation_id="record_opportunity"))
 @gate("goals.read")
 def record_opportunity(o: OpportunityIn) -> dict:
     """Score a way to make the user's life better against THEIR priorities.
@@ -341,14 +355,14 @@ def record_opportunity(o: OpportunityIn) -> dict:
     )
 
 
-@app.delete("/opportunities", operation_id="resolve_opportunity")
+@door(app.delete("/opportunities", operation_id="resolve_opportunity"))
 @gate("goals.write")
 def resolve_opportunity(contains: str, outcome: str = "done") -> dict:
     """Close pending opportunities containing this text."""
     return {"resolved": conscience.resolve_opportunity(contains, outcome)}
 
 
-@app.get("/brief", operation_id="daily_brief")
+@door(app.get("/brief", operation_id="daily_brief"))
 @gate("facts.read")
 def daily_brief() -> dict:
     """One screen: orb mood, active goals, ranked opportunities, recent
@@ -356,7 +370,7 @@ def daily_brief() -> dict:
     return conscience.daily_brief()
 
 
-@app.get("/orb", operation_id="orb_state")
+@door(app.get("/orb", operation_id="orb_state"))
 def orb_state() -> dict:
     """The predictive cycle: the mood the orb should show right now, and why."""
     return conscience.orb_state()
@@ -369,7 +383,7 @@ class TriageIn(BaseModel):
     body: str
 
 
-@app.post("/triage", operation_id="triage_message")
+@door(app.post("/triage", operation_id="triage_message"))
 @gate("priorities.read")
 def triage_message(t: TriageIn) -> dict:
     """Read an incoming message the way a good friend would: what does it
@@ -385,7 +399,7 @@ class DraftIn(BaseModel):
     recipient: str = ""
 
 
-@app.post("/draft-guidance", operation_id="draft_guidance")
+@door(app.post("/draft-guidance", operation_id="draft_guidance"))
 @gate("priorities.read")
 def draft_guidance(d: DraftIn) -> dict:
     """Call BEFORE writing anything in the user's name. Returns their voice,
@@ -398,7 +412,7 @@ class FormIn(BaseModel):
     fields: list[str]
 
 
-@app.post("/forms/fill", operation_id="fill_form")
+@door(app.post("/forms/fill", operation_id="fill_form"))
 @gate("facts.read")
 def fill_form(f: FormIn) -> dict:
     """Given a form's field labels, return what Jefferey can fill from the
@@ -407,7 +421,7 @@ def fill_form(f: FormIn) -> dict:
     return rep.fill_form(f.fields)
 
 
-@app.get("/vault", operation_id="vault_status")
+@door(app.get("/vault", operation_id="vault_status"))
 @gate("vault.names")
 def vault_status() -> dict:
     """Where the user's secrets live (their platform keychain) and which
@@ -421,7 +435,7 @@ class ProfileIn(BaseModel):
     value: str
 
 
-@app.post("/profile", operation_id="set_profile_field")
+@door(app.post("/profile", operation_id="set_profile_field"))
 @gate("facts.write")
 def set_profile_field(p: ProfileIn) -> dict:
     """Store one identity detail Jefferey may reuse on forms. Sensitive
@@ -429,14 +443,14 @@ def set_profile_field(p: ProfileIn) -> dict:
     return rep.set_profile_field(p.field, p.value)
 
 
-@app.get("/profile", operation_id="get_profile")
+@door(app.get("/profile", operation_id="get_profile"))
 @gate("facts.read")
 def get_profile() -> dict:
     """Everything Jefferey can put on a form for this user. They own all of it."""
     return rep.get_profile()
 
 
-@app.delete("/profile", operation_id="forget_profile_field")
+@door(app.delete("/profile", operation_id="forget_profile_field"))
 @gate("facts.write")
 def forget_profile_field(field: str) -> dict:
     """Delete one profile detail. The right to erase is absolute."""
@@ -452,7 +466,7 @@ class ExpectIn(BaseModel):
     note: str = ""
 
 
-@app.post("/charges/expected", operation_id="expect_charge")
+@door(app.post("/charges/expected", operation_id="expect_charge"))
 @gate("money.write")
 def expect_charge(e: ExpectIn) -> dict:
     """Register a charge the user has actually agreed to. Anything not in
@@ -466,7 +480,7 @@ class CancelIn(BaseModel):
     on: str = ""
 
 
-@app.post("/charges/cancelled", operation_id="mark_cancelled")
+@door(app.post("/charges/cancelled", operation_id="mark_cancelled"))
 @gate("money.write")
 def mark_cancelled(c: CancelIn) -> dict:
     """Record that the user cancelled something — any charge after this date
@@ -480,7 +494,7 @@ class ChargeIn(BaseModel):
     date: str = ""
 
 
-@app.post("/charges/check", operation_id="check_charge")
+@door(app.post("/charges/check", operation_id="check_charge"))
 @gate("money.read")
 def check_charge(c: ChargeIn) -> dict:
     """Hold one charge up against what the user agreed to. Returns a verdict
@@ -492,21 +506,21 @@ class StatementIn(BaseModel):
     charges: list[ChargeIn]
 
 
-@app.post("/charges/review", operation_id="review_statement")
+@door(app.post("/charges/review", operation_id="review_statement"))
 @gate("money.read")
 def review_statement(s: StatementIn) -> dict:
     """Run a whole statement through at once and report the total at stake."""
     return guard.review_statement([c.model_dump() for c in s.charges])
 
 
-@app.get("/charges/expected", operation_id="expected_charges")
+@door(app.get("/charges/expected", operation_id="expected_charges"))
 @gate("money.read")
 def expected_charges() -> list:
     """What the user has agreed to pay, and what they've cancelled."""
     return guard.expected_charges()
 
 
-@app.get("/charges/dispute", operation_id="dispute_pack")
+@door(app.get("/charges/dispute", operation_id="dispute_pack"))
 @gate("money.read")
 def dispute_pack(merchant: str) -> dict:
     """Everything needed to get money back from one merchant."""
@@ -521,7 +535,7 @@ class PersonIn(BaseModel):
     important_dates: str = ""
 
 
-@app.post("/life/people", operation_id="add_person")
+@door(app.post("/life/people", operation_id="add_person"))
 @gate("life.write")
 def add_person(p: PersonIn) -> dict:
     """Record someone who matters to the user. Only when they offer it."""
@@ -536,7 +550,7 @@ class MemoryIn(BaseModel):
     visibility: str = Field(default="private", description="private | family | legacy")
 
 
-@app.post("/life/memories", operation_id="add_memory")
+@door(app.post("/life/memories", operation_id="add_memory"))
 @gate("life.write")
 def add_memory(m: MemoryIn) -> dict:
     """Record a snippet of the user's life in their own words. Never invent
@@ -555,7 +569,7 @@ class MediaIn(BaseModel):
     visibility: str = "private"
 
 
-@app.post("/life/media", operation_id="add_media")
+@door(app.post("/life/media", operation_id="add_media"))
 @gate("life.write")
 def add_media(m: MediaIn) -> dict:
     """Reference a photo where it already lives on the user's Self-Cloud —
@@ -566,7 +580,7 @@ def add_media(m: MediaIn) -> dict:
         raise HTTPException(status_code=422, detail=str(e))
 
 
-@app.get("/life", operation_id="who_am_i")
+@door(app.get("/life", operation_id="who_am_i"))
 def who_am_i() -> dict:
     """What Jefferey understands about this person as a human being. How much
     of it you see is decided by the key your token carries — there is no
@@ -574,7 +588,7 @@ def who_am_i() -> dict:
     return life.who_am_i(access.ceiling())
 
 
-@app.get("/life/story", operation_id="tell_story")
+@door(app.get("/life/story", operation_id="tell_story"))
 def tell_story(theme: str = "") -> dict:
     """Gather what's needed to tell a piece of their story. Which moments are
     in reach is decided by the key your token carries — private, family or
@@ -582,14 +596,14 @@ def tell_story(theme: str = "") -> dict:
     return life.tell_story(access.ceiling(), theme)
 
 
-@app.get("/life/gaps", operation_id="story_gaps")
+@door(app.get("/life/gaps", operation_id="story_gaps"))
 @gate("life.read")
 def story_gaps() -> dict:
     """What's missing from their story. Ask for at most one at a time."""
     return life.story_gaps()
 
 
-@app.delete("/life", operation_id="forget_life")
+@door(app.delete("/life", operation_id="forget_life"))
 @gate("life.write")
 def forget_life(contains: str) -> dict:
     """Erase anything in the life layer matching this text."""
@@ -605,7 +619,7 @@ class StoryIn(BaseModel):
     visibility: str = "private"
 
 
-@app.get("/album/next", operation_id="next_story_prompt")
+@door(app.get("/album/next", operation_id="next_story_prompt"))
 @gate("life.read")
 def next_story_prompt() -> dict:
     """ONE moment from their photographs nobody has asked about. Offer it at
@@ -613,35 +627,35 @@ def next_story_prompt() -> dict:
     return album.next_prompt()
 
 
-@app.post("/album/story", operation_id="record_story")
+@door(app.post("/album/story", operation_id="record_story"))
 @gate("life.write")
 def record_story(s: StoryIn) -> dict:
     """Keep what they said, verbatim, pinned to those photographs."""
     return album.record(s.moment_id, s.text, s.people, s.when, s.visibility)
 
 
-@app.delete("/album/{moment_id}", operation_id="decline_story")
+@door(app.delete("/album/{moment_id}", operation_id="decline_story"))
 @gate("life.write")
 def decline_story(moment_id: str) -> dict:
     """They'd rather not. Final."""
     return album.decline(moment_id)
 
 
-@app.get("/album/progress", operation_id="story_progress")
+@door(app.get("/album/progress", operation_id="story_progress"))
 @gate("life.read")
 def story_progress() -> dict:
     return album.progress()
 
 
 # ---------------------------------------------------------------- self-cloud
-@app.get("/selfcloud", operation_id="selfcloud_status")
+@door(app.get("/selfcloud", operation_id="selfcloud_status"))
 def selfcloud_status() -> dict:
     """Who holds a key to this person's Self-Cloud, what's revoked, and any
     recent refusals."""
     return cloud.status()
 
 
-@app.get("/selfcloud/grants", operation_id="selfcloud_grants")
+@door(app.get("/selfcloud/grants", operation_id="selfcloud_grants"))
 def selfcloud_grants() -> dict:
     """Every key in full, plus every scope that exists."""
     return cloud.grants()
@@ -654,7 +668,7 @@ class GrantIn(BaseModel):
     note: str = ""
 
 
-@app.post("/selfcloud/grants", operation_id="selfcloud_grant")
+@door(app.post("/selfcloud/grants", operation_id="selfcloud_grant"))
 @owner_only
 def selfcloud_grant(g: GrantIn) -> dict:
     """ONLY at the owner's explicit word. Never grant a key on your own
@@ -667,39 +681,39 @@ class ScopeIn(BaseModel):
     scope: str
 
 
-@app.post("/selfcloud/scopes/add", operation_id="selfcloud_add_scope")
+@door(app.post("/selfcloud/scopes/add", operation_id="selfcloud_add_scope"))
 @owner_only
 def selfcloud_add_scope(s: ScopeIn) -> dict:
     """Widen one key by exactly one scope, at the owner's word."""
     return cloud.add_scope(s.client, s.scope)
 
 
-@app.post("/selfcloud/scopes/remove", operation_id="selfcloud_remove_scope")
+@door(app.post("/selfcloud/scopes/remove", operation_id="selfcloud_remove_scope"))
 def selfcloud_remove_scope(s: ScopeIn) -> dict:
     """Narrow a key by one scope."""
     return cloud.remove_scope(s.client, s.scope)
 
 
-@app.delete("/selfcloud/grants", operation_id="selfcloud_revoke")
+@door(app.delete("/selfcloud/grants", operation_id="selfcloud_revoke"))
 def selfcloud_revoke(client: str) -> dict:
     """Kill a key completely. Never argue with a revocation."""
     return cloud.revoke(client)
 
 
-@app.get("/selfcloud/check", operation_id="selfcloud_check_access")
+@door(app.get("/selfcloud/check", operation_id="selfcloud_check_access"))
 def selfcloud_check_access(client: str, scope: str) -> dict:
     """Would this client be allowed this scope? Deny by default."""
     return cloud.check_access(client, scope)
 
 
-@app.get("/selfcloud/log", operation_id="selfcloud_access_log")
+@door(app.get("/selfcloud/log", operation_id="selfcloud_access_log"))
 def selfcloud_access_log(limit: int = 30) -> list:
     """Who asked for what, and what happened."""
     return cloud.access_log(limit)
 
 
 # ---------------------------------------------------------------- interview
-@app.get("/interview/next", operation_id="next_question")
+@door(app.get("/interview/next", operation_id="next_question"))
 @gate("life.read")
 def next_question(domain: str = "") -> dict:
     """ONE question to weave into conversation — never a list, never
@@ -714,7 +728,7 @@ class AnswerIn(BaseModel):
     visibility: str = "private"
 
 
-@app.post("/interview/answer", operation_id="record_answer")
+@door(app.post("/interview/answer", operation_id="record_answer"))
 @gate("life.write")
 def record_answer(a: AnswerIn) -> dict:
     """Keep what they said under the visibility they chose. If they
@@ -722,7 +736,7 @@ def record_answer(a: AnswerIn) -> dict:
     return interview.record_answer(a.question_id, a.answer, a.declined, a.visibility)
 
 
-@app.get("/interview/progress", operation_id="interview_progress")
+@door(app.get("/interview/progress", operation_id="interview_progress"))
 @gate("life.read")
 def interview_progress() -> dict:
     """What you know, what's missing, and the depth you've earned."""
@@ -735,14 +749,14 @@ class IncludeIn(BaseModel):
     note: str = ""
 
 
-@app.post("/conscience/include", operation_id="conscience_include")
+@door(app.post("/conscience/include", operation_id="conscience_include"))
 @gate("facts.write")
 def conscience_include(i: IncludeIn) -> dict:
     """The owner chose to let something from Self-Cloud into their conscience."""
     return rules.include(i.ref, i.note)
 
 
-@app.delete("/conscience/include", operation_id="conscience_exclude")
+@door(app.delete("/conscience/include", operation_id="conscience_exclude"))
 @gate("facts.write")
 def conscience_exclude(contains: str) -> dict:
     """Take something back out of the conscience; it stays on Self-Cloud."""
@@ -757,7 +771,7 @@ class RuleIn(BaseModel):
     allow: bool = True
 
 
-@app.post("/rules", operation_id="set_rule")
+@door(app.post("/rules", operation_id="set_rule"))
 @gate("facts.write")
 def set_rule(r: RuleIn) -> dict:
     """Write one of the owner's standing rules, in their words. Only at their word."""
@@ -767,32 +781,42 @@ def set_rule(r: RuleIn) -> dict:
         raise HTTPException(status_code=422, detail=str(e))
 
 
-@app.delete("/rules", operation_id="remove_rule")
+@door(app.delete("/rules", operation_id="remove_rule"))
 @gate("facts.write")
 def remove_rule(rule_id_or_text: str) -> dict:
     """Delete a rule. Never argued with."""
     return rules.remove_rule(rule_id_or_text)
 
 
-@app.get("/rules", operation_id="list_rules")
+@door(app.get("/rules", operation_id="list_rules"))
 @gate("facts.read")
 def list_rules(kind: str = "") -> list:
     """Every standing rule the owner has written."""
     return rules.rules(kind)
 
 
-@app.get("/rules/check", operation_id="check_disclosure")
+@door(app.get("/rules/check", operation_id="check_disclosure"))
 @gate("facts.read")
 def check_disclosure(audience: str, tags: str) -> dict:
     """Before saying anything about the owner to anyone else. Silence is a no."""
     return rules.check_disclosure(audience, tags)
 
 
-@app.get("/rules/guidance", operation_id="guidance_for")
+@door(app.get("/rules/guidance", operation_id="guidance_for"))
 @gate("facts.read")
 def guidance_for(tags: str, audience: str = "me") -> dict:
     """The owner's standing instructions that apply right now, verbatim."""
     return rules.guidance_for(tags, audience)
+
+
+# ---------------------------------------------------------------- the egress door
+@door(app.get("/egress", operation_id="what_left_the_house"))
+@gate("facts.read")
+def what_left_the_house(days: int = 7) -> dict:
+    """What JEFFEREY has handed to rented engines: sends, destinations, tools,
+    refusals, and whether the door is open. Counts only — the owner reads
+    every send word for word on their own machine."""
+    return egress.summary(days)
 
 
 if __name__ == "__main__":

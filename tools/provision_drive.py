@@ -66,7 +66,8 @@ nothing on it talks to the internet unless you ask it to.
   Self-Cloud/    the buttons — double-click "Start Self-Cloud.command"
   originals/     your originals. Read-only, checksummed, never re-encoded.
   library/       the working copy your tools read and show
-  .selfcloud/    the machine side: catalog, index, conscience, voice.
+  .selfcloud/    the machine side: catalog, index, conscience, voice, and
+                 the log of everything that ever left for a rented engine.
                  Hidden on purpose. Don't edit by hand; nothing deletes it.
 
 To use it on any Mac: plug it in, open Self-Cloud/, double-click

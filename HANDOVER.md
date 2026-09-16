@@ -91,7 +91,8 @@ key, no network**.
 | File | What it does |
 |---|---|
 | `conscience.py` | The owned store: facts, priorities with confidence, goals, corrections. Atomic fsynced writes under an exclusive lock, 20 snapshots, a stale writer refused rather than clobbering, and a corrupt store that **recovers from history or refuses to start** — never silently empties |
-| `access.py` | **The door.** Client identity bound per process (`JEFFEREY_CLIENT`), defaulting to the *narrow* key; `@gate(scope)` on every data tool; no model-chosen visibility anywhere; **widening** authority needs `JEFFEREY_OWNER_CONSOLE=1`, narrowing never does |
+| `access.py` | **The door in.** Client identity bound per process (`JEFFEREY_CLIENT`), defaulting to the *narrow* key; `@gate(scope)` on every data tool; no model-chosen visibility anywhere; **widening** authority needs `JEFFEREY_OWNER_CONSOLE=1`, narrowing never does |
+| `egress.py` | **The door out.** `@door(mcp.tool())` / `@door(app.get(…))` wraps every registration, so a tool with no entry in `RELEASE` sends nothing. Per-tool field allowlist; hard scan (Luhn-checked cards and SINs, SSNs, `password:`, API-key shapes) refusing the whole result and naming only the field; the same scan on arguments *before* the tool runs, so an engine cannot plant a secret in the conscience; log written and fsynced before the send, word for word, capped at 64 KB per entry with hash and size of the whole; `door-shut` switch; `report()` / `summary()`. Same owner-only trap as the conscience: a self-test writes its log into its own temp dir |
 | `selfcloud.py` | Per-client keys, presets, deny-by-default, audit, instant revocation. **Reference implementation only — belongs on their side eventually** |
 | `life.py` | People, moments, media *references* (never copies), visibility private/family/legacy |
 | `rules.py` | The owner's own words: disclosure / reaction / representation. Specific beats general, deny beats allow, **no rule = silence is a no** |
@@ -130,7 +131,7 @@ Ordered. **Owner** = only Laszlo can do it. **SC** = Self-Cloud agent.
 | A1 | **Encrypt the external SSD.** ~240 GB of the family's photos are plaintext on a portable drive. Runbook: `Self-Cloud/docs/ENCRYPT_THE_DRIVE.md`. Highest-probability harm in the portfolio | **Owner** |
 | A2 | **Fix §5.1 and §5.2** — drive-named path traversal, and hardlinks in `.selfcloud` writing into the owner's files | **SC** |
 | A3 | ~~Adversarial audit of JEFFEREY~~ — ✅ **DONE 2026-09-15.** 48 raised, 17 survived, all 5 HIGH fixed with regression tests. Details in §7 | ✅ JF |
-| A4 | **The egress door** — one function every outbound call passes through, field **allowlist** (fails closed; redaction fails open), full egress log, plus "show me what left the house" | **JF** |
+| A4 | ~~The egress door~~ — ✅ **DONE 2026-09-16.** `connector/egress.py`: every tool on all three surfaces is registered *through* the door; per-tool field allowlist (fails closed); a hard scan refuses the whole result on a card / SIN / SSN / password / API key, and refuses the same shapes **handed in** by an engine before anything is written; append-only fsynced log written *before* the send (no log → no send); shut switch; `What left the house.command` + `what_left_the_house` tool. 18 checks of its own, 5 more in the connector self-test. **Found on the way:** the HTTP surface had been denying every per-token key since the lazy-provisioning change (only the process default was ever provisioned) — fixed in `access.py`, covered by the HTTP exercise | ✅ JF |
 | A5 | **Split the Constitution** — `public-charter.md` (safe for any engine) vs `private-boundaries.md` (never leaves). Today §9 of the template — the owner's list of what must never leave — is injected into every session | **JF** + SC |
 | A6 | **Conscience cleaner** — a live store already carries junk written by an old self-test | JF |
 | A7 | **Backup verifier** — enforce two copies + a verified restore in software; refuse to say "safe to cancel iCloud" until both pass | JF |
@@ -196,6 +197,10 @@ Their §6 applies here too. These are additions, not replacements.
    narrate its way around.
 7. **The house keeps working when the box is off.** Local devices keep local
    control; only the intelligence stops.
+8. **Nothing leaves unlogged, and the door fails closed.** A tool without a
+   release list sends nothing; a log that cannot be written is a door that does
+   not open; a secret refuses the whole result, in either direction. Allowlist,
+   never redaction — forgetting an entry costs a feature, never a secret.
 
 ---
 
@@ -226,6 +231,12 @@ Their §6 applies here too. These are additions, not replacements.
    identity bound at startup, decorator on every entry point, no
    caller-supplied trust level, and a canonical scope table the tests assert
    against so the decorators cannot drift.
+5. `connector/egress.py` — if your door ever grows a path to anything off the
+   drive, take the shape: registration *through* the door so nothing can be
+   registered around it, a per-tool allowlist that fails closed, the log
+   written before the send, and refusals that name a field and never a value.
+   Your offline switch stays yours; JEFFEREY's `door-shut` is JEFFEREY's. Two
+   switches, two products, one owner.
 
 ---
 

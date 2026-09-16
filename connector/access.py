@@ -96,6 +96,8 @@ TOOL_SCOPES: dict[str, str] = {
     "decline_story": "life.write", "story_progress": "life.read",
     # secrets: names only, never values
     "vault_status": "vault.names",
+    # the egress door's own report: counts and destinations
+    "what_left_the_house": "facts.read",
 }
 
 # Tools that WIDEN what an AI may do. Narrowing (revoke, remove_scope) never
@@ -118,7 +120,7 @@ class Gate:
     def __init__(self, cloud, client: str, announce: bool = True):
         self.cloud = cloud
         self.client = (client or DEFAULT_CLIENT).strip().lower()
-        self._provisioned = False
+        self._provisioned: set[str] = set()
         if announce:
             self.announce()
 
@@ -134,8 +136,8 @@ class Gate:
             return list(g["scopes"]) if g.get("active") else []
         return list(PRESETS.get(self.client, {}).get("scopes", []))
 
-    def _provision(self) -> None:
-        """Issue this client its preset key, once, on FIRST REAL USE.
+    def _provision(self, client: str | None = None) -> None:
+        """Issue a client its preset key, once, on FIRST REAL USE.
 
         Deliberately lazy. Starting a process must not write to the person's
         conscience — importing a module, running a self-test, or launching a
@@ -143,23 +145,29 @@ class Gate:
         its revision number should mean 'things actually happened'. The first
         scoped call is a real access event and is worth recording; a startup
         is not.
+
+        The client is whichever identity is making THIS call: the process
+        default, or the one an HTTP token bound for the request. (An earlier
+        version only ever provisioned the process default, so on the HTTP
+        surface every per-token key was denied as 'never granted'.)
         """
         from selfcloud import PRESETS
 
-        if self._provisioned:
+        client = client or self.client
+        if client in self._provisioned:
             return
-        self._provisioned = True
+        self._provisioned.add(client)
         grants = self.cloud.c.data.get("selfcloud_grants", {})
-        if self.client in grants:
+        if client in grants:
             return
-        if self.client not in PRESETS:
-            print(f"\n  ⚠  JEFFEREY_CLIENT={self.client!r} has no key and no preset.\n"
+        if client not in PRESETS:
+            print(f"\n  ⚠  JEFFEREY_CLIENT={client!r} has no key and no preset.\n"
                   f"     Every scoped call will be denied until the owner runs:\n"
-                  f"       selfcloud_grant('{self.client}', [...])\n",
+                  f"       selfcloud_grant('{client}', [...])\n",
                   file=sys.stderr)
             return
-        self.cloud.grant(self.client, note="auto-issued from its preset on "
-                                           "first use; the owner may narrow it")
+        self.cloud.grant(client, note="auto-issued from its preset on "
+                                      "first use; the owner may narrow it")
 
     def announce(self) -> None:
         scopes = self._effective_scopes()          # no write on startup
@@ -174,8 +182,9 @@ class Gate:
         return _request_client.get() or self.client
 
     def check(self, scope: str) -> dict:
-        self._provision()
-        return self.cloud.check_access(self.current_client(), scope)
+        client = self.current_client()
+        self._provision(client)
+        return self.cloud.check_access(client, scope)
 
     def require(self, scope: str) -> None:
         verdict = self.check(scope)
@@ -189,8 +198,8 @@ class Gate:
     def ceiling(self) -> str:
         """How deep into the life layer this key may see: private > family >
         legacy. Derived from the key, never from an argument."""
-        self._provision()
         client = self.current_client()
+        self._provision(client)
         for scope, level in _CEILINGS:
             if self.cloud.check_access(client, scope, log=False)["allowed"]:
                 self.cloud._log(client, "check", f"life ceiling: {level}", True)
