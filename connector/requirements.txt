@@ -15,3 +15,7 @@ keyring
 # reverse_geocoder # offline place names from GPS — never a network lookup
 # pycountry        # country codes -> names people actually say
 # piexif           # test only: writes EXIF into fixture photos
+
+# Voice enrolment (tools/voice_enrol.py) — recording only, never playback-as-you.
+# Optional; the wheel bundles PortAudio on macOS.
+# sounddevice

@@ -101,6 +101,7 @@ key, no network**.
 | `photo_index.py` | Content-addressed (SHA-256) semantic index. EXIF date + GPS, **offline** reverse geocoding, CLIP embeddings, unit vectors in SQLite, weights archived inside the index directory, refuses a mismatched embedding model, `verify` proves it runs with `HF_HUB_OFFLINE=1`. `watch` keeps it alive and **never deletes** | pipeline proven end to end with untrained weights; **search quality not yet proven with real weights** |
 | `recall.py` | Turns a spoken sentence into a time window, places and leftover words. Years, "ten years ago", months, seasons (winter wraps the year), Christmas. Places matched **only against places the owner actually has photos of** | "show me the part of me that was on vacation ten years ago in Cuba" → exactly the Varadero photo, offline |
 | `wall.py` | One page: big pictures, date and place, one box to type or speak into, opens on "on this day". Localhost unless `--lan`; `--lan` demands a passcode; Escape clears the screen | passcode enforced against a real socket; model not loaded for a pure time+place question; thumbnails cache |
+| `voice_enrol.py` + `Record my voice.command` | Enrolment of the owner's own voice. Consent take first, read-only checksummed WAVs, resumable, TTY-only, real deletion | consent kept, integrity, containment, retry-on-short, deletion, and a no-network-import assertion |
 | `disc_archive.py` | Rips family DVDs **verbatim**, checksums, makes copies read-only, and **survives a scratched disc**: records the unreadable byte ranges, fills them, keeps going | verbatim copy, tampering detected, real data recovered on both sides of simulated damage |
 | `install.py` + `Install JEFFEREY.command` | Double-click install; refuses to wire anything to Claude if the self-test fails; backs up and merges the host config; `--check`, `--uninstall` | run end to end |
 | `go.py` + `Show me my life.command` | One double-click: installs the seeing parts, asks once where the photos are, indexes, opens the wall | logic tested; full run is owner-side |
@@ -146,7 +147,8 @@ Ordered. **Owner** = only Laszlo can do it. **SC** = Self-Cloud agent.
 | C4 | **Local transcription** (whisper.cpp) — now aimed at the owner's own recordings and at video in the library, not at the discs | JF |
 | C5 | **Listening** — whisper.cpp on the machine plus a wake word, replacing the browser's recogniser | JF |
 | C6 | **Local LLM** as the internal trust zone, weights archived on the drive | SC |
-| **C7** | **Voice enrolment and playback for the owner's OWN voice — now the whole voice path, and moved up.** A living person, present, consenting, reading the phrases: safeguard 4 satisfied by construction | **JF, next** |
+| **C7a** | ~~Voice enrolment~~ — ✅ **BUILT 2026-09-16**, `tools/voice_enrol.py`. Consent recorded first in the person's own voice; checksummed read-only WAVs; resumable; TTY required (a script or a model cannot enrol a voice); real deletion; no network-capable imports, asserted by test | ✅ JF |
+| **C7b** | **Voice playback** — the conscience speaking in the owner's voice. "Says only what is in the conscience"; never on a call or intercom; a speaker is a room. Needs a local TTS model that accepts a reference voice; weights archived on the drive per the local-AI rule | JF, after 3.2 |
 | C8 | **First-run onboarding.** The tiers start empty and the only artifact is a 13-question essay | JF |
 | C9 | **Ingestion** — Apple Health, bank CSV, wearables. Exports first; no partnership needed | JF |
 

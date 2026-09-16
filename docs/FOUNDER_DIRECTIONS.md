@@ -53,6 +53,15 @@ scams. Ours must be built so it cannot become one:
    real deletion.
 5. Anything spoken aloud is logged like any other act.
 
+**Built (2026-09-16): the enrolment half.** `tools/voice_enrol.py` records the
+owner reading ~55 phrases plus five in his own words, into `~/.selfcloud/voice/`
+only. Safeguard 4 is code, not prose: it refuses to run without a person at a
+keyboard, the **first take is the consent sentence in the owner's own voice**
+and is kept with the rest, every take is a checksummed read-only file, and
+`delete` overwrites before it unlinks. The test asserts the file imports
+nothing that can reach a network. Playback — the voice *saying* anything — is
+not built and is a separate decision.
+
 **Why it matters.** It is the emotional endpoint of the whole thesis: an AI
 that doesn't *answer* you in a stranger's voice, but *reminds* you in your
 own. And for the people left behind — the story, told the way they remember
