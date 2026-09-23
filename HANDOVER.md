@@ -102,6 +102,7 @@ key, no network**.
 | `interview.py` | 21 questions, 4 depths, depth earned by trust; "rather not" is final |
 | `reminisce.py` | **The album.** Clusters the photo index into moments (trip / season / place), offers the biggest untold one as a question phrased from facts only, keeps the answer verbatim pinned to those photos, one follow-up, "rather not" final. Reads the photo index; writes the life layer |
 | `jefferey_mcp.py` / `jefferey_http.py` / `jefferey_chat.py` | Claude, Custom-GPT Actions, and the owner's own terminal |
+| `jefferey_chat.py --engine local` + `Talk to JEFFEREY on this Mac.command` | **The owned engine (2026-09-23).** Any OpenAI-compatible local endpoint — Hermes via Ollama by default (`JEFFEREY_LOCAL_URL`, `JEFFEREY_LOCAL_MODEL`). Stdlib HTTP, no vendor SDK. Same tools, same access gate, same egress door; the log labels a send to this machine as staying home and **refuses the label** for any other host (a box on the wifi is not "local"). Bypasses any system proxy for this machine, so local traffic can't ride a proxy out. Tested against a real OpenAI-compatible server on 127.0.0.1 over a real socket. Owner direction: FOUNDER_DIRECTIONS §4¾ — every major AI, rented or owned |
 
 ### `tools/` — local AI and the screen
 

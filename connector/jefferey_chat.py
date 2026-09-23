@@ -1297,13 +1297,131 @@ def make_client():
     return client
 
 
-def chat(once: str | None = None) -> None:
-    client = make_client()
+# ------------------------------------------------------------ owned engine
+# The same conscience, riding a model on THIS machine instead of a rented one:
+# Hermes, Llama, Qwen, Gemma — anything served through an OpenAI-compatible
+# endpoint (Ollama serves one at 127.0.0.1:11434/v1, llama.cpp's server too).
+# Stdlib only: the owned path must not depend on a vendor's SDK.
+LOCAL_URL = os.environ.get("JEFFEREY_LOCAL_URL", "http://127.0.0.1:11434/v1")
+LOCAL_MODEL = os.environ.get("JEFFEREY_LOCAL_MODEL", "hermes3")
+LOCAL_MAX_ROUNDS = 12        # small models can loop on tools; stop and say so
+
+
+def is_this_machine(url: str) -> bool:
+    """Only an endpoint on this very machine is 'local'. A box on the wifi is
+    somebody's other computer, and the egress log must not call it home."""
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    return host in ("localhost", "::1") or host.startswith("127.")
+
+
+def openai_tools() -> list:
+    """The same tool surface, in the shape OpenAI-compatible servers expect."""
+    return [{"type": "function",
+             "function": {"name": t["name"], "description": t["description"],
+                          "parameters": t["input_schema"]}} for t in TOOLS]
+
+
+def _post_local(url: str, payload: dict, timeout: float = 900) -> dict:
+    import urllib.request
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                 headers={"Content-Type": "application/json"})
+    # A local call must go straight to this machine. If the system has a
+    # proxy configured, honouring it would carry "local" traffic out of the
+    # house — so for this machine, no proxy, ever.
+    handlers = [urllib.request.ProxyHandler({})] if is_this_machine(url) else []
+    with urllib.request.build_opener(*handlers).open(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def local_engine_label(model: str, url: str) -> str:
+    if is_this_machine(url):
+        return f"{model} on this machine (local — stays in the house)"
+    from urllib.parse import urlparse
+    return f"{model} at {urlparse(url).hostname} (another machine — not this house's box)"
+
+
+def run_turn_local(history: list, model: str = LOCAL_MODEL, url: str = LOCAL_URL) -> None:
+    """One user turn against an owned model. Every tool call goes through the
+    same two doors as the rented engine: the access gate in, egress out."""
+    endpoint = url.rstrip("/") + "/chat/completions"
+    for _ in range(LOCAL_MAX_ROUNDS):
+        system = egress.system_prompt_once(system_prompt())
+        payload = egress.request({
+            "model": model,
+            "messages": [{"role": "system", "content": system}] + history,
+            "tools": openai_tools(),
+        }, model)
+        msg = _post_local(endpoint, payload)["choices"][0]["message"]
+        text = (msg.get("content") or "").strip()
+        calls = msg.get("tool_calls") or []
+        if text:
+            print(f"\n{BOLD}{CYAN}Jefferey{RESET} {text}")
+        turn = {"role": "assistant", "content": text}
+        if calls:
+            turn["tool_calls"] = calls
+        history.append(turn)
+        if not calls:
+            return
+        for c in calls:
+            fn = c.get("function", {})
+            name = fn.get("name", "")
+            raw = fn.get("arguments") or "{}"
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                out = dispatch_tool(name, args)
+            except ValueError:
+                args, out = {}, {"error": "the arguments were not valid JSON; try again"}
+            except Exception as e:           # a bad call must never kill the session
+                args, out = {}, {"error": str(e)}
+            trace = _TRACE.get(name)
+            if trace and isinstance(out, dict) and not out.get("refused"):
+                try:
+                    print(f"{DIM}  · {trace(args, out)}{RESET}")
+                except Exception:
+                    pass
+            history.append({"role": "tool", "tool_call_id": c.get("id", ""),
+                            "name": name, "content": json.dumps(out, ensure_ascii=False)})
+    print(f"{DIM}(the local model kept calling tools without answering — "
+          f"stopped after {LOCAL_MAX_ROUNDS} rounds. Ask again, more simply.){RESET}")
+
+
+def local_ready(url: str = LOCAL_URL, model: str = LOCAL_MODEL) -> str | None:
+    """None if the local engine can answer; otherwise what to do, in plain words."""
+    import urllib.request
+    handlers = [urllib.request.ProxyHandler({})] if is_this_machine(url) else []
+    try:
+        with urllib.request.build_opener(*handlers).open(
+                url.rstrip("/") + "/models", timeout=5) as r:
+            names = [m.get("id", "") for m in json.loads(r.read()).get("data", [])]
+    except Exception:
+        return (f"No local AI is answering at {url}.\n"
+                f"  Install Ollama (https://ollama.com/download), open it once, then:\n"
+                f"    ollama pull {model}")
+    if names and not any(n == model or n.startswith(model + ":") for n in names):
+        return (f"The local AI is running but doesn't have '{model}'. Run:\n"
+                f"    ollama pull {model}\n  (or set JEFFEREY_LOCAL_MODEL to one of: "
+                f"{', '.join(names[:6])})")
+    return None
+
+
+def chat(once: str | None = None, engine: str = "claude") -> None:
     history: list = []
+    if engine == "local":
+        problem = local_ready()
+        if problem:
+            sys.exit("  " + problem)
+        egress.bind("chat", engine=local_engine_label(LOCAL_MODEL, LOCAL_URL))
+        turn = lambda h: run_turn_local(h)           # noqa: E731
+        engine_line = local_engine_label(LOCAL_MODEL, LOCAL_URL)
+    else:
+        client = make_client()
+        turn = lambda h: run_turn(client, h)         # noqa: E731
+        engine_line = f"{MODEL} (rented)"
 
     snap = conscience.snapshot()
     print(f"{BOLD}JEFFEREY{RESET} — Personal AI Shadow™")
-    print(f"{DIM}engine: {MODEL} (rented) · conscience: {snap['store_path']} (owned)")
+    print(f"{DIM}engine: {engine_line} · conscience: {snap['store_path']} (owned)")
     print(
         f"{DIM}he knows: {len(snap['priorities'])} priorities · "
         f"{len(snap['facts'])} facts · {len(snap['active_goals'])} active goals · "
@@ -1316,7 +1434,7 @@ def chat(once: str | None = None) -> None:
     if once is not None:
         try:
             history.append({"role": "user", "content": egress.release_text("you_said", once)})
-            run_turn(client, history)
+            turn(history)
         except EgressRefused as e:
             print(f"{DIM}(kept in the house: {e}){RESET}")
         return
@@ -1348,7 +1466,7 @@ def chat(once: str | None = None) -> None:
             print(f"{DIM}(kept in the house — {e}){RESET}")
             continue
         try:
-            run_turn(client, history)
+            turn(history)
         except EgressRefused as e:
             print(f"{DIM}(the door is shut: {e}){RESET}")
             if history and history[-1]["role"] == "user" and isinstance(history[-1]["content"], str):
@@ -1511,6 +1629,66 @@ def selftest() -> None:
         assert "store_path" not in dispatch_tool("daily_brief", {})
         print("  ✓ a secret from the engine never reaches the conscience or the log,")
         print("    and the aggregate tools are not poisoned by the attempt")
+
+        # 1e. The OWNED engine: a real OpenAI-compatible server on 127.0.0.1,
+        #     speaking over a real socket. It asks for one tool, then answers.
+        #     The fact must land in the conscience through both doors, and the
+        #     egress log must say it stayed in the house.
+        import http.server
+        import threading
+        seen = []
+
+        class FakeLocal(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _send(self, obj):
+                body = json.dumps(obj).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                self._send({"data": [{"id": "hermes3:latest"}]})
+
+            def do_POST(self):
+                req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                seen.append(req)
+                if not any(m.get("role") == "tool" for m in req["messages"]):
+                    self._send({"choices": [{"message": {"role": "assistant", "content": "",
+                        "tool_calls": [{"id": "c1", "type": "function", "function": {
+                            "name": "remember_fact",
+                            "arguments": json.dumps({"fact": "Hermes remembered the harbour trip",
+                                                     "category": "family"})}}]}}]})
+                else:
+                    self._send({"choices": [{"message": {"role": "assistant",
+                                                         "content": "Noted — kept."}}]})
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), FakeLocal)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_address[1]}/v1"
+        try:
+            assert is_this_machine(url) and not is_this_machine("http://192.168.1.20:11434/v1")
+            assert "another machine" in local_engine_label("hermes3", "http://10.0.0.5:11434/v1")
+            assert local_ready(url, "hermes3") is None
+            assert "ollama pull qwen3" in local_ready(url, "qwen3")
+            egress.bind("chat", engine=local_engine_label("hermes3", url))
+            h = [{"role": "user", "content": "remember the harbour trip"}]
+            run_turn_local(h, model="hermes3", url=url)
+            assert any("Hermes remembered" in f["fact"] for f in conscience.data["facts"])
+            assert h[-1] == {"role": "assistant", "content": "Noted — kept."}
+            assert seen[0]["tools"] and seen[0]["messages"][0]["role"] == "system"
+            e = [x for x in egress.entries() if x.get("tool") == "remember_fact"][-1]
+            assert "stays in the house" in e["engine"] and not e["refused"]
+            assert any(x["kind"] == "request" and x["asked"].startswith("model=hermes3")
+                       for x in egress.entries())
+        finally:
+            srv.shutdown()
+            egress.bind("chat", engine=f"Anthropic ({MODEL})")
+        print("  ✓ owned engine: a local model over a real socket stores a fact")
+        print("    through both doors, and the log says it stayed in the house")
 
         # 2. Reinforcement: same correction again raises confidence.
         before = conscience.priorities_for("travel")[0]["confidence"]
@@ -1909,8 +2087,11 @@ if __name__ == "__main__":
     ap.add_argument("--once", metavar="MSG", help="single message, then exit")
     ap.add_argument("--selftest", action="store_true",
                     help="offline end-to-end check of the learning loop (no key)")
+    ap.add_argument("--engine", choices=["claude", "local"], default="claude",
+                    help="claude (rented, needs a key) or local (a model on this "
+                         "machine, e.g. Hermes via Ollama — nothing leaves the house)")
     a = ap.parse_args()
     if a.selftest:
         selftest()
     else:
-        chat(a.once)
+        chat(a.once, engine=a.engine)

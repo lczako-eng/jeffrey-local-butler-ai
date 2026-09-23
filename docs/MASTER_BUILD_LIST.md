@@ -51,6 +51,7 @@ Every item here has code in `connector/` or `tools/` and is covered by
 | MCP surface | 64 tools for Claude Desktop / Claude Code — every one through the door; refusals come back as results because the MCP SDK swallows exceptions |
 | HTTP surface | 62 operations for Custom GPT Actions, per-client bearer tokens — every one through the door; a refusal is a 403 naming a field, never a value |
 | Chat surface | `jefferey_chat.py` — the owner's own terminal, streaming, tool-use loop |
+| **Owned engine** (2026-09-23) | `jefferey_chat.py --engine local` / `Talk to JEFFEREY on this Mac.command` — the same conscience riding a model on the owner's own machine (Hermes via Ollama by default; any OpenAI-compatible local endpoint). Nothing leaves the house; the egress log still records every send and marks it as staying home. One conscience, any engine, rented or owned |
 | Installer | `Install JEFFEREY.command` — double-click; refuses to connect if the self-test fails; `--check`, `--uninstall` |
 
 ### Local AI

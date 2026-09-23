@@ -156,6 +156,27 @@ and JEFFEREY uses them by *name* (`vault:sin`) on forms, never by value.
 
 ---
 
+## 7. Talk to him with an AI that lives on your Mac
+
+JEFFEREY is not Claude's. Claude is one engine he can ride; ChatGPT is another;
+and he can ride an AI that runs **on your own Mac**, where nothing he reads
+about you leaves the house.
+
+Double-click **`Talk to JEFFEREY on this Mac.command`**. The first time it
+asks you to install **Ollama** (the free program that runs AI on a Mac — it
+opens the download page for you), then downloads **Hermes** once, about 5 GB.
+After that it works with the internet off.
+
+Same memory as in the Claude app: same conscience, same drive, same rules.
+Tell him something here and Claude knows it tomorrow, and the other way round.
+*What left the house* still logs every word — and marks these as having stayed
+home.
+
+A different local model: `JEFFEREY_LOCAL_MODEL=qwen3` before the command, or
+any model name Ollama has.
+
+---
+
 ## Every button
 
 | Double-click | What happens | Leaves the Mac? |
@@ -165,6 +186,7 @@ and JEFFEREY uses them by *name* (`vault:sin`) on forms, never by value.
 | `Show me my life.command` | index the photographs, open the wall | one-time model download |
 | `Record my voice.command` | enrol your voice onto the drive | no |
 | `What left the house.command` | the egress log, in plain words; shut / open the door | no |
+| `Talk to JEFFEREY on this Mac.command` | JEFFEREY riding Hermes on your own Mac, same conscience | one-time download; then no |
 | on the drive: `Self-Cloud/Start Self-Cloud.command` | the same as *Show me my life*, bound to that drive, on any Mac | no |
 
 ## Where things live

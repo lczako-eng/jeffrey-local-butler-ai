@@ -414,6 +414,34 @@ he has with his own photographs — and it is exactly the interface a person
 with memory loss can still use: someone who loves them sits beside them and
 says *"look — tell me about this one."*
 
+## 4¾. Every AI, including the one on the box (recorded 2026-09-23)
+
+> "With the JEFFEREY wrapper it's not only supposed to [be Claude]. It's
+> supposed to be for every major AI, including internal AI like Claw, Hermes,
+> that could be built right onto this."
+
+**One conscience, any engine — rented or owned.** The wrapper was always
+engine-agnostic in principle ("the intelligence is rented"); this makes the
+second half explicit: the intelligence can also be **owned**, running on the
+Self-Cloud box itself, and JEFFEREY must wrap it exactly as it wraps Claude.
+Switching engines must never cost the owner a single memory.
+
+**What that means in practice, by kind of engine:**
+
+| Engine | How JEFFEREY connects | State |
+|---|---|---|
+| Claude (Desktop, Code) | MCP server, `connector/jefferey_mcp.py` | built, installed on the owner's Mac 2026-09-23 |
+| ChatGPT (Custom GPTs) | HTTP + OpenAPI Actions, `connector/jefferey_http.py` | built |
+| Any other agent that loads MCP servers | the same MCP server, one config entry | built; each host needs its config line |
+| **A local model on this machine** — Hermes, Llama, Qwen, Gemma, via Ollama or llama.cpp | `jefferey_chat.py --engine local`, any OpenAI-compatible local endpoint | **built 2026-09-23** |
+| OpenClaw and similar local agent runtimes | the MCP server if the runtime loads MCP; the HTTP API if it calls web APIs | not yet tested against one |
+
+**The rule the local engine adds:** a local model reads the conscience *without
+anything leaving the house*. The egress door still logs every send — the
+owner's "what left the house" stays complete — but it labels a send to this
+machine as staying home, and it refuses to call an endpoint "local" unless it
+really is this machine.
+
 ## 5. Things already decided in this session, so they aren't relitigated
 
 - **JEFFEREY**, never "Jeff". No "butler" anywhere.
