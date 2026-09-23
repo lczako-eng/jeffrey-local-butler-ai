@@ -39,18 +39,27 @@ if [ ${#DRIVES[@]} -eq 1 ]; then
 else
     echo "  Type a number, a name, or drag a drive in from Finder, then press return."
 fi
-read -r -p "  drive: " VOL
-VOL="${VOL%"${VOL##*[! ]}"}"          # trim trailing space Finder adds
-VOL="${VOL//\\ / }"                     # un-escape spaces
-if [ -z "$VOL" ] && [ ${#DRIVES[@]} -eq 1 ]; then
-    VOL="${DRIVES[0]}"
-elif [[ "$VOL" =~ ^[0-9]+$ ]] && [ "$VOL" -ge 1 ] && [ "$VOL" -le ${#DRIVES[@]} ]; then
-    VOL="${DRIVES[$((VOL-1))]}"
-elif [ -n "$VOL" ] && [ "${VOL:0:1}" != "/" ]; then
-    VOL="/Volumes/$VOL"                  # "Self-Cloud" means /Volumes/Self-Cloud
-fi
-[ -z "$VOL" ] && { echo "  No drive given."; read -r _; exit 1; }
-[ -d "$VOL" ] || { echo "  Nothing at $VOL"; read -r _; exit 1; }
+# Ask until there is an answer. Giving up after one empty line closed the
+# window on the owner while he was still typing the path.
+while true; do
+    read -r -p "  drive: " VOL
+    VOL="${VOL%"${VOL##*[! ]}"}"          # trim trailing space Finder adds
+    VOL="${VOL//\\ / }"                     # un-escape spaces
+    if [ -z "$VOL" ] && [ ${#DRIVES[@]} -eq 1 ]; then
+        VOL="${DRIVES[0]}"
+    elif [[ "$VOL" =~ ^[0-9]+$ ]] && [ "$VOL" -ge 1 ] && [ "$VOL" -le ${#DRIVES[@]} ]; then
+        VOL="${DRIVES[$((VOL-1))]}"
+    elif [ -n "$VOL" ] && [ "${VOL:0:1}" != "/" ]; then
+        VOL="/Volumes/$VOL"                  # "Self-Cloud" means /Volumes/Self-Cloud
+    fi
+    if [ -z "$VOL" ]; then
+        echo "  Type a number from the list, then press return."
+    elif [ ! -d "$VOL" ]; then
+        echo "  Nothing at $VOL — try again."
+    else
+        break
+    fi
+done
 echo "  Using $VOL"
 
 echo
