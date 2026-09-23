@@ -82,10 +82,26 @@ Double-click **`Install JEFFEREY.command`** (in `~/JEFFEREY`, or in
 1. makes JEFFEREY a private Python space (`~/.jefferey/venv`);
 2. runs the whole self-test — **if anything fails it refuses to connect**;
 3. backs up and edits Claude Desktop's config so Claude can see JEFFEREY's
-   tools, with the narrow `claude-raw` key.
+   tools, holding the **`jefferey` caretaker key** — your life layer, the
+   album, money and rules — because this is *your* Claude on *your* Mac. It
+   still cannot widen any key, its own included: that needs your own terminal.
+   Any other connections in Claude's config are left alone and listed.
+   (An earlier version of this page said `claude-raw`. It was wrong; the
+   installer has always given your own Desktop the caretaker key. Install a
+   narrower one with `python3 tools/install.py --client claude-raw`.)
 
-Restart Claude Desktop. Say *"call get_directives and be JEFFEREY."* With the
-drive plugged in, everything he learns lands on the drive.
+**Quit Claude Desktop completely** (menu bar → Claude → Quit) and open it
+again. In a new chat say *"Load your directives and tell me what you know
+about me."* If macOS asks whether Claude may access files on a removable
+volume, **Allow** — otherwise he cannot reach the drive. With the drive
+plugged in, everything he learns lands on the drive.
+
+**A note on other connections.** If Claude Desktop already has a
+`filesystem` connection, whatever folders it names are readable by Claude
+*directly* — not through JEFFEREY's gate, and not through the egress door, so
+nothing it reads appears in *What left the house*. That is fine for folders
+you meant to share. It should never name the Self-Cloud drive or your home
+folder.
 
 ---
 
