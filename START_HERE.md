@@ -92,9 +92,13 @@ Double-click **`Install JEFFEREY.command`** (in `~/JEFFEREY`, or in
 
 **Quit Claude Desktop completely** (menu bar → Claude → Quit) and open it
 again. In a new chat say *"Load your directives and tell me what you know
-about me."* If macOS asks whether Claude may access files on a removable
-volume, **Allow** — otherwise he cannot reach the drive. With the drive
-plugged in, everything he learns lands on the drive.
+about me."* macOS will ask whether **Python** may access files on a
+removable volume — Python, not Claude, because JEFFEREY runs as a small
+Python program on your Mac. **Allow.** It reaches only the drive, and nothing
+leaves the Mac by it; without it he cannot reach his own memory. If you
+clicked Don't Allow: System Settings → Privacy & Security → Files and
+Folders → Python → turn on Removable Volumes, then quit and reopen Claude.
+With the drive plugged in, everything he learns lands on the drive.
 
 **A note on other connections.** If Claude Desktop already has a
 `filesystem` connection, whatever folders it names are readable by Claude
