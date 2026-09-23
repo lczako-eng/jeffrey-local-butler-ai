@@ -13,16 +13,45 @@ done
 [ -z "$PY" ] && { echo "  Install Python: https://www.python.org/downloads/"; read -r _; exit 1; }
 "$PY" -c "import PIL" 2>/dev/null || "$PY" -m pip install --quiet pillow
 
+# The drives someone could mean: everything in /Volumes except the Mac's own
+# disk. If there is exactly one, pressing return picks it — a first run on
+# the owner's Mac ended with "No drive given." because nobody told him that
+# dragging was the only way to answer.
+DRIVES=()
+for v in /Volumes/*; do
+    [ -d "$v" ] || continue
+    [ "$v" = "/Volumes/Macintosh HD" ] && continue
+    [ "$(stat -f %d "$v" 2>/dev/null)" = "$(stat -f %d / 2>/dev/null)" ] && continue
+    DRIVES+=("$v")
+done
+
 echo
-echo "  Which drive? Drag it from Finder into this window, then press return."
-echo "  (Plugged-in drives right now:)"
-ls -1 /Volumes 2>/dev/null | sed 's/^/     \/Volumes\//'
+if [ ${#DRIVES[@]} -eq 0 ]; then
+    echo "  No external drive is plugged in. Plug it in and double-click this again."
+    read -r _; exit 1
+fi
+echo "  Which drive?"
+i=1
+for v in "${DRIVES[@]}"; do echo "     $i) $v"; i=$((i+1)); done
 echo
+if [ ${#DRIVES[@]} -eq 1 ]; then
+    echo "  Press return for ${DRIVES[0]} — or type a number, a name, or drag one in."
+else
+    echo "  Type a number, a name, or drag a drive in from Finder, then press return."
+fi
 read -r -p "  drive: " VOL
 VOL="${VOL%"${VOL##*[! ]}"}"          # trim trailing space Finder adds
 VOL="${VOL//\\ / }"                     # un-escape spaces
+if [ -z "$VOL" ] && [ ${#DRIVES[@]} -eq 1 ]; then
+    VOL="${DRIVES[0]}"
+elif [[ "$VOL" =~ ^[0-9]+$ ]] && [ "$VOL" -ge 1 ] && [ "$VOL" -le ${#DRIVES[@]} ]; then
+    VOL="${DRIVES[$((VOL-1))]}"
+elif [ -n "$VOL" ] && [ "${VOL:0:1}" != "/" ]; then
+    VOL="/Volumes/$VOL"                  # "Self-Cloud" means /Volumes/Self-Cloud
+fi
 [ -z "$VOL" ] && { echo "  No drive given."; read -r _; exit 1; }
 [ -d "$VOL" ] || { echo "  Nothing at $VOL"; read -r _; exit 1; }
+echo "  Using $VOL"
 
 echo
 read -r -p "  Name it 'Self-Cloud' in Finder too? [Y/n] " REN
