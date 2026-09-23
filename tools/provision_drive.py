@@ -284,10 +284,36 @@ def provision(volume: Path, name: str, rename: bool, force: bool,
 
     say(f"\n  Done. Open {here}/Self-Cloud/ and double-click "
         f"Start Self-Cloud.command.\n")
-    say(f"  Next, in Terminal, so we can encrypt it:\n"
-        f"    diskutil info {str(here).replace(' ', chr(92) + ' ')} | "
-        f"grep -i 'personality\\|encrypted'\n")
+    enc = is_encrypted(here)
+    if enc is True:
+        ok("the drive is encrypted — unplugged, it reads as noise without "
+           "your passphrase")
+        say()
+    elif enc is False:
+        warn("this drive is NOT encrypted. Everything on it is readable by "
+             "whoever holds it.")
+        say(f"    Read ENCRYPT_THE_DRIVE.md in the Self-Cloud repo before you "
+            f"put photographs on it.\n")
     return info
+
+
+def is_encrypted(volume: Path) -> bool | None:
+    """True / False on a Mac; None where we cannot tell. Checked, not assumed:
+    an earlier version told the owner to go and encrypt a drive he had
+    encrypted the day before."""
+    if platform.system() != "Darwin":
+        return None
+    try:
+        r = subprocess.run(["diskutil", "info", str(volume)],
+                           capture_output=True, text=True, timeout=20)
+    except Exception:
+        return None
+    for line in r.stdout.splitlines():
+        key, _, val = line.strip().partition(":")
+        if key.strip() in ("FileVault", "Encrypted"):
+            if val.strip().lower().startswith("yes"):
+                return True
+    return False if r.returncode == 0 else None
 
 
 def check(volume: Path) -> int:
