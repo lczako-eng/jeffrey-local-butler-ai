@@ -33,6 +33,7 @@ WHICH KEY THIS SERVER HOLDS
     an MCP host config should never set.
 """
 
+import functools
 import sys
 from pathlib import Path
 
@@ -61,8 +62,18 @@ mcp = _Server("jefferey")
 def door(register):
     """The egress door around an MCP tool. Refusals come back as a RESULT the
     model must report, because the MCP SDK reduces any exception raised in a
-    tool to 'Error executing tool <name>' and the reason would be lost."""
-    return egress.door(register, as_result=True)
+    tool to 'Error executing tool <name>' and the reason would be lost.
+
+    Also re-reads the conscience before every call: Claude Desktop keeps this
+    process alive for as long as the app is open, and the owner may be
+    talking to another engine at the same time."""
+    def wrap(fn):
+        @functools.wraps(fn)
+        def fresh(*args, **kwargs):
+            conscience.refresh()
+            return fn(*args, **kwargs)
+        return egress.door(register, as_result=True)(fresh)
+    return wrap
 conscience = Conscience()
 rep = Representative(conscience)
 guard = Guardian(conscience)

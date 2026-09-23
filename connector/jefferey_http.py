@@ -28,6 +28,7 @@ Wire up a custom GPT (chatgpt.com → Create a GPT):
 
 from __future__ import annotations
 
+import functools
 import os
 import secrets
 import sys
@@ -49,9 +50,23 @@ from reminisce import Reminisce
 import access
 import egress
 from access import AccessDenied, OwnerOnly, gate, owner_only
-from egress import EgressRefused, door
+from egress import EgressRefused
 
 conscience = Conscience()
+
+
+def door(register):
+    """The egress door around a route, re-reading the conscience first: this
+    server stays up while the owner talks to other engines too."""
+    def wrap(fn):
+        @functools.wraps(fn)
+        def fresh(*args, **kwargs):
+            conscience.refresh()
+            return fn(*args, **kwargs)
+        return egress.door(register)(fresh)
+    return wrap
+
+
 rep = Representative(conscience)
 guard = Guardian(conscience)
 life = Life(conscience)

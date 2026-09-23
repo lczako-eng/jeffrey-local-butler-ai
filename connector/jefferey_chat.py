@@ -887,6 +887,7 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
     doors: the access gate on the way in, the egress door on the way out. A
     refusal comes back as a result the model must report, not as a crash and
     not as something it can retry differently."""
+    conscience.refresh()          # another engine may have written since
     try:
         if name in access.OWNER_ONLY_TOOLS:
             access.owner_only(lambda: None)()
@@ -1201,6 +1202,7 @@ _TRACE = {
 
 
 def system_prompt() -> str:
+    conscience.refresh()          # the live conscience, not the one at startup
     snap = conscience.snapshot()
     return (
         DIRECTIVES
@@ -1689,6 +1691,46 @@ def selftest() -> None:
             egress.bind("chat", engine=f"Anthropic ({MODEL})")
         print("  ✓ owned engine: a local model over a real socket stores a fact")
         print("    through both doors, and the log says it stayed in the house")
+
+        # 1f. Many engines, one life — with a REAL second process, the way
+        #     Claude Desktop's long-lived JEFFEREY and Hermes share one store.
+        import subprocess
+        other = (
+            "import sys; sys.path.insert(0, sys.argv[1]);"
+            "from conscience import Conscience;"
+            "c = Conscience(sys.argv[2]);"
+            "c.remember_fact(sys.argv[3], 'family')"
+        )
+        here = str(Path(__file__).parent)
+        subprocess.run([sys.executable, "-c", other, here, str(conscience.path),
+                        "written by the other engine"], check=True)
+        # This process never restarted, yet sees it through the tool surface...
+        basis = dispatch_tool("explain_basis", {"topic": "other engine"})
+        assert any("other engine" in f["fact"] for f in basis.get("facts", [])), basis
+        # ...and its own next write lands, instead of being refused as stale.
+        r = dispatch_tool("remember_fact", {"fact": "written after, by this one"})
+        assert not r.get("refused") and "error" not in r, r
+        # Sections this process's modules made (people, rules…) survived the
+        # reload even though the other process's file had none of them.
+        dispatch_tool("add_person", {"name": "Mira", "relationship": "niece"})
+        dispatch_tool("set_rule", {"kind": "reaction", "tags": "mira",
+                                   "instruction": "Be glad with me."})
+        # And the other process, starting fresh, sees everything this one wrote.
+        seen_there = subprocess.run(
+            [sys.executable, "-c",
+             "import sys, json; sys.path.insert(0, sys.argv[1]);"
+             "from conscience import Conscience;"
+             "d = Conscience(sys.argv[2]).data;"
+             "print(json.dumps([f['fact'] for f in d['facts']] + "
+             "[p['name'] for p in d.get('people', [])]))",
+             here, str(conscience.path)],
+            check=True, capture_output=True, text=True).stdout
+        assert "written after, by this one" in seen_there and "Mira" in seen_there
+        # Nothing changed on disk → refresh is a no-op (one stat, no re-read).
+        assert conscience.refresh() is False
+        print("  ✓ many engines, one life: a second process writes, this one sees")
+        print("    it without restarting, writes after it without a conflict, and")
+        print("    keeps its own sections through the reload")
 
         # 2. Reinforcement: same correction again raises confidence.
         before = conscience.priorities_for("travel")[0]["confidence"]

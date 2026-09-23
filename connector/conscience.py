@@ -78,7 +78,61 @@ class Conscience:
             "_rev": 0,          # bumped on every write; guards against clobber
         }
         self._rev_seen = 0
+        self._stat: tuple[int, int, int] | None = None
         self._load()
+        self._mark()
+
+    # ------------------------------------------------------ many engines, one life
+    #
+    # The owner runs more than one engine at once: Claude Desktop keeps its
+    # JEFFEREY process alive for as long as the app is open, while he talks to
+    # Hermes on the same Mac, or a Custom GPT calls in. Each is a separate
+    # process holding the conscience in memory. Without this, the first write
+    # from one made every other one stale: it served old facts, and its next
+    # write was (correctly) refused as a conflict — so in practice Claude's
+    # memory broke until the app was quit. Every surface now calls refresh()
+    # before each tool call, and a surface picks up what the others wrote.
+
+    def _mark(self) -> None:
+        try:
+            st = self.path.stat()
+            self._stat = (st.st_ino, st.st_mtime_ns, st.st_size)
+        except OSError:
+            self._stat = None
+
+    def refresh(self) -> bool:
+        """Re-read the store if another process has written it since this one
+        last looked. Cheap when nothing changed (one stat). Returns True if it
+        reloaded. Never writes, and never replaces good memory with a file it
+        cannot read — that case is left to the write guard and recovery."""
+        try:
+            st = self.path.stat()
+        except OSError:
+            return False
+        # Every save is a fresh file renamed into place, so the inode changes
+        # on each write — this stays right on disks that keep 1-second times.
+        if self._stat == (st.st_ino, st.st_mtime_ns, st.st_size):
+            return False
+        try:
+            disk = self._validate(json.loads(self.path.read_text()))
+        except Exception:
+            return False
+        rev = int(disk.get("_rev", 0))
+        if rev == self._rev_seen:
+            self._stat = (st.st_ino, st.st_mtime_ns, st.st_size)
+            return False
+        old = dict(self.data)
+        self.data.clear()
+        self.data.update(disk)
+        # Sections another module created in memory (people, rules, grants…)
+        # but that the other process never wrote must still exist here, empty,
+        # or the next call into that module fails on a missing key.
+        for k, v in old.items():
+            if k not in self.data and isinstance(v, (list, dict)):
+                self.data[k] = type(v)()
+        self._rev_seen = rev
+        self._stat = (st.st_ino, st.st_mtime_ns, st.st_size)
+        return True
 
     # ------------------------------------------------------------ storage
     #
@@ -279,6 +333,7 @@ class Conscience:
             self.data["_rev"] = self._rev_seen + 1
             self._write(self.data)
             self._rev_seen = self.data["_rev"]
+            self._mark()
             self._archive()
 
     def _write(self, payload: dict) -> None:
