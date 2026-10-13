@@ -1,0 +1,444 @@
+{
+ "gaps": [
+  {
+   "title": "Backup verifier and second copy: nothing copies or verifies the drive-only data (conscience, index, voice, originals); 'never cancel iCloud before two verified copies' is prose only",
+   "confirmed_absent": true,
+   "evidence": "Claims: ops finding, ops-18, seam-34, voice finding, voice-38. grep 'backup|second copy|last_verified' over connector/ and tools/ finds only install.py:180 (Claude config backup) and the rule text in provision_drive.py:80. MASTER_BUILD_LIST.md 1.5 'Backup verifier' is unbuilt; HANDOVER A7 unbuilt; Self-Cloud BUILD_JOURNAL.md:223-234 records the Time Machine backup was dropped from the drive. conscience.py snapshots (HISTORY_KEEP=20) sit on the same drive.",
+   "what_to_build": "tools/backup.py: mirror .selfcloud/jefferey (conscience, history, photo index, voice) and originals/ to a second marked drive, sha256 every file, run a random-sample restore test, write last_verified into both drive markers. A status line in daily_brief and a hard refusal of any 'safe to cancel iCloud' advice until two verified copies exist. Voice enrolments are included.",
+   "priority": "now",
+   "owner": "Both"
+  },
+  {
+   "title": "Provisioning a drive leaves the existing laptop conscience behind: the next session on the drive knows nothing",
+   "confirmed_absent": true,
+   "evidence": "Claim drive-51. provision_drive.py check (lines 325-339) only reports whether a conscience exists on the drive. grep 'migrat|move|copy' in home.py and provision_drive.py finds no import of ~/.jefferey/conscience.json. home.py routes to the drive the moment one is marked (home.py:78, :114), so weeks of facts in ~/.jefferey stay on the Mac and are silently replaced by an empty store.",
+   "what_to_build": "At provision time, and in home.py when a drive is present but ~/.jefferey/conscience.json also exists: offer to move the store, history and egress log onto the drive (verified copy, then rename the home copy to *.moved-to-drive). Never run two stores silently.",
+   "priority": "now",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Failures and access denials are invisible on the Claude surface, and there is no health or status tool",
+   "confirmed_absent": true,
+   "evidence": "Claims: adversarial finding (opaque MCP denials), ops finding, ops-38. jefferey_mcp.py:61-75 wraps tools with egress.door(as_result=True), but egress.py:579 catches only EgressRefused; AccessDenied and OwnerOnly are PermissionError subclasses (access.py:109,113). I ran it: JEFFEREY_CLIENT=claude-raw, asyncio.run(m.mcp.call_tool('who_am_i',{})) gave 'UnexpectedToolError Error executing tool who_am_i', and the same for set_permission. The only status-like tools are selfcloud_status and vault_status (confirmed from the jefferey_chat TOOLS list).",
+   "what_to_build": "In the MCP door wrapper, turn AccessDenied, OwnerOnly, ConscienceConflict, ConscienceCorrupt and OSError into refusal_result-style dicts with a plain 'tell_the_user' line. Add a jefferey_status tool (and install.py --status) covering which store is in use, drive id, free space, last backup verification, recovery events, the door state and the version.",
+   "priority": "now",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No way to correct learned items: no edit or supersede for facts, no delete or merge for priorities, corrections cannot be read back, contradictory stories are not flagged",
+   "confirmed_absent": true,
+   "evidence": "Claims: learning finding, learning-21/37/48/50, life-26. grep 'supersede|update_fact|edit_fact|remove_priority|merge_priority' over connector/ returns nothing. The MCP tool list (jefferey_mcp.py) has forget (facts only), set_priority and record_correction, and nothing to remove a priority. get_conscience returns only a count of corrections.",
+   "what_to_build": "Owner-console tools update_fact(id, text) with a supersedes link, remove_priority, and merge_priority(a, b). Normalise priority keys (casefold, strip punctuation). Add a list_corrections read. Flag contradictory legacy memories about the same person or event for the owner to settle.",
+   "priority": "now",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "The iCloud dedup-and-separation pipeline exists in no repo",
+   "confirmed_absent": true,
+   "evidence": "Claims: photos finding, photos-61. grep 'dedup|phash' in tools/ and connector/ finds only docstrings (photo_index.py:14,74). MASTER_BUILD_LIST.md:62-65 says 'This lives only on the laptop', item 2.3. Self-Cloud BUILD_JOURNAL.md:6 records it as proven.",
+   "what_to_build": "Recover the laptop code into tools/ (build item 2.3), with a test on a synthetic library and a manifest of kept and redundant paths that photo_index uses to pick canonical paths. Only the owner or the laptop agent can supply the source.",
+   "priority": "now",
+   "owner": "Both"
+  },
+  {
+   "title": "Seam decisions waiting on the owner (B1/B6, the marker, who owns the backup verifier) and a silent laptop agent",
+   "confirmed_absent": true,
+   "evidence": "Claims: seam finding, seam-31, seam-29. MASTER_BUILD_LIST 3a.5 says 'Agree the marker... both'. Self-Cloud BUILD_JOURNAL has no entry after 2026-09-14 answering the asks (per seam-31; consistent with what I read). requirements.txt is unpinned while B6 (no third-party packages) is open.",
+   "what_to_build": "Not code. The owner records decisions B1, B6 and the marker (selfcloud.json vs node.json) in CANON, and assigns the backup verifier to one side.",
+   "priority": "now",
+   "owner": "Owner"
+  },
+  {
+   "title": "Photos cannot be kept off the wall: 'on this day' shows screenshots, IDs and war photos to anyone with the passcode",
+   "confirmed_absent": true,
+   "evidence": "Claims: photos finding, photos-53. The photo_index.py:87-90 schema has no visibility or hidden column. wall.py opens on 'on this day' (wall.py:19,112), and its only 'hidden' is the Escape veil (wall.py:171,187). photo_index subcommands (851-884) are build/search/verify/stats/watch/selftest, with no hide or exclude.",
+   "what_to_build": "A visibility column on photos (private by default for screenshots and PNGs at screen size, plus owner-marked folders), a 'hide' command and wall button, and a wall that shows only family-visible photos when served over --lan.",
+   "priority": "now",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Keys govern only JEFFEREY's tools: the wall, recall, the photo index and the drive check no key, and wall traffic is not in the egress log",
+   "confirmed_absent": true,
+   "evidence": "Claims: access finding, access-54. grep 'import access|check_access|egress' over tools/*.py: no matches. The wall's only control is a LAN passcode (wall.py:22-23,48). Self-Cloud HANDOVER_FROM_JEFFEREY.md:112 calls the grant service 'a reference implementation'. Self-Cloud's own connector cannot be inspected.",
+   "what_to_build": "Per-person wall keys tied to grants (a family key opens a family-visibility wall), and wall and recall requests written to the egress log (destination LAN), so 'nothing leaves unlogged' covers the photo screen. Decide whether Self-Cloud or JEFFEREY hosts the grant service.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "Both"
+  },
+  {
+   "title": "'Forget' is not real deletion, and there is no export of everything held",
+   "confirmed_absent": true,
+   "evidence": "Claims: business finding (privacy), privacy-10, privacy-16, learning-62. I ran h2.py (scratchpad tmp.cJDXIZ3hsY): remember_fact 'tattoo of a fox', then forget(contains='fox') -> removed_facts 1. The live store is clean, but 2 of 5 history snapshots and the egress log still contain it. photo_index has no delete subcommand. No export tool is in any surface's list.",
+   "what_to_build": "forget --purge that also rewrites snapshots and redacts egress log bodies (keeping a tombstone), and tells the owner which engines already received it. photo_index 'erase <sha>'. A one-command export bundle (conscience, history, index rows, voice manifest, egress log, grants).",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No per-memory audience; named per-person keys work but are not first-class",
+   "confirmed_absent": true,
+   "evidence": "Claims: family finding (one shared family key), life finding, life-47. PARTLY WRONG: I ran h3.py. selfcloud.grant('anna',[family.read,media.read]) and grant('karen',...) with JEFFEREY_HTTP_TOKENS='anna:tA,karen:tK' both read /life/story (200). Revoking anna gave anna 403 while karen stayed 200, so per-person keys and independent revocation already work. CONFIRMED absent: both keys saw 'For Emma only: the letter in the blue box'. life.py:35 has only 3 visibility levels and life.py:151 filters by level alone.",
+   "what_to_build": "An audience field on memories and media (for example family:emma) matched against the bound client name. A 'grant a family member' helper that clones the family preset under a person's name, so the owner never types scopes.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No caregiver role: caregivers cannot use scam triage, log care or run an album sitting without the full caretaker key",
+   "confirmed_absent": true,
+   "evidence": "Claims: texting finding, texting-53, album-12, family-33, house-25. selfcloud.py:61-92 presets are claude-raw, gpt-raw, jefferey, family and executor only. access.py:91 gates triage_message on priorities.read, which family lacks; next_story_prompt needs life.read. grep 'caregiver' in code: 0 hits.",
+   "what_to_build": "A 'caregiver' preset with a new triage scope (verdict, flags and advice without relevant_priorities), album sitting (next_story_prompt and record_story with told_by), and a narrow category-scoped facts read (for example medications only). Every act is logged.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No reminders or scheduler, and no warning that JEFFEREY must not be relied on for medication or safety reminders",
+   "confirmed_absent": true,
+   "evidence": "Claims: house finding, house-23, house-25. grep 'scheduler|launchd|reminder' finds only photo_index.py:877 (--once for cron). directives.md:196-200 (rule 22) forbids background work. START_HERE.md has no 'medic' mention. MASTER 2.8 (morning brief scheduling) is unbuilt.",
+   "what_to_build": "Now: a plain line in START_HERE and the directives that JEFFEREY does not deliver reminders and must not be relied on for medication. Later: have JEFFEREY write deterministic OS-level reminders (macOS Reminders or a launchd job) that keep working when the box is off, consistent with rule 22.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Grants never expire and the purchase gate cannot be co-signed: no expiry or one-shot, co-signer, merchant allowlist, spend summary or undo",
+   "confirmed_absent": true,
+   "evidence": "Claims: buying finding, buying-55/56/57/58. conscience.py:483 permission entry = {level, cap, updated} only. I ran h1.py: set_permission(shopping, act, 100) then authorize_action -> {'allowed': True, 'reason': 'within granted authority', ...}, with no token, id or expiry. grep 'expires_at|one_shot|co-sign|approver|allowed_merchants': 0 hits.",
+   "what_to_build": "expires_at and one_shot on permissions. A merchants allowlist. A caregiver approver who must co-sign above a threshold through their own key. A 'spent this week/month by category' read built from the action log, excluding denials.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Disclosure rules do not reach family engines, and interview answers never become rules",
+   "confirmed_absent": true,
+   "evidence": "Claims: family-16, family-30. access.py:88 gates check_disclosure and guidance_for on facts.read, which the family preset lacks (selfcloud.py:84-87), so a family GPT can tell the story without the owner's 'say I'm doing fine' rule. grep 'set_rule|rules.' in interview.py: 0 hits, so 'Eva must never hear about Kandahar' stays a memory.",
+   "what_to_build": "A family-safe guidance projection: the verdict and how to speak, without the rule text. When an interview answer names a person and a topic to withhold, propose a disclosure rule for the owner to confirm.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No age or content gating of stories for children on a family key",
+   "confirmed_absent": true,
+   "evidence": "Claim life-40. life.py:35 VISIBILITY = private/family/legacy only. There is no audience age or content-warning field, so a family key gets the graphic IED account verbatim (tester observed it via tell_story).",
+   "what_to_build": "A 'sensitive' or 'adults only' tag on memories, a per-key 'child' flag, and tell_story leaving tagged memories out for child keys.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No way to mark a person 'don't ask', and no 'deceased' marker on people",
+   "confirmed_absent": true,
+   "evidence": "Claims: life-51, family finding, family-50. life.py:52-64 add_person fields are name, relationship, notes and important_dates only. grep 'deceased|died' finds only an interview prompt (interview.py:78). story_gaps keeps listing a declined or dead person in the present tense.",
+   "what_to_build": "'died' date and 'do_not_ask' fields on people. story_gaps and the directives skip do-not-ask people and speak of the dead gently, in the past tense.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "The secret scanner misses bank account numbers and IBANs",
+   "confirmed_absent": true,
+   "evidence": "Claims: adversarial-34, adversarial-35. I ran h2.py: egress._scan('my bank account number is 00123456789') -> None, and _scan('IBAN GB29 NWBK 6016 1331 9268 19') -> None, while '4532 0151 1283 0366' -> card number. representative.py:60 has 'account number' and 'iban' only as form-field labels, not in the egress scan.",
+   "what_to_build": "Add IBAN (mod-97 checksum) and labelled Canadian bank account patterns (transit + institution + account, or 'account number' followed by 7-12 digits) to the egress scan in both directions.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "The model is never given the voice, phone or texting rules",
+   "confirmed_absent": true,
+   "evidence": "Claims: voice-20, texting finding. directives.md '## Voice' (line 231) is about tone only. grep 'phone|intercom|clone|impersonat|sms|text' in directives.md finds no rule about calls, texts or voice cloning. Safeguard 7 exists only in FOUNDER_DIRECTIONS.md:220-222.",
+   "what_to_build": "A directive covering pasted texts and calls: triage them; a request for a code is always a scam; never call back numbers given in a message; Jefferey cannot send texts or place calls, so say so. Plus the voice safeguards 2, 6 and 7 as directive text, with a test asserting they are in the system prompt.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "The product drive does not carry its software, and every launcher points at a personal AI-session branch",
+   "confirmed_absent": true,
+   "evidence": "Claims: drive finding, drive-50, accessibility-58. provision_drive.py:97-98 prints a git clone plus 'git checkout claude/substantiation-discussion-8dmu3c'. START_HERE.md:20,68 say the same. grep 'copytree|app/' in provision_drive.py finds no copy step. git tag is empty.",
+   "what_to_build": "Provisioning copies a pinned, checksummed release into Self-Cloud/app, and the drive launcher verifies the checksum before running. Merge to main and stop referencing session branches.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "The 'no Terminal' promise breaks at key steps: storing a secret, changing the photo folder, opening the album or showing a moment on the wall",
+   "confirmed_absent": true,
+   "evidence": "Claims: accessibility finding, accessibility-15/17/41/59/60. Repo launchers are Install, Make this drive, Record my voice, Show me my life, Talk to JEFFEREY and What left the house. None stores a vault secret or runs the album. accessibility-60: the vault route is 'python connector/vault.py set'. The wall has no QR code (grep 'qr': no hits in wall.py).",
+   "what_to_build": "'Keep a secret safe.command' (osascript dialogs, value straight into the keychain), 'Look at the album.command', a wall setting for the photo folder, a QR code for opening the wall on TVs and tablets, and wall display of a moment by id.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No version, update channel or pinned dependencies, so security fixes cannot reach an existing install",
+   "confirmed_absent": true,
+   "evidence": "Claims: business finding, business-21, onboarding-63, seam-29. jefferey_http.py:133 version='1.0' is the only version. git tag: none. connector/requirements.txt is unpinned ('anthropic>=0.120', 'mcp[cli]', 'fastapi'...). The drive launcher never pulls updates.",
+   "what_to_build": "Semantic version constant and tags, a hashed lockfile, and an 'Update JEFFEREY.command' that fetches the latest signed tag, re-runs the self-test and rolls back on failure. The model id becomes configurable.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "The encryption runbook is in a private repo, and non-Mac or Time Machine and exFAT cases get no guidance",
+   "confirmed_absent": true,
+   "evidence": "Claims: onboarding finding, onboarding-36. START_HERE.md:52 and provision_drive.py:295 point to ENCRYPT_THE_DRIVE.md 'in the Self-Cloud repo'. ls docs/ in JEFFEREY has no encryption runbook. The file exists only at /home/user/self-cloud/docs/ENCRYPT_THE_DRIVE.md.",
+   "what_to_build": "Bundle the runbook on the drive and in this repo. Provisioning detects Time Machine, exFAT and NTFS and prints the right path (erase only after a verified second copy). Off a Mac it says it cannot check encryption.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "Both"
+  },
+  {
+   "title": "Photo index stores absolute paths, does not exclude the drive's own folders, and duplicates Self-Cloud's catalog",
+   "confirmed_absent": true,
+   "evidence": "Claims: seam finding, seam-26. photo_index.py:87-90 stores 'path TEXT' (absolute). grep 'catalog.db|node.json|Backups.backupdb' in tools/ and connector/: no hits, so nothing reads Self-Cloud's catalog and nothing excludes .selfcloud or Backups.backupdb.",
+   "what_to_build": "Store drive-relative paths. Exclude .selfcloud, .Spotlight and Backups.backupdb. Hash only when size or mtime changes. Finish B2/B3: read Self-Cloud's catalog by node id, relative path and sha.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "Both"
+  },
+  {
+   "title": "No restore of a snapshot from any surface",
+   "confirmed_absent": true,
+   "evidence": "Claim durability-68. conscience.py:37,148 keeps 20 snapshots in <store>.history, but no tool in the MCP list or the terminal TOOLS lists or restores them (h1.py tool-name filter for restore, snapshot and backup returned only selfcloud_status and vault_status). install.py:254 points at ~/.jefferey/conscience.history, which ignores the drive store.",
+   "what_to_build": "Owner-console tools list_snapshots and restore_snapshot(n) (restoring is itself snapshotted), plus a 'Undo yesterday.command'.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Elder-scam charge patterns are not recognised, and nobody trusted can be alerted",
+   "confirmed_absent": true,
+   "evidence": "Claims: money finding, money-56, money-58. guardian.py:139 gives every unregistered merchant severity 0.85 (a gift-card or Bitcoin-ATM charge scores the same as a coffee). The gift-card and crypto signals exist only in mail triage (representative.py:72-74), not in Guardian. grep 'notify|alert' in code: 0 hits.",
+   "what_to_build": "A charge-pattern scorer (gift cards, crypto ATMs, money transfers, repeated round amounts, first-time foreign merchants) with its own verdict. Later: an owner-configured trusted-contact alert through the egress door (logged), never automatic beyond what the owner set.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Money records cannot be erased or edited, and an executor cannot see subscriptions",
+   "confirmed_absent": true,
+   "evidence": "Claims: money finding, money-60, money-61. The MCP tool list has expect_charge and mark_cancelled but no forget_charge or remove_expected_charge. forget removes facts only. executor holds legacy.read alone (selfcloud.py:89-91), so expected_charges is denied.",
+   "what_to_build": "forget_charge and remove_expected_charge (money.write, owner-confirmed). Later: a legacy-visible export of the active subscription register for the executor.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No consent or capacity record when someone sets JEFFEREY up for a person with dementia",
+   "confirmed_absent": true,
+   "evidence": "Claims: business finding, business-53, onboarding-72. grep 'consent' outside voice_enrol.py: no install, interview or conscience step. START_HERE is addressed 'For: Laszlo'.",
+   "what_to_build": "A first-run record of whose conscience this is, who installed it, and on what authority (self, POA, substitute decision-maker), stored in the conscience and shown in 'What left the house'. A caregiver setup guide.",
+   "priority": "before-selling",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No representative or power-of-attorney role: delegated authority is impossible",
+   "confirmed_absent": true,
+   "evidence": "Claims: privacy finding, privacy-40, family-34. OWNER_ONLY_TOOLS (access.py, after line 105) puts set_permission and grant behind the owner console, and there is no preset with read-and-erase for a representative. A family key gets 403 on DELETE /facts and /life (tester observed).",
+   "what_to_build": "A 'representative' preset (read, correct and erase within owner-set conditions, every act logged) created by the owner in advance, plus the consent record above.",
+   "priority": "before-selling",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No inheritance flow: no heir designation, release condition, preservation mode or drive-key handover; the executor key works while the owner is alive",
+   "confirmed_absent": true,
+   "evidence": "Claims: family finding, life finding, family-38, life-48. grep 'estate|heir|deceased' in code: 0 hits. selfcloud.py:89-91 executor is a plain legacy.read key with no condition. CANON.md:165,184,189 list Digital Inheritance (priority 07) as concept only. ENCRYPT_THE_DRIVE.md only says a paper key copy belongs in the Constitution.",
+   "what_to_build": "Build priority 07: estate.json naming executor and heirs, a release condition (an owner-signed instruction, or executor plus a second heir), a read-only preservation mode, and a documented recovery-key handover. Until then, the executor key is granted only on the owner's word.",
+   "priority": "later",
+   "owner": "Both"
+  },
+  {
+   "title": "No commercial layer: payment, customer licence or EULA, warranty disclaimer, pricing, support or insurance",
+   "confirmed_absent": true,
+   "evidence": "Claims: business finding, business-04/05/07/22/48/49, onboarding-02/03. LICENSE allows only 'personal, non-commercial use' and forbids 'selling access', with no warranty disclaimer. Pricing contradicts itself: FOUNDER_DIRECTIONS §5 'Free first' vs CANON.md:191 'Pro (hosted... paid)'. No support file. Insurance is not mentioned. CANON.md:187: no production users, no revenue.",
+   "what_to_build": "After the §6 bar (it has worked for his wife for a week): a pricing decision, a customer EULA with warranty and liability limits and a 'not financial or legal advice' line in triage and Guardian output, a support address and process, and liability insurance.",
+   "priority": "before-selling",
+   "owner": "Owner"
+  },
+  {
+   "title": "Customer accounts and sign-in",
+   "confirmed_absent": true,
+   "evidence": "Claims: business-03, onboarding-02. No account code anywhere. MASTER_BUILD_LIST.md §6 (line 305): 'Cloud accounts, telemetry, crash reporting' are explicitly not being built.",
+   "what_to_build": "Nothing. If licensing is needed, use an offline licence file, never an account.",
+   "priority": "never",
+   "owner": "Owner"
+  },
+  {
+   "title": "No privacy policy or cross-border notice (PIPEDA and Quebec Law 25)",
+   "confirmed_absent": true,
+   "evidence": "Claims: business finding, business-40, privacy-54. grep -i 'privacy policy|PIPEDA|law 25' across both repos: no hits. The terminal sends the conscience in every system prompt to a US engine.",
+   "what_to_build": "A privacy notice: what each surface sends and to whom, that the customer's AI provider's terms govern retention, local logs and snapshots, and how to export and delete. A French version.",
+   "priority": "before-selling",
+   "owner": "Owner"
+  },
+  {
+   "title": "A stranger cannot obtain and start the product: no signed download, a git and Terminal install, ChatGPT-only and API-key-less users stuck",
+   "confirmed_absent": true,
+   "evidence": "Claims: onboarding finding x2, onboarding-17/71, accessibility-59. Installer exits 'Nothing was connected' without Claude Desktop (onboarding-17). There is no launcher for jefferey_http, which needs a tunnel and tokens. The terminal Claude engine requires ANTHROPIC_API_KEY (jefferey_chat.py:1291), though the local Ollama engine needs none. Install takes 8 steps including a git checkout (START_HERE.md:20).",
+   "what_to_build": "A signed, notarised DMG carrying the launchers and app. A 'Connect ChatGPT' launcher (token in the keychain, a plain explanation of what the tunnel exposes). START_HERE says a Claude Pro plan covers Desktop but not the terminal engine.",
+   "priority": "before-selling",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No Windows or Linux path",
+   "confirmed_absent": true,
+   "evidence": "Claims: business finding, business-15/18, onboarding-64/65. Only bash .command launchers (grep '.bat|.ps1': none). home.py:46-56 _mounts scans /Volumes, /media, /mnt and /run/media, never drive letters. install.py:46 knows a Windows config path, but no launcher calls it.",
+   "what_to_build": "Either say 'Mac only' everywhere it is sold, or add .ps1 launchers, drive-letter detection in home.py and a non-fcntl lock.",
+   "priority": "before-selling",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No phone or tablet app (iPhone, Android)",
+   "confirmed_absent": true,
+   "evidence": "Claims: business-16/17, onboarding-66. MASTER_BUILD_LIST.md §6: 'A phone app, until the local web UI (2.6) proves people want it'. The wall in a phone browser (--lan) is the intended phone surface.",
+   "what_to_build": "Nothing native. Make the wall an installable web app first, as the build list plans.",
+   "priority": "never",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No third-party licence notices for a commercial drive",
+   "confirmed_absent": true,
+   "evidence": "Claim: business finding, business-56. grep 'THIRD_PARTY|NOTICES' in both repos: none. reverse_geocoder (LGPL, GeoNames CC-BY) and pycountry (LGPL) are listed in requirements.txt comments.",
+   "what_to_build": "Generate THIRD_PARTY_NOTICES (pip-licenses), including GeoNames attribution and model licences, and ship it on the drive.",
+   "priority": "before-selling",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Marketing claims ahead of code: 'every major AI' and 'the house keeps working when the box is off'",
+   "confirmed_absent": true,
+   "evidence": "Claim business-59. Surfaces are MCP (Claude), HTTP Actions (GPT) and OpenAI-compatible local. There is no Gemini, Copilot or Grok surface. grep 'home assistant|thermostat|lights': no code. MASTER 5.4 home layer needs hardware.",
+   "what_to_build": "Word the claims to what is built (Claude, ChatGPT, local models), or test one more engine (Gemini through its OpenAI-compatible endpoint) before claiming it.",
+   "priority": "before-selling",
+   "owner": "Owner"
+  },
+  {
+   "title": "No French, no Canadian-form handling (XFA, tooltips, scanned forms)",
+   "confirmed_absent": true,
+   "evidence": "Claims: paperwork finding, paperwork-35/49, accessibility-29/53, voice-45. grep 'xfa|/TU|tooltip|french|numéro' in connector/ and tools/: no hits. The voice consent sentence and phrases are English only. The wall dates follow the browser locale (wall.py:203), but the UI text is English.",
+   "what_to_build": "French UI strings for the wall, launchers and voice phrase sheet. French aliases and sensitive vocabulary ('Numéro d'assurance sociale') in the form filler. Read /TU. Detect XFA and flat scanned PDFs and say plainly that they must be filled by hand.",
+   "priority": "before-selling",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Voice enrolment: a blank name silently becomes the Mac account name",
+   "confirmed_absent": true,
+   "evidence": "Claim: accessibility finding. 'Record my voice.command':29-30: read WHO; [ -z \"$WHO\" ] && WHO=\"$(id -un)\". voice_enrol.py:495 defaults --who to getpass.getuser().",
+   "what_to_build": "Ask again until a name is given. Never default the identity a consent take is filed under.",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Not on a new Mac: vault secrets do not travel, the first run needs network and about 2 GB, and local model weights are not on the drive",
+   "confirmed_absent": true,
+   "evidence": "Claims: ops-21, ops-22, seam-30. The vault is the OS keychain by design (vault.py:8-26), with no export path or doc note. No wheelhouse or --find-links anywhere. grep OLLAMA_MODELS: none, although MASTER 3.2 says weights are 'archived on the drive'.",
+   "what_to_build": "Document that secrets stay with the Mac and must be re-entered. A wheelhouse on the drive for offline installs. Set OLLAMA_MODELS to a drive folder in the local-engine launcher.",
+   "priority": "before-selling",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No uninstall-and-erase or decommission path when the Mac or the drive is sold or returned",
+   "confirmed_absent": true,
+   "evidence": "Claims: selling finding, selling-69, onboarding-16. install.py:285-292 --uninstall only runs unwire(). The venv, ~/.jefferey, ~/.selfcloud, vault entries and config backups stay.",
+   "what_to_build": "'Prepare this Mac/drive for sale': revoke keys, delete the store, history, egress log, wall.conf, venv and vault entries, remove the MCP entry, and confirm FileVault or APFS erase.",
+   "priority": "before-selling",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Album and photos: no date for scanned prints, no snooze, no record of who typed a story, repeated stories not merged",
+   "confirmed_absent": true,
+   "evidence": "Claims: photos-16, album-21, accessibility-36, album-09, album-11, life-27. reminisce.py has next_prompt, record and decline only (lines 184-261). photo_index.py has no set-date command (subcommands 851-884). Memories have no told_by field (album-11 key list). life.py add_memory has no duplicate check.",
+   "what_to_build": "'date these photos' (folder or sha set -> taken_at, place). A 'not today' snooze. told_by on stories. Near-duplicate story detection that offers to merge.",
+   "priority": "before-selling",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No voice playback, and the playback safeguards (only the owner, a room is a disclosure, never on a phone or intercom, withdraw while keeping the archive, a never-synthesise marker) are not in code",
+   "confirmed_absent": true,
+   "evidence": "Claims: voice finding, voice-56, voice-13/21/22/43, house-06, house-54, texting-63. grep 'tts|pyttsx|speak' in code: no synthesis. voice_enrol.py:8,241 say playback is a separate decision. MASTER 3.4 unbuilt. check_disclosure has no listeners parameter.",
+   "what_to_build": "When 3.4 is chosen: a single speak() chokepoint enforcing the listeners and room rules and refusing telephony and intercom sinks, with tests. A 'restrict: no synthesis' marker on voice and disc manifests. 'Withdraw future use' distinct from delete.",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No texting or calling integration (receive or send SMS, iMessage, WhatsApp, calls)",
+   "confirmed_absent": true,
+   "evidence": "Claims: texting finding, texting-01/03/62, selling-64. grep 'smtp|imessage|twilio|sms' in code: none. triage_message sees only pasted text. authorize_action can return allowed:true with nothing behind it.",
+   "what_to_build": "Later, a read-only Messages import for triage. Sending stays with the owner. The directive covering it is listed separately.",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Triage ignores who sent a message (a known grandson vs an unknown number)",
+   "confirmed_absent": true,
+   "evidence": "Claim texting-51. representative.py triage has no sender parameter (grep 'sender|known' finds only vault fields at lines 255-290). The life layer's people are not consulted.",
+   "what_to_build": "An optional sender and channel on triage. Match against life-layer people. Treat 'known name, new number' as a raised signal.",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "JEFFEREY cannot send, reply to, forward or file email; the host's mail connector acts outside its gate and log",
+   "confirmed_absent": true,
+   "evidence": "Claims: email finding, email-46. grep 'smtp|send_mail' in code: none. directives.md has the representative draft-only rules.",
+   "what_to_build": "State plainly that correspondence is advisory and that the host's Gmail connector is outside JEFFEREY. Later, optionally one sanctioned send tool behind authorize_action and the egress log.",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "authorize_action returns nothing a purchase tool could verify, so the gate is advisory",
+   "confirmed_absent": true,
+   "evidence": "Claims: buying finding, buying-54. I ran h1.py: authorize_action returned {'allowed': True, 'reason': ..., 'level', 'cap', 'updated'}, with no id or token. grep 'hmac': none. No JEFFEREY tool buys (by principle, JEFFEREY never moves money).",
+   "what_to_build": "A signed single-use authorisation token (HMAC from a vault key, binding category, amount, merchant and expiry) and a verify call, for any buying integration that agrees to honour it (for example the owner's own marketplace connector).",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No home automation (lights, thermostat, locks, doorbell cameras)",
+   "confirmed_absent": true,
+   "evidence": "Claims: house-01/02/03/04. No house tools on any surface. grep 'home assistant|rtsp|onvif': none. MASTER_BUILD_LIST.md 5.4 places the home layer under 'Needs hardware: genuinely later'.",
+   "what_to_build": "5.4: a Home Assistant bridge that writes local automations, so the house keeps working when the box is off. Locks are never actuated by an engine without authorize_action.",
+   "priority": "later",
+   "owner": "Both"
+  },
+  {
+   "title": "Money extras: no free-trial expiry, no card reference or deadline in dispute packs, no bank statement import",
+   "confirmed_absent": true,
+   "evidence": "Claims: money-34, money-55, money-57. guardian.py has no trial concept (the trial regex exists only in mail triage, representative.py:100). dispute_pack (guardian.py:213) has no card reference or deadline. grep 'csv|ofx': none. MASTER 3.5 unbuilt.",
+   "what_to_build": "A trial_ends date on expected charges. Card last-4 and a computed dispute window in the pack. A CSV and OFX importer (3.5).",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Seller side: no incoming-payment register, pricing, shipping, sale records, chargeback pack, regulated-item awareness or double-sale lock",
+   "confirmed_absent": true,
+   "evidence": "Claims: selling findings x4, selling-42/64-80. grep 'expected_payment|deposit|regulated|firearm|sold': none in connector/. Guardian handles outgoing charges only.",
+   "what_to_build": "Cheap now: a directive that 'paid' is confirmed only in the owner's bank app, never from a screenshot or email, and that regulated items go through the lawful process. Later: expected_payment and sale records with cost basis. Full listing and shipping stays with an external marketplace behind the doors.",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Photo search extras: no faces or people, no relative times, few Canadian occasions, no videos or RAW",
+   "confirmed_absent": true,
+   "evidence": "Claims: photos finding, photos-37/39/62/63. recall.py:57-62 OCCASIONS = christmas, new year, halloween, thanksgiving only (no Remembrance Day or Canada Day). No 'yesterday', 'last week' or 'the 90s' parsing. photo_index.py:62 IMAGE_SUFFIXES has no .mov, .mp4 or .dng. No face code.",
+   "what_to_build": "Relative-time and decade parsing. Remembrance Day, Canada Day, Easter, Mother's Day and New Year's Eve. Video and RAW indexing with keyframes. Offline face clustering named by the owner, private by default.",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "No .metadata_never_index on the drive",
+   "confirmed_absent": true,
+   "evidence": "Claim drive-60. grep 'never_index' in provision_drive.py: none. The effect on macOS cannot be tested here.",
+   "what_to_build": "Provisioning writes .metadata_never_index (or runs mdutil -i off) on the drive, if the owner wants Spotlight off.",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Card numbers spelled out in words are not caught",
+   "confirmed_absent": true,
+   "evidence": "Claim egress-04. I ran h2.py: egress._scan('card four five three two one five one one ...') -> None. This is an inherent limit of a digit scanner.",
+   "what_to_build": "Optional: normalise number words to digits before the Luhn scan. Low value.",
+   "priority": "later",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Engine refusal stop_reason is handled (claimed as GAP only because it could not be run)",
+   "confirmed_absent": false,
+   "evidence": "Claim engines-46. jefferey_chat.py:1252 'if msg.stop_reason == \"refusal\":' is present. The capability exists. Only live verification against the streaming client was impossible here.",
+   "what_to_build": "Nothing. Optionally a fake-stream test.",
+   "priority": "never",
+   "owner": "JEFFEREY"
+  },
+  {
+   "title": "Self-Cloud connector behaviour (node id after erase, erasure across catalog.db and audit.jsonl, node.json vs selfcloud.json ids)",
+   "confirmed_absent": false,
+   "evidence": "Claims: seam-02, seam-33, privacy-55. The connector code is in a private repo and cannot be seen. This is unverifiable, not proven absent. No JEFFEREY code reaches catalog.db (grep: none), and provision_drive mints its own id.",
+   "what_to_build": "The Self-Cloud side confirms re-keying after an erase, an erase path that covers catalog and audit, and one shared drive id (decision 3a.5).",
+   "priority": "before-anyone-else-uses-it",
+   "owner": "Self-Cloud"
+  }
+ ]
+}

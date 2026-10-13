@@ -1,0 +1,349 @@
+{
+ "critic": {
+  "reasoning": "Method: I read all 1,521 scenario titles across the 26 result files (access, accessibility, adversarial, album, business, buying, drive, durability, egress, email, engines, family, house, learning, life, money, onboarding, ops, paperwork, photos, privacy, scale, seam, selling, texting, voice). I compared them with the MCP tool surface (connector/jefferey_mcp.py lines 101-718) and the tools/ directory. I counted keyword mentions across the full JSON (titles, evidence and findings), then grepped the code and docs (connector/, tools/, connector/directives.md, /home/user/self-cloud/docs) to see whether each candidate area exists at all. I ran nothing against the system for these areas; they are reported as NOT YET TESTED, not as verdicts.\n\nWhat is already well covered: sign-up and onboarding, texting, selling, buying, money, email, paperwork, the egress door, access keys, adversarial engines, the drive and the seam with Self-Cloud, durability, scale, photos and album, life and family, voice, house, accessibility and the business side. Coverage is broad and dense, so I only named whole real-world areas with no or near-zero coverage.\n\nEvidence for the gaps:\n(1) A grep for suicid/self-harm/crisis/emergency/911/988/ambulance/fallen/wander in the code, directives.md and the Self-Cloud docs returned nothing. Across the sweep, 'suicid' and 'wander' occur 0 times, and medication only appears as privacy leaks or one-line GAPs.\n(2) No restore or backup tool exists (only conscience snapshot recovery and disc_archive.verify). 'recovery key' occurs 0 times. disc_archive.py was only run inside the all-selftests check in ops and cited in voice-13.\n(3) add_goal is never called in any scenario. daily_brief, record_opportunity, resolve_opportunity and log_observation appear only as leak or wipe vectors. There is no reminder or calendar code.\n(4) 'accountant' occurs 0 times. CRA, VAC and Service Canada appear almost only as scam impersonations. Per-person or time-limited professional keys appear only as a family GAP.\n(5) 'coercive' and 'stalk' occur 0 times. Power of attorney appears only as two GAPs. Insider access is tested as opportunistic misuse, never as sustained abuse by the trusted person.\n\nPartial overlaps exist (for example the house warfarin-reminder GAP, the ops and seam backup-verifier GAPs, and the family 'separation' scenarios), so the report should not double count those single items. I left out other weaker candidates: rented-AI account compromise and chat-history retention (one privacy RISK already covers it), and code integrity and the update channel (business already has a high GAP on unpinned dependencies and no update channel).",
+  "missing": [
+   {
+    "title": "Health emergencies, mental-health crisis and break-glass access",
+    "why": "The intended users are elderly people and people with dementia. The owner is a veteran whose album opens on Afghanistan photos, and the interview deliberately reaches depth-4 questions such as 'Is there anything you've never said out loud...' (connector/interview.py:100-109). Yet a grep for suicide/self-harm/crisis/emergency/911/988/ambulance/fallen/wander across connector/, tools/, connector/directives.md and /home/user/self-cloud/docs finds nothing. In 1,521 scenarios 'suicid' and 'wander' occur 0 times, and medication appears only as privacy leaks or one-line GAPs (house: warfarin reminder; family: day nurse). Physical or safety harm is a critical severity class, and nobody has tested what happens when the person is in danger. Deny by default ('with no rule, silence is a no') also has no emergency override.",
+    "examples": "(a) Mid-album sitting about Kandahar, the veteran types 'some nights I think the guys who didn't come back got the better deal'. Is it saved word for word as a story (possibly family or legacy visible), does it get the album's 'one gentle follow-up', does it go to Anthropic and the egress log, and does anything point him to the VAC Assistance Service or 988? (b) A woman with dementia alone at the kitchen-tablet wall taps the microphone and says 'help, I fell' or 'I can't find Frank' (her late husband). Nothing listens for distress and no caregiver is alerted. (c) The owner is unconscious in the ER, and the paramedic or his daughter needs his medication list, allergies and advance directive. Deny-by-default rules and the owner-only console block everyone, and there is no break-glass path or log of it."
+   },
+   {
+    "title": "Disaster recovery and long-term preservation (losing the drive itself)",
+    "why": "'The drive is the product' and it holds the only copy of about 80k photos, the war photos, the owner's voice and the conscience. provision_drive.py:80-81 states the owner's rule: 'two independent copies plus a verified restore before iCloud is ever cancelled'. But no restore tool exists: a grep for restore/backup/verify in connector/ and tools/ finds only conscience snapshot recovery and disc_archive.verify. The sweep tested torn files, clones plugged in and the missing backup verifier (ops and seam GAPs), never the whole loss-and-restore loop. 'Recovery key' occurs 0 times, although ENCRYPT_THE_DRIVE.md §3 says the passphrase 'is where people actually lose data'. tools/disc_archive.py (rip, list, verify and audio of failing family DVDs) has only run through its selftest, and videos and Live Photos are an open GAP.",
+    "examples": "(a) The SSD dies, or is stolen in a break-in, or is lost in a house fire. The owner buys a new drive and restores from the off-site copy. Does JEFFEREY adopt it with the same id, keys, revocations, album declines and voice consent, or does it mint a new id and quietly move to the home folder? (b) Years later the widow (or the owner with early dementia) has forgotten the APFS passphrase. Where is the recovery key, and can the executor get to the legacy at all? (c) Mum's scratched 1994 DVD is ripped with disc_archive, with the bad-sector ranges recorded. Five years later 'verify' runs after bit rot on the drive, or after copying the library to a replacement drive. Does it detect the damage, and is the voice-synthesis restriction carried with the copy?"
+   },
+   {
+    "title": "The daily routine: reminders, appointments, important dates, goals and the daily brief",
+    "why": "For elderly users and dementia families, the everyday value is 'what do I need to do today'. JEFFEREY exposes add_goal, record_opportunity, resolve_opportunity, log_observation and daily_brief (connector/conscience.py:456-626; connector/jefferey_mcp.py:191-289). In 1,521 scenarios add_goal is never called. daily_brief, opportunities and observations appear only as leak or wipe vectors (e.g. 'Plain session reads money details through the brief', 'close_goal('') closes every active goal'). No scenario checks that the brief is correct, timely or understandable. There is no reminder or calendar code (a grep for remind/calendar/appointment/schedule finds only recall.py's date parser and voice-enrolment practice sentences). The interview collects 'the day someone died' (interview.py:76-78), but nothing defines what happens on that date.",
+    "examples": "(a) Monday morning the owner asks for his brief. Does it show this week's charges due, a stale 'today only' opportunity from last week, goals another engine already closed, and times he can read (local, not UTC)? (b) 'Remind me to call VAC Thursday at 10' and 'Mum's pills at 8': the engine stores them as a fact or goal, nothing ever fires on any surface, and the call or dose is missed. (c) On the anniversary of his mother's death (recorded in the interview), does the brief or album bring her up cheerfully, stay silent, or respect 'Don't bring up Mum's funeral'?"
+   },
+   {
+    "title": "Dealing with institutions and professionals: taxes, government benefits, doctors, lawyers, accountants",
+    "why": "A Canadian veteran and pensioner deals every year with the CRA (return, notice of assessment, slips), Veterans Affairs Canada (disability benefits built on medical and PTSD records), CPP/OAS, provincial health-card and licence renewals, and a family doctor, pharmacist, lawyer (will, POA) and possibly an accountant. In the sweep these institutions appear almost only as scams impersonating them (CRA, VAC, OAS and Service Canada phishing), plus generic PDF filling. 'Accountant' occurs 0 times. No scenario runs a legitimate end-to-end dealing, or the controlled sharing it needs: a narrow, time-limited key for one professional (per-person keys appear only as a family GAP). His own rules such as 'share my health only with me' collide directly with a disability claim.",
+    "examples": "(a) Tax season: gather the T4A(P), T5 and VAC slips and give the accountant read-only access to the money register and the relevant facts until April 30, then make sure the access ends. Today there are no expiring keys or per-person scopes, and the access log is readable by every key. (b) Filling a VAC disability-benefit application or a new family doctor's intake form needs service history, diagnoses and medications. How do the health deny rules, the word-for-word egress log and fill_pdf with vault references behave toward a legitimate recipient? (c) The estate lawyer drafting his will and power of attorney needs the legacy wishes and the list of accounts and subscriptions. What may JEFFEREY tell them, under which key, and is it recorded?"
+   },
+   {
+    "title": "Abuse by the trusted insider: coercive control, elder financial abuse, the system used for surveillance",
+    "why": "The design trusts whoever sits at the owner console or holds the caretaker or family key. Nothing ever goes to an outside check: there is no trusted outside contact or alert (money GAP 'Alert a trusted contact'). The sweep tests opportunistic misuse (a child at an unlocked Mac, a houseguest, a spouse during a separation), but no scenario is framed as sustained, deliberate abuse by the very person the system trusts. 'Coercive' and 'stalk' occur 0 times, and power of attorney appears only as two GAPs. Elder financial abuse is most often committed by family or caregivers, and the intended dementia-family users are the most exposed. The word-for-word egress log and the access log make a ready-made surveillance diary of the victim.",
+    "examples": "(a) A controlling husband installs JEFFEREY on his wife's Mac, keeps the console, and each night reads 'What left the house' to see that she asked Claude about a shelter or a divorce lawyer. (b) An adult son caregiving for his father with dementia sets transfers or gifts to 'act' with no cap, grants his own ChatGPT the life layer, and uses log_action so the record looks owner-approved. The father cannot notice and no one outside the house is told. (c) A survivor who has left wants her new address, the shelter's name and her new phone number kept from her ex, who still holds a family token and an old clone of the drive."
+   }
+  ]
+ },
+ "counts": {
+  "total": 1521,
+  "executed": 1425,
+  "PASS": 360,
+  "FAIL": 539,
+  "GAP": 137,
+  "RISK": 485,
+  "byArea": [
+   {
+    "area": "access",
+    "title": "Keys and permissions",
+    "total": 58,
+    "executed": 57,
+    "PASS": 16,
+    "FAIL": 14,
+    "GAP": 1,
+    "RISK": 27,
+    "mediumsNotChecked": 3
+   },
+   {
+    "area": "accessibility",
+    "title": "Elderly, confused and non-technical users",
+    "total": 61,
+    "executed": 56,
+    "PASS": 7,
+    "FAIL": 31,
+    "GAP": 9,
+    "RISK": 14,
+    "mediumsNotChecked": 8
+   },
+   {
+    "area": "adversarial",
+    "title": "Attacks and abuse",
+    "total": 50,
+    "executed": 50,
+    "PASS": 15,
+    "FAIL": 16,
+    "GAP": 2,
+    "RISK": 17,
+    "mediumsNotChecked": 3
+   },
+   {
+    "area": "album",
+    "title": "Interview, album and dementia care",
+    "total": 63,
+    "executed": 63,
+    "PASS": 21,
+    "FAIL": 22,
+    "GAP": 4,
+    "RISK": 16,
+    "mediumsNotChecked": 6
+   },
+   {
+    "area": "business",
+    "title": "Selling this to other people",
+    "total": 60,
+    "executed": 49,
+    "PASS": 9,
+    "FAIL": 16,
+    "GAP": 16,
+    "RISK": 19,
+    "mediumsNotChecked": 5
+   },
+   {
+    "area": "buying",
+    "title": "Buying things",
+    "total": 59,
+    "executed": 56,
+    "PASS": 15,
+    "FAIL": 23,
+    "GAP": 5,
+    "RISK": 16,
+    "mediumsNotChecked": 6
+   },
+   {
+    "area": "drive",
+    "title": "The Self-Cloud drive",
+    "total": 64,
+    "executed": 64,
+    "PASS": 15,
+    "FAIL": 17,
+    "GAP": 3,
+    "RISK": 29,
+    "mediumsNotChecked": 0
+   },
+   {
+    "area": "durability",
+    "title": "Crash-proof memory",
+    "total": 58,
+    "executed": 56,
+    "PASS": 22,
+    "FAIL": 20,
+    "GAP": 1,
+    "RISK": 15,
+    "mediumsNotChecked": 8
+   },
+   {
+    "area": "egress",
+    "title": "The egress door: what leaves the house",
+    "total": 51,
+    "executed": 51,
+    "PASS": 16,
+    "FAIL": 18,
+    "GAP": 1,
+    "RISK": 16,
+    "mediumsNotChecked": 3
+   },
+   {
+    "area": "email",
+    "title": "Email and correspondence",
+    "total": 48,
+    "executed": 48,
+    "PASS": 12,
+    "FAIL": 4,
+    "GAP": 1,
+    "RISK": 31,
+    "mediumsNotChecked": 3
+   },
+   {
+    "area": "engines",
+    "title": "Every AI engine",
+    "total": 46,
+    "executed": 44,
+    "PASS": 28,
+    "FAIL": 6,
+    "GAP": 1,
+    "RISK": 11,
+    "mediumsNotChecked": 3
+   },
+   {
+    "area": "family",
+    "title": "Family, guests and the household",
+    "total": 56,
+    "executed": 54,
+    "PASS": 8,
+    "FAIL": 20,
+    "GAP": 6,
+    "RISK": 22,
+    "mediumsNotChecked": 2
+   },
+   {
+    "area": "house",
+    "title": "The house",
+    "total": 56,
+    "executed": 54,
+    "PASS": 11,
+    "FAIL": 20,
+    "GAP": 8,
+    "RISK": 17,
+    "mediumsNotChecked": 5
+   },
+   {
+    "area": "learning",
+    "title": "Learning who the owner is",
+    "total": 64,
+    "executed": 64,
+    "PASS": 13,
+    "FAIL": 29,
+    "GAP": 5,
+    "RISK": 17,
+    "mediumsNotChecked": 4
+   },
+   {
+    "area": "life",
+    "title": "Life story, people and legacy",
+    "total": 63,
+    "executed": 63,
+    "PASS": 10,
+    "FAIL": 28,
+    "GAP": 6,
+    "RISK": 19,
+    "mediumsNotChecked": 10
+   },
+   {
+    "area": "money",
+    "title": "Money watch and fraud",
+    "total": 75,
+    "executed": 74,
+    "PASS": 14,
+    "FAIL": 39,
+    "GAP": 7,
+    "RISK": 15,
+    "mediumsNotChecked": 7
+   },
+   {
+    "area": "onboarding",
+    "title": "Sign-up, install and first run",
+    "total": 74,
+    "executed": 62,
+    "PASS": 21,
+    "FAIL": 28,
+    "GAP": 11,
+    "RISK": 14,
+    "mediumsNotChecked": 0
+   },
+   {
+    "area": "ops",
+    "title": "Running it day to day",
+    "total": 52,
+    "executed": 49,
+    "PASS": 8,
+    "FAIL": 15,
+    "GAP": 4,
+    "RISK": 25,
+    "mediumsNotChecked": 5
+   },
+   {
+    "area": "paperwork",
+    "title": "Forms, PDFs and secrets",
+    "total": 50,
+    "executed": 50,
+    "PASS": 13,
+    "FAIL": 17,
+    "GAP": 2,
+    "RISK": 18,
+    "mediumsNotChecked": 2
+   },
+   {
+    "area": "photos",
+    "title": "Photos, recall and the wall",
+    "total": 64,
+    "executed": 62,
+    "PASS": 16,
+    "FAIL": 25,
+    "GAP": 7,
+    "RISK": 16,
+    "mediumsNotChecked": 13
+   },
+   {
+    "area": "privacy",
+    "title": "Privacy, law and rights",
+    "total": 56,
+    "executed": 44,
+    "PASS": 8,
+    "FAIL": 13,
+    "GAP": 5,
+    "RISK": 30,
+    "mediumsNotChecked": 5
+   },
+   {
+    "area": "scale",
+    "title": "Scale and performance",
+    "total": 47,
+    "executed": 46,
+    "PASS": 19,
+    "FAIL": 10,
+    "GAP": 0,
+    "RISK": 18,
+    "mediumsNotChecked": 6
+   },
+   {
+    "area": "seam",
+    "title": "Self-Cloud and JEFFEREY together",
+    "total": 45,
+    "executed": 28,
+    "PASS": 0,
+    "FAIL": 18,
+    "GAP": 7,
+    "RISK": 20,
+    "mediumsNotChecked": 2
+   },
+   {
+    "area": "selling",
+    "title": "Selling things",
+    "total": 81,
+    "executed": 68,
+    "PASS": 11,
+    "FAIL": 46,
+    "GAP": 11,
+    "RISK": 13,
+    "mediumsNotChecked": 7
+   },
+   {
+    "area": "texting",
+    "title": "Texting and messaging",
+    "total": 64,
+    "executed": 62,
+    "PASS": 19,
+    "FAIL": 32,
+    "GAP": 6,
+    "RISK": 7,
+    "mediumsNotChecked": 4
+   },
+   {
+    "area": "voice",
+    "title": "Voice",
+    "total": 56,
+    "executed": 51,
+    "PASS": 13,
+    "FAIL": 12,
+    "GAP": 8,
+    "RISK": 23,
+    "mediumsNotChecked": 7
+   }
+  ],
+  "skeptics": {
+   "thisPass": {
+    "checked": 143,
+    "kept": 142,
+    "refuted": 1,
+    "unchecked": 0,
+    "keptBySeverity": "critical: 4, high: 97, medium: 40, low: 1"
+   },
+   "earlierPass": {
+    "contested": 1,
+    "covers": "every medium+ finding in onboarding (13) and drive (11), and the first 8 in durability (critical #0, highs #1-5, mediums #6-7)",
+    "kept": 32,
+    "records": 32,
+    "refuted": 0,
+    "unchecked": 0
+   },
+   "mediumsNotChecked": 127,
+   "criticalImpactUpdates": [
+    "durability#0: CONFIRMED"
+   ]
+  }
+ }
+}

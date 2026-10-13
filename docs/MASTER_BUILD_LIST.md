@@ -2,6 +2,12 @@
 
 *Everything discussed, in one place. Updated 2026-09-14.*
 
+> **⚑ 2026-10-13 — stress test: `docs/STRESS_TEST_2026-10.md`.** 1,521
+> scenarios, 69 verified root issues (3 critical, 39 high), 53 confirmed gaps.
+> Its section 7 ("What we need, in order") supersedes the ordering below until
+> the "this week" items are done. Several rows marked BUILT below have verified
+> defects listed there (egress door, durability, access gate, Guardian, album).
+
 **The reframe that matters:** the laptop plus the external SSD **is Self-Cloud
 v0**. A box is a packaging decision, not a prerequisite. Almost everything below
 runs on the machine already on the desk — so nothing waits on a purchase.

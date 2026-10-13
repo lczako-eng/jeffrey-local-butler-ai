@@ -23,6 +23,18 @@ Two products, two repos, two agents, one owner.
 installer, a structural permission gate, crash-proof storage, local semantic
 photo search, and a screen.
 
+**⚑ READ FIRST — STRESS TEST, 2026-10-13: `docs/STRESS_TEST_2026-10.md`.**
+1,521 scenarios across 26 areas, 1,425 executed against the real code;
+independent skeptics reproduced 174 of the 175 serious findings they checked.
+Result: **69 root issues — 3 critical, 39 high, 23 medium, 4 low** — and 53
+confirmed missing capabilities. Verdict in the report's own words: usable by the
+owner, carefully; **not ready for his family, not ready for a stranger who
+pays.** The single rule it lands on: *nothing irreversible happens because an AI
+asked.* Section 7 is the ordered work plan; `docs/stress-test-2026-10/` holds
+every scenario and finding. Several claims below (the egress door being "the one
+way out", 20 snapshots buying back "weeks", the drive always winning) are
+contradicted by verified findings there — the report wins until they are fixed.
+
 **ADVERSARIALLY AUDITED 2026-09-15**, under your rule 6.4. Seven attackers,
 each required to produce a repro they actually ran; 48 findings raised, 31
 refuted by a skeptic, **17 survived — 5 of them HIGH. All five are fixed,
