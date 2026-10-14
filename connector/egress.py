@@ -32,7 +32,8 @@ Three rules, and they are the whole of this file:
 
 The owner can also shut the door: `python connector/egress.py shut` (or a
 file named `door-shut` beside the conscience, or JEFFEREY_OFFLINE=1). Shut
-means every release is refused until they open it again. This is JEFFEREY's
+means no tool runs at all — nothing is read, written or released — until
+they open it again; a switch that cannot be reached counts as shut. This is JEFFEREY's
 own switch; Self-Cloud's offline switch is theirs and stays theirs.
 """
 
@@ -101,6 +102,7 @@ RELEASE: dict[str, frozenset[str]] = {
                                     "confidence", "evidence", "updated"}),
     "set_priority": frozenset({"id", "context", "higher", "lower", "confidence",
                                "evidence", "updated"}),
+    # facts only reach a key that may read facts (conscience.explain_basis)
     "explain_basis": frozenset({"topic", "priorities", "facts"}),
     "priorities_for": frozenset({"id", "context", "higher", "lower", "confidence",
                                  "evidence", "updated"}),
@@ -119,8 +121,11 @@ RELEASE: dict[str, frozenset[str]] = {
                            "original_untouched", "fields", "references",
                            "available"}),
     "pdf_form_fields": frozenset({"path", "fields", "count"}),
-    "action_log": frozenset({"category", "description", "amount", "outcome",
-                             "added", "ts"}),
+    # who wrote each line and through which door (I-45); an approval's id is
+    # given only to the connection that asked for it, never in the log view
+    "action_log": frozenset({"category", "description", "amount", "currency",
+                             "outcome", "added", "ts", "by", "surface", "source",
+                             "approved"}),
     "conscience_include": frozenset({"id", "ref", "added"}),
     "conscience_exclude": FORGET | {"excluded"},
     "set_rule": frozenset({"id", "kind", "tags", "audience", "allow",
@@ -136,15 +141,24 @@ RELEASE: dict[str, frozenset[str]] = {
     "add_goal": frozenset({"id", "goal", "added", "active"}),
     "close_goal": FORGET | {"closed"},
     "log_observation": frozenset({"id", "note", "category", "added", "ts"}),
+    # who saved it, whether it may interrupt, and any marks of a scam (I-40)
     "record_opportunity": frozenset({"id", "what", "value_estimate", "aligns_with",
                                      "advances_goal", "reduces_risk", "urgency",
-                                     "score", "status", "resolved", "added", "ts"}),
+                                     "score", "status", "resolved", "added", "ts",
+                                     "source", "surface", "may_interrupt",
+                                     "scam_signals", "warning"}),
+    "score_opportunity": frozenset({"what", "value_estimate", "aligns_with",
+                                    "advances_goal", "reduces_risk", "urgency",
+                                    "score", "status", "scam_signals"}),
     "resolve_opportunity": FORGET | {"resolved"},
-    # acting on their behalf
-    "set_permission": frozenset({"category", "level", "cap", "updated"}),
-    "authorize_action": frozenset({"allowed", "level", "cap", "updated"}),
+    # acting on their behalf. Raising a permission is not a tool on any
+    # surface (the owner types /permit himself), so it releases nothing.
+    "authorize_action": frozenset({"allowed", "level", "cap", "period", "currency",
+                                   "floor", "spent_this_period", "left_this_period",
+                                   "authorization_id", "expires"}),
     "log_action": frozenset({"category", "description", "amount", "outcome",
-                             "added", "ts"}),
+                             "added", "ts", "authorization_id", "approved", "by",
+                             "surface", "source"}),
     # money
     "expect_charge": frozenset({"key", "merchant", "amount", "cadence",
                                 "authorized_recurring", "active",
@@ -200,20 +214,20 @@ RELEASE: dict[str, frozenset[str]] = {
     "check_disclosure": frozenset({"allowed", "audience", "tags"}),
     "guidance_for": frozenset({"tags", "audience", "react_this_way",
                                "disclosure", "speak_of_them_this_way"}),
-    # the keys to Self-Cloud (about keys — never about the data behind them)
+    # the keys to Self-Cloud (about keys — never about the data behind them).
+    # Giving out or widening a key is not a tool on any surface (the owner
+    # types /grant or /scope add himself), so those release nothing.
     "selfcloud_status": frozenset({"keys_issued", "active_keys", "revoked_keys",
-                                   "recent_denials", "principle"}),
+                                   "recent_denials", "key_changes", "your_key",
+                                   "principle"}),
     "selfcloud_grants": frozenset({"keys", "active", "revoked",
                                    "available_scopes", "presets"}),
-    "selfcloud_grant": frozenset({"client", "label", "scopes", "active",
-                                  "granted_on", "revoked_on"}),
-    "selfcloud_add_scope": frozenset({"client", "label", "scopes", "active",
-                                      "granted_on", "revoked_on"}),
     "selfcloud_remove_scope": frozenset({"client", "label", "scopes", "active",
                                          "granted_on", "revoked_on"}),
     "selfcloud_revoke": frozenset({"revoked", "client", "on"}),
     "selfcloud_check_access": frozenset({"allowed", "client", "scope"}),
-    "selfcloud_access_log": frozenset({"client", "action", "detail", "allowed", "at"}),
+    "selfcloud_access_log": frozenset({"client", "actor", "surface", "action",
+                                       "detail", "allowed", "at"}),
     # secrets: names only
     "vault_status": frozenset({"available", "secrets"}),
     # this door's own report — counts and destinations, never the bodies
@@ -345,8 +359,53 @@ def switch_path() -> Path:
     return home.door_switch_path()
 
 
+# Folders that held the switch earlier in this process. If one disappears
+# (the drive was unplugged), the switch can no longer be read: shut.
+_SWITCH_SEEN: set[str] = set()
+
+
+SHUT = "the owner has shut the door (JEFFEREY is offline)"
+UNREACHABLE = ("the door's switch cannot be reached (the drive may have been "
+               "unplugged), so the door counts as shut")
+
+
+def shut_reason() -> str | None:
+    """Why the door is shut, or None when it is open. Shut by the owner — or
+    unreachable, which counts as shut (I-12): a switch that cannot be read is
+    never taken to mean 'open'. A folder that has never existed in this
+    process is a first run, not an unplugged drive."""
+    if os.environ.get("JEFFEREY_OFFLINE") == "1":
+        return SHUT
+    p = switch_path()
+    try:
+        os.stat(p)
+        return SHUT
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return UNREACHABLE               # cannot tell: treat as shut
+    try:
+        os.stat(p.parent)
+    except FileNotFoundError:
+        gone = str(p.parent) in _SWITCH_SEEN or _drive_gone()
+        return UNREACHABLE if gone else None
+    except OSError:
+        return UNREACHABLE
+    _SWITCH_SEEN.add(str(p.parent))
+    return UNREACHABLE if _drive_gone() else None
+
+
 def is_shut() -> bool:
-    return os.environ.get("JEFFEREY_OFFLINE") == "1" or switch_path().exists()
+    return shut_reason() is not None
+
+
+def _drive_gone() -> bool:
+    """The Self-Cloud drive this process started on is no longer there."""
+    try:
+        r = home.root()
+        return bool(r) and not os.path.isdir(r)
+    except Exception:
+        return False
 
 
 def shut() -> Path:
@@ -730,6 +789,59 @@ def admit(tool: str, asked) -> None:
             f"(python connector/vault.py set <name>) and you use 'vault:<name>'.")
 
 
+def _writes() -> frozenset:
+    try:
+        import access
+        return access.WRITE_TOOLS
+    except Exception:
+        return frozenset()
+
+
+def _refused_before(tool: str, asked, reason: str) -> EgressRefused:
+    """A refusal BEFORE the tool ran: nothing was done. Written down if the
+    log can be written; refused either way."""
+    try:
+        _write(_entry("tool_call", tool=tool, sent=None, asked=_describe(asked, tool),
+                      withheld=[], refused=reason + "; nothing was done"))
+    except OSError:
+        pass
+    return EgressRefused(
+        f"refused at the door: {reason}. Nothing was done and nothing left the "
+        f"house. Tell the owner plainly, and do not try another way.")
+
+
+def check_open(tool: str, asked=None) -> None:
+    """Is this process allowed to run anything at all? A bound surface and an
+    open door — checked before a tool does anything (I-12: with the door
+    shut, deletions, stories and revocations still happened while the engine
+    and the log were told 'refused')."""
+    if _SURFACE is None:
+        raise _refused_before(tool, asked, "no surface is bound to this process")
+    why = shut_reason()
+    if why:
+        raise _refused_before(tool, asked, why)
+
+
+def before(tool: str, asked=None, check: bool = True) -> None:
+    """Everything that must happen BEFORE a tool runs, in order: the door is
+    open; what the engine hands in holds no secret; and, for a tool that
+    changes something, a line in the log saying it was asked for — written
+    first, so a log that cannot be written stops the change instead of
+    letting it land unrecorded."""
+    if check:
+        check_open(tool, asked)
+    admit(tool, asked)
+    if tool in _writes():
+        try:
+            _write(_entry("intent", tool=tool, sent=None, asked=_describe(asked, tool),
+                          withheld=[], refused=None))
+        except OSError:
+            raise EgressRefused(
+                "JEFFEREY could not write down this request in the record of what "
+                "left the house (the drive may be full, unplugged or read-only), so "
+                "nothing was done. Tell the owner plainly.") from None
+
+
 def release(tool: str, out, asked=None):
     """A tool result is about to go to the engine. Return what may go.
 
@@ -738,9 +850,9 @@ def release(tool: str, out, asked=None):
     if _SURFACE is None:
         raise _refuse("tool_result", tool, asked,
                       "no surface is bound to this process, so nothing leaves it")
-    if is_shut():
-        raise _refuse("tool_result", tool, asked,
-                      "the owner has shut the door (JEFFEREY is offline)")
+    why = shut_reason()
+    if why:
+        raise _refuse("tool_result", tool, asked, why)
     if tool not in RELEASE:
         raise _refuse("tool_result", tool, asked,
                       f"'{tool}' has no entry in the release list — nothing "
@@ -764,8 +876,9 @@ def release_text(kind: str, text: str, why: str = "") -> str:
     what they typed. Same door, same scan, same log."""
     if _SURFACE is None:
         raise _refuse(kind, None, why, "no surface is bound to this process")
-    if is_shut():
-        raise _refuse(kind, None, why, "the owner has shut the door (JEFFEREY is offline)")
+    shut_why = shut_reason()
+    if shut_why:
+        raise _refuse(kind, None, why, shut_why)
     what = looks_secret(text)
     if what:
         raise _refuse(kind, None, why, f"it contains what looks like {what}")
@@ -781,8 +894,9 @@ def request(payload: dict, model: str) -> dict:
     runs before the bytes go."""
     if _SURFACE is None:
         raise _refuse("request", None, model, "no surface is bound to this process")
-    if is_shut():
-        raise _refuse("request", None, model, "the owner has shut the door (JEFFEREY is offline)")
+    shut_why = shut_reason()
+    if shut_why:
+        raise _refuse("request", None, model, shut_why)
     raw = _dumps(payload).encode()
     _write({
         "t": _now(), "surface": _SURFACE, "to": _client(),
@@ -814,9 +928,39 @@ def refusal_result(tool: str, e: EgressRefused) -> dict:
                              "to you another way."}
 
 
+def _access_errors() -> tuple:
+    try:
+        import access
+        return (access.AccessDenied, access.OwnerOnly)
+    except Exception:
+        return ()
+
+
+def note_refusal(tool: str, asked, reason: str) -> None:
+    """A refusal JEFFEREY gave instead of running a tool, written down."""
+    try:
+        _write(_entry("tool_call", tool=tool, sent=None, asked=_describe(asked, tool),
+                      withheld=[], refused=reason))
+    except OSError:
+        pass
+
+
+def access_refusal(tool: str, asked, e: Exception) -> dict:
+    """The access gate said no. Written down, and — for a surface whose SDK
+    would reduce it to 'Error executing tool' — turned into a result the
+    model must report (I-64)."""
+    note_refusal(tool, asked, f"the key does not allow it: {e}")
+    try:
+        import access
+        return access.refusal(tool, e)
+    except Exception:
+        return {"refused": True, "tool": tool, "reason": str(e)}
+
+
 def through(fn, name: str | None = None, as_result: bool = False):
-    """Wrap a tool function so what goes in is admitted and what comes out is
-    released. `as_result=True` turns a refusal into a result dict instead of
+    """Wrap a tool function so the door is checked and what goes in is
+    admitted BEFORE it runs, and what comes out is released. `as_result=True`
+    turns a refusal — the door's or the key's — into a result dict instead of
     an exception (see refusal_result)."""
     tool = name or fn.__name__
 
@@ -824,12 +968,19 @@ def through(fn, name: str | None = None, as_result: bool = False):
     def inner(*args, **kwargs):
         asked = kwargs if kwargs else (args[0] if len(args) == 1 else list(args))
         try:
-            admit(tool, asked)
+            before(tool, asked)
             out = fn(*args, **kwargs)
             return release(tool, out, asked=asked)
         except EgressRefused as e:
             if as_result:
                 return refusal_result(tool, e)
+            raise
+        except Exception as e:
+            denied = _access_errors()
+            if denied and isinstance(e, denied):
+                r = access_refusal(tool, asked, e)
+                if as_result:
+                    return r
             raise
 
     inner.__jefferey_egress__ = tool
@@ -879,6 +1030,8 @@ def summary(days: int = 7) -> dict:
     by: dict[tuple[str, str, str], dict] = {}
     refused = 0
     for e in es:
+        if e.get("kind") == "intent":
+            continue          # written before a change ran; nothing was sent
         if e.get("refused"):
             refused += 1
             continue

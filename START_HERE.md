@@ -84,7 +84,8 @@ Double-click **`Install JEFFEREY.command`** (in `~/JEFFEREY`, or in
 3. backs up and edits Claude Desktop's config so Claude can see JEFFEREY's
    tools, holding the **`jefferey` caretaker key** — your life layer, the
    album, money and rules — because this is *your* Claude on *your* Mac. It
-   still cannot widen any key, its own included: that needs your own terminal.
+   still cannot widen any key, its own included, or let any AI spend: only you
+   can, by typing it yourself (see *What JEFFEREY may do for you*, below).
    Any other connections in Claude's config are left alone and listed.
    (An earlier version of this page said `claude-raw`. It was wrong; the
    installer has always given your own Desktop the caretaker key. Install a
@@ -190,6 +191,25 @@ home.
 
 A different local model: `JEFFEREY_LOCAL_MODEL=qwen3` before the command, or
 any model name Ollama has.
+
+### What JEFFEREY may do for you
+
+No AI can raise this — not Claude, not ChatGPT, not the one on your Mac. You
+type it yourself in this window, JEFFEREY reads it back in plain words, and
+nothing changes until you type `yes`:
+
+| Type | It means |
+|---|---|
+| `/permissions` | what he may do now, kind by kind |
+| `/permit groceries act 100 per week` | he may buy groceries, at most $100 in any 7 days |
+| `/permit selling act at least 450` | he may accept an offer of $450 or more |
+| `/permit correspondence act` | he may send letters for you — nothing that costs money |
+| `/permit groceries recommend` | back to bringing you options; you decide |
+| `/keys`, `/grant family`, `/scope remove family media.read`, `/revoke gpt-raw` | who holds a key, and changing it |
+
+Moving money, gift cards, crypto, phone calls in your voice and the doors are
+never allowed, whatever you type. Anything that repeats (a subscription) he
+always brings to you.
 
 ---
 

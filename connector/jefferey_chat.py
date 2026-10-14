@@ -24,13 +24,28 @@ In-chat commands:
     /approve CODE remove what an AI asked for, when it needs your own OK
     /bringback N  put removed thing N back
     /erase WORDS  erase these words everywhere, for good (you are asked first)
+    /permissions  what JEFFEREY may do for you, kind by kind
+    /permit WHAT LEVEL [AMOUNT per day|week|month] [at least PRICE]
+                  change what JEFFEREY may do — e.g. /permit groceries act 100
+                  per week, /permit selling act at least 500, /permit
+                  payments recommend. You are asked to confirm first.
+    /keys         every key to your Self-Cloud
+    /grant NAME [SCOPES]   give out a key        (you are asked first)
+    /scope add|remove NAME SCOPE                 (you are asked first)
+    /revoke NAME  switch a key off               (you are asked first)
     /quit         leave (the conscience stays)
+
+Raising what an AI may do is ONLY ever done by these commands, typed by you
+and confirmed at this keyboard. The AI in this window is never offered a way
+to do it (October 2026, I-04: it used to be, and a pasted scam email could
+have it raise its own spending limit).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -68,10 +83,13 @@ rules = ConscienceRules(conscience)
 album = Reminisce(conscience, life)
 
 # THE DOOR. This surface is the OWNER'S OWN TERMINAL, so it binds the
-# caretaker key and sets the owner console — the one place where widening an
-# authority is allowed at all. An MCP host or the HTTP server does neither.
+# caretaker key. It does NOT hand the owner's console to the engine in this
+# window: widening is a command the owner types (/permit, /grant …) and
+# confirms at the keyboard, run inside access.owner_console() — in this
+# process only. The old JEFFEREY_OWNER_CONSOLE variable is cleared so no
+# process started from here can inherit it (I-04, I-43).
 os.environ.setdefault("JEFFEREY_CLIENT", "jefferey")
-os.environ.setdefault("JEFFEREY_OWNER_CONSOLE", "1")
+os.environ.pop("JEFFEREY_OWNER_CONSOLE", None)
 access.bind(cloud, announce=False)
 
 # THE EGRESS DOOR. This terminal is the one surface that calls the engine
@@ -227,32 +245,19 @@ TOOLS = [
         "description": "Mark active goals done/retired — by id or whole words. " + _TWO_STEPS,
         "input_schema": _forget_schema("contains"),
     },
-    {
-        "name": "set_permission",
-        "description": (
-            "ONLY when the user explicitly grants or changes authority, in "
-            "their own words. Levels: 'observe' (watch and learn), 'recommend' "
-            "(bring ranked options — the default), 'act' (execute in this "
-            "category, optionally under a spending cap). Never call this on "
-            "your own initiative — Jefferey never expands his own permissions."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string"},
-                "level": {"type": "string", "enum": ["observe", "recommend", "act"]},
-                "cap": {"type": "number"},
-            },
-            "required": ["category", "level"],
-        },
-    },
+    # Raising a permission is NOT a tool: the owner types /permit himself.
     {
         "name": "authorize_action",
         "description": (
             "THE gate. Call before doing anything in the real world on the "
-            "user's behalf. Returns allowed true/false with the reason. If "
-            "denied, recommend instead — only the user can raise the level. "
-            "Denials are logged."
+            "owner's behalf, with the FULL price as 'amount' whenever money is "
+            "involved — without it nothing that costs money is approved. Set "
+            "recurring=true for anything that repeats or has a minimum term. "
+            "A yes carries a single-use authorization_id (30 minutes): act "
+            "once, then cite it in log_action. A no is final: recommend "
+            "instead — only the owner can raise the level, by typing it "
+            "himself. Moving money, gift cards, crypto, phone calls and the "
+            "doors are never approved."
         ),
         "input_schema": {
             "type": "object",
@@ -260,6 +265,8 @@ TOOLS = [
                 "category": {"type": "string"},
                 "description": {"type": "string"},
                 "amount": {"type": "number"},
+                "currency": {"type": "string", "default": "CAD"},
+                "recurring": {"type": "boolean", "default": False},
             },
             "required": ["category", "description"],
         },
@@ -267,8 +274,10 @@ TOOLS = [
     {
         "name": "log_action",
         "description": (
-            "Write down an act just performed on the user's behalf. No silent "
-            "actions, ever — the log lives in the user's own store."
+            "Write down an act just performed on the owner's behalf, citing "
+            "the authorization_id authorize_action gave. No silent actions, "
+            "ever. An act with no valid approval is kept but marked 'not "
+            "approved'; outcomes JEFFEREY writes itself are refused."
         ),
         "input_schema": {
             "type": "object",
@@ -277,6 +286,7 @@ TOOLS = [
                 "description": {"type": "string"},
                 "outcome": {"type": "string"},
                 "amount": {"type": "number"},
+                "authorization_id": {"type": "string"},
             },
             "required": ["category", "description", "outcome"],
         },
@@ -312,8 +322,26 @@ TOOLS = [
             "priorities: value ('saves $380/yr'), which learned priority it "
             "aligns with, which goal it advances, whether it reduces risk, "
             "urgency 0-1. Returns the score: interrupt (>=0.75), daily brief "
-            "(>=0.40), or hold. Only interrupt when it says to."
+            "(>=0.40), or hold. Only interrupt when it says to. It is saved "
+            "for the brief with who saved it; anything with the marks of a "
+            "scam comes back with a warning and never interrupts."
         ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "what": {"type": "string"},
+                "value_estimate": {"type": "string"},
+                "aligns_with": {"type": "string"},
+                "advances_goal": {"type": "string"},
+                "reduces_risk": {"type": "boolean", "default": False},
+                "urgency": {"type": "number", "default": 0.5},
+            },
+            "required": ["what"],
+        },
+    },
+    {
+        "name": "score_opportunity",
+        "description": "The same score as record_opportunity, saved nowhere.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -642,12 +670,16 @@ TOOLS = [
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
+    # Giving out or widening a key is NOT a tool: the owner types /grant or
+    # /scope add himself. A key may give up its own access; any other key is
+    # the owner's to change.
     {
         "name": "selfcloud_status",
         "description": (
             "Who currently holds a key to this person's Self-Cloud, what's "
-            "been revoked, and recent refusals. Show this whenever they ask "
-            "who can see their data."
+            "been revoked, recent refusals and recent changes to the "
+            "important keys. Show this whenever they ask who can see their "
+            "data."
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
@@ -657,37 +689,9 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
-        "name": "selfcloud_grant",
-        "description": (
-            "ONLY at the owner's explicit word. Give a client a key — "
-            "'claude-raw', 'gpt-raw', 'jefferey', 'family', 'executor', or a "
-            "name they choose. With no scopes, the preset is a starting "
-            "point. Never grant on your own initiative; never widen your own."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "client": {"type": "string"},
-                "scopes": {"type": "array", "items": {"type": "string"}},
-                "label": {"type": "string"},
-                "note": {"type": "string"},
-            },
-            "required": ["client"],
-        },
-    },
-    {
-        "name": "selfcloud_add_scope",
-        "description": ("Widen one key by exactly one scope — only when the "
-                        "owner says so. Never about your own key."),
-        "input_schema": {
-            "type": "object",
-            "properties": {"client": {"type": "string"}, "scope": {"type": "string"}},
-            "required": ["client", "scope"],
-        },
-    },
-    {
         "name": "selfcloud_remove_scope",
-        "description": "Narrow a key by one scope, at the owner's word.",
+        "description": ("Give up one scope of the key this session holds. "
+                        "Changing any other key is the owner's, typed himself."),
         "input_schema": {
             "type": "object",
             "properties": {"client": {"type": "string"}, "scope": {"type": "string"}},
@@ -696,8 +700,9 @@ TOOLS = [
     },
     {
         "name": "selfcloud_revoke",
-        "description": ("Kill a key completely — instant and total. Never "
-                        "argue with a revocation, including your own."),
+        "description": ("Switch off the key this session holds — instant and "
+                        "total. Switching off any other key is the owner's, typed "
+                        "himself. Never argue with a revocation."),
         "input_schema": {
             "type": "object",
             "properties": {"client": {"type": "string"}},
@@ -718,7 +723,8 @@ TOOLS = [
     },
     {
         "name": "selfcloud_access_log",
-        "description": "Who asked for what, and what happened. The owner's audit trail.",
+        "description": ("Who asked for what, and what happened (1 to 200 entries). "
+                        "The owner's audit trail."),
         "input_schema": {
             "type": "object",
             "properties": {"limit": {"type": "integer", "default": 30}},
@@ -907,28 +913,85 @@ TOOLS = [
 ]
 
 
+_TOOL_NAMES = {t["name"]: t for t in TOOLS}
+_JSON_TYPES = {"string": (str,), "integer": (int,), "number": (int, float),
+               "boolean": (bool,), "array": (list,), "object": (dict,)}
+
+
+def _check_args(name: str, args: dict) -> str | None:
+    """The arguments against the tool's own schema, the way MCP and HTTP
+    check theirs (I-06: a local model's JSON passed NaN, and a cap typed as
+    text, straight through). A plain sentence, or None when they are fine."""
+    schema = _TOOL_NAMES[name]["input_schema"]
+    props = schema.get("properties", {})
+    for req in schema.get("required", []):
+        if args.get(req) is None:
+            return f"'{req}' is needed for {name}."
+    for key, val in args.items():
+        spec = props.get(key)
+        if spec is None or val is None:
+            continue
+        want = spec.get("type")
+        ok = _JSON_TYPES.get(want)
+        if ok is None:
+            continue
+        if isinstance(val, bool) and want != "boolean":
+            return f"'{key}' should be {want}, not true or false."
+        if want == "integer" and isinstance(val, float) and val.is_integer():
+            continue
+        if not isinstance(val, ok):
+            return f"'{key}' should be {'a ' + want if want != 'array' else 'a list'}."
+        if want == "number" and isinstance(val, float) and not math.isfinite(val):
+            return f"'{key}' is not a real number."
+        if "enum" in spec and val not in spec["enum"]:
+            return f"'{key}' must be one of: {', '.join(map(str, spec['enum']))}."
+    return None
+
+
 def dispatch_tool(name: str, args: dict) -> dict | list:
     """Route a tool call from the engine into the owned store — through BOTH
-    doors: the access gate on the way in, the egress door on the way out. A
-    refusal comes back as a result the model must report, not as a crash and
-    not as something it can retry differently."""
+    doors, in this order: the egress door is open (checked before anything
+    runs — I-12), the access gate lets this key do it, what the engine hands
+    in holds no secret and a change is written down before it happens, and
+    what comes out passes the egress door. A refusal comes back as a result
+    the model must report, not as a crash and not as something it can retry
+    differently."""
+    if not isinstance(args, dict):
+        args = {}
     try:
-        conscience.refresh()      # another engine, or the owner, may have written
         if name in access.OWNER_ONLY_TOOLS:
-            access.owner_only(lambda: None)()
+            # Not a tool at all any more (I-04) — and an engine that names
+            # one is told, plainly, that only the owner's hands do this.
+            return _released(name, access.owner_only_refusal(name), args)
+        if name not in _TOOL_NAMES:
+            return _released(name, {"error": f"There is no tool called '{name}'."}, args)
+        egress.check_open(name, args)                  # the door, before anything
+        conscience.refresh()      # another engine, or the owner, may have written
         scope = access.TOOL_SCOPES.get(name)
         if scope:
             access.GATE.require(scope)
-        egress.admit(name, args)                       # what the engine hands in
+        problem = _check_args(name, args)
+        if problem:
+            return _released(name, {"refused": True, "tool": name, "reason": problem,
+                                    "tell_the_user": "Call it again with that fixed."}, args)
+        egress.before(name, args, check=False)         # what the engine hands in
         return egress.release(name, _dispatch_tool(name, args), asked=args)  # what goes out
     except (AccessDenied, OwnerOnly) as e:
-        return {"refused": True, "tool": name, "reason": str(e),
-                "tell_the_user": "Say plainly that this is not something your "
-                                 "key permits, and do not attempt it another way."}
+        return _released(name, access.refusal(name, e), args)
     except EgressRefused as e:
         return egress.refusal_result(name, e)
     except StoreProblem as e:     # damaged file, changed elsewhere, drive full
         return e.as_result(name)
+    except ValueError as e:       # a plain-words "that is not valid"
+        return _released(name, {"refused": True, "tool": name, "reason": str(e)}, args)
+
+
+def _released(name: str, refusal: dict, args: dict) -> dict:
+    """A refusal written by JEFFEREY goes out through the same door — and is
+    in the log — like any other result."""
+    egress.note_refusal(name, args, str(refusal.get("reason") or refusal.get("error")
+                                        or "refused"))
+    return refusal
 
 
 def _dispatch_tool(name: str, args: dict) -> dict | list:
@@ -956,21 +1019,25 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "close_goal":
         return conscience.close_goal(args.get("contains", ""), args.get("ids"),
                                      args.get("confirm", ""))
-    if name == "set_permission":
-        return conscience.set_permission(
-            args["category"], args["level"], args.get("cap"))
     if name == "authorize_action":
         return conscience.authorize_action(
-            args["category"], args["description"], args.get("amount"))
+            args["category"], args["description"], args.get("amount"),
+            args.get("currency") or None, bool(args.get("recurring", False)))
     if name == "log_action":
         return conscience.log_action(
-            args["category"], args["description"], args["outcome"], args.get("amount"))
+            args["category"], args["description"], args["outcome"], args.get("amount"),
+            args.get("authorization_id", ""))
     if name == "action_log":
         return conscience.action_log(args.get("limit", 20))
     if name == "log_observation":
         return conscience.log_observation(args["note"], args.get("category", "general"))
     if name == "record_opportunity":
         return conscience.record_opportunity(
+            args["what"], args.get("value_estimate", ""), args.get("aligns_with", ""),
+            args.get("advances_goal", ""), args.get("reduces_risk", False),
+            args.get("urgency", 0.5))
+    if name == "score_opportunity":
+        return conscience.score_opportunity(
             args["what"], args.get("value_estimate", ""), args.get("aligns_with", ""),
             args.get("advances_goal", ""), args.get("reduces_risk", False),
             args.get("urgency", 0.5))
@@ -1035,21 +1102,18 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "forget_life":
         return life.forget_life(args.get("contains", ""), args.get("ids"),
                                 args.get("confirm", ""))
+    if name.startswith("selfcloud_"):
+        access.require_live()              # a switched-off key gets none of these
     if name == "selfcloud_status":
         return cloud.status()
     if name == "selfcloud_grants":
         return cloud.grants()
-    if name == "selfcloud_grant":
-        return cloud.grant(args["client"], args.get("scopes"),
-                           args.get("label", ""), args.get("note", ""))
-    if name == "selfcloud_add_scope":
-        return cloud.add_scope(args["client"], args["scope"])
     if name == "selfcloud_remove_scope":
         return cloud.remove_scope(args["client"], args["scope"])
     if name == "selfcloud_revoke":
         return cloud.revoke(args["client"])
     if name == "selfcloud_check_access":
-        return cloud.check_access(args["client"], args["scope"])
+        return cloud.ask_access(args["client"], args["scope"])
     if name == "selfcloud_access_log":
         return cloud.access_log(args.get("limit", 30))
     if name == "next_story_prompt":
@@ -1106,20 +1170,22 @@ _TRACE = {
     "priorities_for": lambda a, r: "reading your hierarchy",
     "add_goal": lambda a, r: f"goal registered: {a.get('goal')}",
     "close_goal": lambda a, r: _forget_trace(r, "goal(s)", "closed"),
-    "set_permission": lambda a, r: (
-        f"authority: {a.get('category')} → {a.get('level')}"
-        + (f" (cap {a.get('cap')})" if a.get('cap') is not None else "")
-    ),
     "authorize_action": lambda a, r: (
-        f"{'✓ authorized' if r.get('allowed') else '✗ denied'}: "
+        f"{'✓ allowed, once' if r.get('allowed') else '✗ not allowed'}: "
         f"{a.get('description')} [{a.get('category')}]"
+        + ("" if r.get("allowed") else f" — {r.get('reason')}")
     ),
-    "log_action": lambda a, r: f"acted: {a.get('description')} → {a.get('outcome')}",
+    "log_action": lambda a, r: (
+        f"acted: {a.get('description')} → {a.get('outcome')}"
+        + ("" if r.get("approved") else "  ⚠ NOT APPROVED — it is marked so in your log")
+    ),
     "action_log": lambda a, r: "reading the action log",
     "log_observation": lambda a, r: f"noticed: {a.get('note')}",
     "record_opportunity": lambda a, r: (
         f"opportunity [{r.get('status')} @ {r.get('score')}]: {a.get('what')}"
+        + (f"  ⚠ {r.get('warning')}" if r.get("warning") else "")
     ),
+    "score_opportunity": lambda a, r: f"weighing [{r.get('status')} @ {r.get('score')}]: {a.get('what')}",
     "resolve_opportunity": lambda a, r: _forget_trace(r, "opportunity(ies)", "resolved"),
     "daily_brief": lambda a, r: "assembling your brief",
     "orb_state": lambda a, r: f"orb: {r.get('mood')} — {r.get('reason')}",
@@ -1180,10 +1246,6 @@ _TRACE = {
         "self-cloud keys: " + (", ".join(r.get("active_keys", [])) or "none")
     ),
     "selfcloud_grants": lambda a, r: "reading the Self-Cloud key list",
-    "selfcloud_grant": lambda a, r: (
-        f"key issued: {a.get('client')} · {len(r.get('scopes', []))} scope(s)"
-    ),
-    "selfcloud_add_scope": lambda a, r: f"widened {a.get('client')}: +{a.get('scope')}",
     "selfcloud_remove_scope": lambda a, r: f"narrowed {a.get('client')}: -{a.get('scope')}",
     "selfcloud_revoke": lambda a, r: f"key revoked: {a.get('client')}",
     "selfcloud_check_access": lambda a, r: (
@@ -1228,6 +1290,22 @@ _TRACE = {
         f"{r.get('refused', 0)} refused at the door · door {r.get('door')}"
     ),
 }
+
+
+def _trace_line(name: str, args, out) -> str | None:
+    """The quiet line the owner sees — only for something that actually
+    happened (a refused or failed call used to print 'key issued' or
+    'widened nobody')."""
+    trace = _TRACE.get(name)
+    if trace is None:
+        return None
+    if isinstance(out, dict) and (out.get("refused") is True or out.get("error")):
+        return None
+    try:
+        return trace(args if isinstance(args, dict) else {},
+                     out if isinstance(out, dict) else {})
+    except Exception:
+        return None
 
 
 def system_prompt() -> str:
@@ -1298,9 +1376,9 @@ def run_turn(client, history: list) -> None:
                 continue
             try:
                 out = dispatch_tool(block.name, block.input)
-                trace = _TRACE.get(block.name)
-                if trace:
-                    print(f"{DIM}  · {trace(block.input, out if isinstance(out, dict) else {})}{RESET}")
+                line = _trace_line(block.name, block.input, out)
+                if line:
+                    print(f"{DIM}  · {line}{RESET}")
                 results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -1410,12 +1488,9 @@ def run_turn_local(history: list, model: str = LOCAL_MODEL, url: str = LOCAL_URL
                 args, out = {}, {"error": "the arguments were not valid JSON; try again"}
             except Exception as e:           # a bad call must never kill the session
                 args, out = {}, {"error": str(e)}
-            trace = _TRACE.get(name)
-            if trace and isinstance(out, dict) and not out.get("refused"):
-                try:
-                    print(f"{DIM}  · {trace(args, out)}{RESET}")
-                except Exception:
-                    pass
+            line = _trace_line(name, args, out)
+            if line:
+                print(f"{DIM}  · {line}{RESET}")
             history.append({"role": "tool", "tool_call_id": c.get("id", ""),
                             "name": name, "content": json.dumps(out, ensure_ascii=False)})
     print(f"{DIM}(the local model kept calling tools without answering — "
@@ -1484,7 +1559,8 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         return
 
     print(f"{DIM}/conscience shows the store · /egress shows what left the house · "
-          f"/removed shows what was forgotten · "
+          f"/removed shows what was forgotten · /permissions and /keys show what "
+          f"each AI may do (you change it with /permit, /grant, /scope, /revoke) · "
           f"/quit leaves (he keeps what he learned){RESET}\n")
     while True:
         try:
@@ -1509,6 +1585,9 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         if user.lower().split(" ", 1)[0] in _FORGET_COMMANDS:
             owner_forgetting(user)    # the owner's hands only; never a model tool
             continue
+        if user.lower().split(" ", 1)[0] in _OWNER_COMMANDS:
+            owner_command(user)       # the owner's hands only; never a model tool
+            continue
         try:
             history.append({"role": "user", "content": egress.release_text("you_said", user)})
         except EgressRefused as e:
@@ -1531,6 +1610,206 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
 
 
 _FORGET_COMMANDS = ("/removed", "/approve", "/bringback", "/erase")
+_OWNER_COMMANDS = ("/permit", "/permissions", "/keys", "/grant", "/scope", "/revoke")
+_LEVEL_WORDS = {"act": "act", "recommend": "recommend", "observe": "observe",
+                "watch": "observe", "off": "recommend", "stop": "recommend",
+                "suggest": "recommend"}
+
+
+def _amount(word: str) -> float | None:
+    try:
+        v = float(word.replace("$", "").replace(",", "").strip())
+    except ValueError:
+        return None
+    return v if math.isfinite(v) and v >= 0 else None
+
+
+def parse_permit(rest: str) -> dict:
+    """'/permit groceries act 100 per week' → the change, or {'error': …}.
+    WHAT may be several words; the level word ends it."""
+    words = rest.split()
+    at = next((i for i, w in enumerate(words) if w.lower() in _LEVEL_WORDS), None)
+    if at is None or at == 0:
+        return {"error": "Type it like this:  /permit groceries act 100 per week   "
+                         "(or recommend, or observe)."}
+    out: dict = {"category": " ".join(words[:at]).lower(),
+                 "level": _LEVEL_WORDS[words[at].lower()],
+                 "cap": None, "period": None, "currency": None, "floor": None}
+    tail = [w.lower() for w in words[at + 1:]]
+    periods = {"day": "day", "days": "day", "daily": "day", "week": "week",
+               "weeks": "week", "weekly": "week", "month": "month",
+               "months": "month", "monthly": "month"}
+    floor_words = ("at", "least", "floor", "minimum", "min", "no", "less", "than")
+    floor_next = False
+    i = 0
+    while i < len(tail):
+        w = tail[i]
+        if w in ("per", "a", "an", "each", "every", "in") and i + 1 < len(tail) \
+                and tail[i + 1] in periods:
+            out["period"] = periods[tail[i + 1]]
+            i += 2
+            continue
+        if w in periods:
+            out["period"] = periods[w]
+        elif w in floor_words:
+            floor_next = True
+        elif w in ("cad", "usd", "eur", "gbp", "aud", "nzd", "jpy", "chf"):
+            out["currency"] = w.upper()
+        else:
+            v = _amount(w)
+            if v is None:
+                return {"error": f"I did not understand '{words[at + 1 + i]}'. Type it "
+                                 "like this:  /permit groceries act 100 per week"}
+            if floor_next:
+                out["floor"], floor_next = v, False
+            else:
+                out["cap"] = v
+        i += 1
+    return out
+
+
+def _confirmed(prompt: str, answer, tty: bool | None) -> bool:
+    """A yes typed by a person at this keyboard. Not at a keyboard (a script,
+    a pipe, another program) means no."""
+    if tty is None:
+        try:
+            tty = sys.stdin.isatty()
+        except Exception:
+            tty = False
+    if not tty:
+        print("  This can only be done by you, typing at the keyboard of this Mac. "
+              "Nothing was changed.")
+        return False
+    try:
+        said = answer(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        said = ""
+    if said not in ("y", "yes", "oui", "o"):
+        print("  Nothing was changed.")
+        return False
+    return True
+
+
+def _print_permissions() -> None:
+    perms = conscience.data.get("permissions") or {}
+    if not perms:
+        print("  JEFFEREY may not act for you on anything yet: he brings you options, "
+              "and you decide.")
+    for cat in sorted(perms):
+        print("  " + conscience.describe_permission(cat, conscience.permission_for(cat)))
+    print("  (Anything not listed: he brings you options, and you decide. Moving money, "
+          "gift cards, crypto, phone calls and the doors: never.)")
+
+
+def _print_keys() -> None:
+    with access.owner_console():
+        g = cloud.grants()
+    for k in g["keys"]:
+        state = ("on" if k.get("active")
+                 else f"switched off {str(k.get('revoked_on') or '')[:10]}".strip())
+        print(f"  {k['client']:<14} {state:<10} {', '.join(k.get('scopes') or []) or 'nothing'}")
+    if not g["keys"]:
+        print("  No keys have been given out yet.")
+
+
+def owner_command(command: str, answer=input, tty: bool | None = None) -> dict | None:
+    """/permit, /permissions, /keys, /grant, /scope, /revoke — typed by the
+    OWNER at this terminal, read back in plain words and confirmed with a
+    yes at the keyboard. Deliberately not tools: the engine in this window
+    is never offered a way to widen anything (I-04). Only here, after his
+    yes, does this process hold the owner's console — and only for that one
+    change (access.owner_console)."""
+    verb, _, rest = command.strip().partition(" ")
+    verb, rest = verb.lower(), rest.strip()
+    try:
+        conscience.refresh()
+    except StoreProblem as e:
+        print(f"  {e.for_owner()}")
+        return None
+    if verb == "/permissions":
+        _print_permissions()
+        return None
+    if verb == "/keys":
+        _print_keys()
+        return None
+    from selfcloud import SCOPES
+    try:
+        if verb == "/permit":
+            p = parse_permit(rest)
+            if "error" in p:
+                print("  " + p["error"])
+                return None
+            cat, preview = conscience.check_permission(
+                p["category"], p["level"], p["cap"], p["period"], p["currency"], p["floor"])
+            print("  From now on: " + conscience.describe_permission(cat, preview) + ".")
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                return None
+            with access.owner_console():
+                res = conscience.set_permission(p["category"], p["level"], p["cap"],
+                                                p["period"], p["currency"], p["floor"])
+            print("  Done. " + conscience.describe_permission(res["category"], res) + ".")
+            return res
+        parts = rest.split()
+        if verb == "/grant":
+            if not parts:
+                print("  Type it like this:  /grant family   (or /grant NAME scope scope …)")
+                return None
+            name, scopes = parts[0].lower(), parts[1:]
+            bad = [s for s in scopes if s not in SCOPES]
+            if bad:
+                print(f"  There is no '{bad[0]}'. The kinds of access are: {', '.join(sorted(SCOPES))}")
+                return None
+            from selfcloud import PRESETS
+            chosen = scopes or PRESETS.get(name, {}).get("scopes", [])
+            print(f"  Give '{name}' a key that can:")
+            for s in chosen:
+                print(f"    - {SCOPES[s]}")
+            if not chosen:
+                print("    - nothing at all (there is no preset by that name)")
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                return None
+            with access.owner_console():
+                res = cloud.grant(name, scopes or None)
+            print(f"  Done. '{name}' has a key." if res.get("active") else f"  Not done: {res}")
+            return res
+        if verb == "/scope":
+            if len(parts) != 3 or parts[0].lower() not in ("add", "remove"):
+                print("  Type it like this:  /scope add family media.read   (or remove)")
+                return None
+            how, name, scope = parts[0].lower(), parts[1].lower(), parts[2]
+            if scope not in SCOPES:
+                print(f"  There is no '{scope}'. The kinds of access are: {', '.join(sorted(SCOPES))}")
+                return None
+            print(f"  '{name}' will {'also have' if how == 'add' else 'no longer have'}: "
+                  f"{SCOPES[scope]}.")
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                return None
+            with access.owner_console():
+                res = (cloud.add_scope if how == "add" else cloud.remove_scope)(name, scope)
+            print("  Done." if "error" not in res else f"  Not done: {res['error']}")
+            return res
+        if verb == "/revoke":
+            if len(parts) != 1:
+                print("  Type it like this:  /revoke gpt-raw")
+                return None
+            name = parts[0].lower()
+            print(f"  Switch off the '{name}' key. Whatever holds it gets nothing from "
+                  f"now on; the record that it existed stays.")
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                return None
+            with access.owner_console():
+                res = cloud.revoke(name)
+            print("  Done. That key is switched off." if res.get("revoked")
+                  else f"  Not done: {res.get('reason')}")
+            return res
+    except ValueError as e:
+        print(f"  Not done: {e}")
+        return None
+    except StoreProblem as e:
+        print(f"  {e.for_owner()}")
+        return None
+    print("  I do not know that command. Type /permissions or /keys to see what is set.")
+    return None
 
 
 def owner_forgetting(command: str, answer=input) -> dict | None:
@@ -1627,7 +1906,14 @@ def selftest() -> None:
         os.environ.pop("JEFFEREY_OFFLINE", None)
         home.reset_for_tests()
 
-        # 1. Every declared tool dispatches.
+        # 1. Every declared tool dispatches. Raising a permission is the
+        #    owner's typed command now, not a tool (I-04) — so it is set here
+        #    the way /permit sets it: inside the owner's console.
+        with access.owner_console():
+            conscience.set_permission("subscriptions", "act", 50, "month")
+        # A key may narrow only ITSELF (I-09): these two name another key and
+        # must be refused. (They used to be expected to succeed.)
+        must_refuse = {"selfcloud_remove_scope", "selfcloud_revoke"}
         for tool in TOOLS:
             name = tool["name"]
             sample = {
@@ -1643,7 +1929,6 @@ def selftest() -> None:
                 "priorities_for": {},
                 "add_goal": {"goal": "cut monthly expenses 15%"},
                 "close_goal": {"contains": "expenses"},
-                "set_permission": {"category": "subscriptions", "level": "act", "cap": 50},
                 "authorize_action": {
                     "category": "subscriptions",
                     "description": "cancel unused gym app", "amount": 12.99,
@@ -1659,6 +1944,7 @@ def selftest() -> None:
                     "what": "switch streaming plan", "value_estimate": "saves $96/yr",
                     "aligns_with": "saving money", "urgency": 0.4,
                 },
+                "score_opportunity": {"what": "switch streaming plan", "urgency": 0.4},
                 "resolve_opportunity": {"contains": "streaming"},
                 "daily_brief": {},
                 "orb_state": {},
@@ -1689,8 +1975,6 @@ def selftest() -> None:
                 "forget_life": {"contains": "zzz-nothing"},
                 "selfcloud_status": {},
                 "selfcloud_grants": {},
-                "selfcloud_grant": {"client": "claude-raw"},
-                "selfcloud_add_scope": {"client": "claude-raw", "scope": "goals.read"},
                 "selfcloud_remove_scope": {"client": "claude-raw", "scope": "goals.read"},
                 "selfcloud_revoke": {"client": "claude-raw"},
                 "selfcloud_check_access": {"client": "claude-raw", "scope": "facts.read"},
@@ -1713,7 +1997,13 @@ def selftest() -> None:
             }[name]
             out = dispatch_tool(name, sample)
             assert out is not None, name
-            assert not (isinstance(out, dict) and out.get("refused")), (name, out)
+            if name in must_refuse:
+                assert out.get("refused") and "owner's decision" in out["reason"], (name, out)
+                print(f"  ✓ {name} (another key: refused, as it must be)")
+                continue
+            # ('refused' is True on a refusal; what_left_the_house uses the
+            #  same word for a count of refusals)
+            assert not (isinstance(out, dict) and out.get("refused") is True), (name, out)
             print(f"  ✓ {name}")
 
         # 1b. Every tool this terminal offers has a release list, so nothing
@@ -1730,7 +2020,8 @@ def selftest() -> None:
         print(f"  ✓ every one of {len(names)} tools has a release list; none is orphaned")
 
         # 1c. Every dispatch above went through the door and was logged.
-        logged = {e["tool"] for e in egress.entries() if e.get("kind") == "tool_result"}
+        logged = {e["tool"] for e in egress.entries()
+                  if e.get("kind") in ("tool_result", "tool_call")}
         assert names <= logged, f"dispatched but never logged: {sorted(names - logged)}"
         print("  ✓ every tool result passed the egress door and is in the log")
 
@@ -1883,13 +2174,21 @@ def selftest() -> None:
         assert conscience.forget_fact("")["refused"], "an empty forget was not refused"
         print("  ✓ remember / forget (shown first, then removed; empty refused)")
 
-        # 5. Operational AI: the gate holds.
+        # 5. Operational AI: the gate holds. Only the owner's own hands raise
+        #    a level (owner_console); the refusal now says "limit", in plain
+        #    words, where it used to say "cap".
         denied = conscience.authorize_action("travel", "book flight", 300)
         assert not denied["allowed"], "acted without permission!"
-        conscience.set_permission("travel", "act", cap=500)
-        assert conscience.authorize_action("travel", "book flight", 300)["allowed"]
+        with access.owner_console():
+            conscience.set_permission("travel", "act", cap=500)
+        ok = conscience.authorize_action("travel", "book flight", 300)
+        assert ok["allowed"] and ok["authorization_id"].startswith("au-"), ok
         over = conscience.authorize_action("travel", "book flight", 900)
-        assert not over["allowed"] and "cap" in over["reason"], "cap not enforced!"
+        assert not over["allowed"] and "limit" in over["reason"], "cap not enforced!"
+        assert not conscience.authorize_action("travel", "book flight")["allowed"], \
+            "no amount must mean no"
+        assert not conscience.authorize_action("travel", "book flight", 300)["allowed"], \
+            "two approvals passed a 500 limit together"
         assert any("denied" in a["outcome"] for a in conscience.action_log()), \
             "denials not logged"
         print("  ✓ act gate: default-deny, grant, cap, audit trail")
@@ -2016,9 +2315,12 @@ def selftest() -> None:
         print("  ✓ life layer: people, moments, visibility walls, Self-Cloud refs, erase")
 
         # 13. Self-Cloud: the owner's vault, Jefferey merely a keyholder.
+        #     (Giving out keys is the owner's own hands' work — owner_console.)
         from selfcloud import SelfCloud as _SC
         _cc = Conscience(Path(td) / "cloud.json")
         _sc = _SC(_cc)
+        _owner = access.owner_console()
+        _owner.__enter__()
         _sc.grant("claude-raw"); _sc.grant("jefferey"); _sc.grant("executor")
         assert not _sc.check_access("claude-raw", "life.read")["allowed"], "raw engine saw the life layer!"
         assert _sc.check_access("jefferey", "life.read")["allowed"]
@@ -2028,6 +2330,7 @@ def selftest() -> None:
         _sc.revoke("jefferey")
         assert not _sc.check_access("jefferey", "life.read")["allowed"], "revocation ignored!"
         assert len(_sc.access_log(99)) >= 8, "access decisions not audited"
+        _owner.__exit__(None, None, None)
         print("  ✓ self-cloud: per-client keys, deny by default, revocation, audit")
 
         # 14. The interview: depth is earned, and 'no' is final.
@@ -2111,16 +2414,22 @@ def selftest() -> None:
         g_unknown = access.bind(_cloud, "some-random-agent", announce=False)
         assert g_unknown.check("facts.read")["allowed"] is False
 
-        # widening needs the owner's own console; narrowing never does
-        _console = os.environ.pop("JEFFEREY_OWNER_CONSOLE", None)
+        # widening is never a tool, whatever the environment says; a key may
+        # narrow only itself (I-04, I-09 — this used to let claude-raw
+        # revoke gpt-raw, and the environment variable decided widening)
+        os.environ["JEFFEREY_OWNER_CONSOLE"] = "1"
         assert dispatch_tool("selfcloud_add_scope",
                              {"client": "claude-raw", "scope": "life.read"})["refused"]
         assert dispatch_tool("set_permission",
                              {"category": "purchases", "level": "act"})["refused"]
+        os.environ.pop("JEFFEREY_OWNER_CONSOLE")
         assert _cloud.check_access("claude-raw", "life.read")["allowed"] is False
-        if _console:
-            os.environ["JEFFEREY_OWNER_CONSOLE"] = _console
-        assert not dispatch_tool("selfcloud_revoke", {"client": "gpt-raw"}).get("refused")
+        # an unknown key cannot even look at the keys, let alone change one
+        assert dispatch_tool("selfcloud_revoke", {"client": "gpt-raw"}).get("refused")
+        assert dispatch_tool("selfcloud_grants", {}).get("refused")
+        access.bind(_cloud, "claude-raw", announce=False)
+        assert dispatch_tool("selfcloud_revoke", {"client": "gpt-raw"}).get("refused")
+        assert not dispatch_tool("selfcloud_revoke", {"client": "claude-raw"}).get("refused")
 
         # STARTING Jefferey must not write to the person's conscience. Only
         # something they actually did should change that file — otherwise the
@@ -2149,9 +2458,12 @@ def selftest() -> None:
         for _name, _scope in access.TOOL_SCOPES.items():
             assert f'@gate("{_scope}")\ndef {_name}(' in _src, \
                 f"jefferey_mcp.py: {_name} is not gated on {_scope}"
+        # widening is not a tool on any surface (I-04): it used to be an
+        # @owner_only tool, gated by an environment variable
         for _name in access.OWNER_ONLY_TOOLS:
-            assert f"@owner_only\ndef {_name}(" in _src, \
-                f"jefferey_mcp.py: {_name} is not owner-only"
+            assert f"def {_name}(" not in _src, \
+                f"jefferey_mcp.py still offers {_name}"
+            assert _name not in {t["name"] for t in TOOLS}, _name
         access.bind(cloud, "jefferey", announce=False)
         print("  ✓ the door: ceiling from the key, guests denied, "
               "no self-widening, decorators match the table")

@@ -48,8 +48,10 @@ import copy
 import functools
 import hashlib
 import json
+import math
 import os
 import re
+import secrets
 import stat as _stat
 import sys
 import tempfile
@@ -436,6 +438,119 @@ class AppendLog:
             return False
 
 
+# --------------------------------------------------------------- authority
+# What an AI may do in the world for the owner (the Act tier), and what it
+# may never do whatever anyone sets. October 2026 (I-04, I-06, I-44, I-45):
+# the old gate trusted one self-reported amount, skipped the cap when the
+# amount was missing, negative or NaN, let ten $99 orders through a $100
+# cap, could be set to 'act' on wires and gift cards, and wrote approvals
+# nowhere. Nothing irreversible happens because an AI asked.
+PERIODS = {"day": 86400, "week": 7 * 86400, "month": 30 * 86400}
+PERIOD_WORDS = {"day": "any 24 hours", "week": "any 7 days", "month": "any 30 days"}
+LEGACY_PERIOD = "month"        # a limit saved before limits had a period
+DEFAULT_CURRENCY = "CAD"
+AUTH_MINUTES = 30              # an approval is used once, within this long
+
+# Never 'act', at any level, whatever anyone sets: JEFFEREY never moves
+# money, never speaks in the owner's voice, never lets anyone into the house.
+_NEVER = (
+    (re.compile(r"\b(?:e ?transfers?|transfers?|wires?|wiring|interac|remittances?"
+                r"|western ?union|money ?grams?|money ?orders?)\b"),
+     "moving money from one account to another"),
+    (re.compile(r"\b(?:gift ?cards?|prepaid ?cards?|itunes|google ?play|steam ?cards?"
+                r"|vouchers?)\b"), "buying gift cards"),
+    (re.compile(r"\b(?:crypto\w*|bitcoins?|btc|ethereum|usdt|tether)\b"),
+     "crypto-currency"),
+    (re.compile(r"\b(?:phone ?calls?|calls?|calling|voice(?! ?mail)\w*|intercoms?|doorbells?)\b"),
+     "speaking for the owner on the phone, in his voice or at the door"),
+    (re.compile(r"\b(?:unlock\w*|locks?|alarms?|garage ?doors?|garage ?openers?|doors?)\b"),
+     "letting anyone into the house"),
+)
+# Inside a description, under any category, only the unmistakable ones.
+_NEVER_IN_TEXT = (
+    (re.compile(r"\b(?:e-?\s?transfer\w*|wire\s+(?:transfer|\$|money|funds|it|the)\w*"
+                r"|interac|western\s?union|money\s?gram|money\s?order)"),
+     "moving money from one account to another"),
+    (re.compile(r"\bgift\s?cards?\b"), "buying gift cards"),
+    (re.compile(r"\b(?:bitcoin|crypto\w*|btc|ethereum|usdt)\b"), "crypto-currency"),
+    (re.compile(r"\b(?:unlock\w*|disarm\w*|open\s+the\s+(?:front|back|side|garage)\s+door)"),
+     "letting anyone into the house"),
+    (re.compile(r"\b(?:phone\s?call|place\s+a\s+call|in\s+(?:my|his|her)\s+voice)"),
+     "speaking for the owner on the phone or in his voice"),
+)
+# A category about money: 'act' there needs a limit.
+_MONEYISH = re.compile(
+    r"buy|purchas|pay|bill|shop|grocer|subscri|order|spend|money|fund|donat|gift"
+    r"|charit|rent|fee|invest|bank|card|travel|book|ticket|insur|tax|loan|mortgage"
+    r"|deliver|food|meal|restaurant|household|suppl|pharm|store|amazon|cash|dollar"
+    r"|price|cost")
+# A category about selling: 'act' there needs a lowest price, not a limit.
+_SALEISH = re.compile(r"sell|\bsale|auction|marketplace|listing")
+# A commitment that repeats or has a minimum term is the owner's to make.
+_RECURRING = re.compile(
+    r"/\s?(?:mo|month|yr|year|wk|week)\b|\bper\s+(?:month|year|week|annum)\b"
+    r"|\b(?:a|each|every)\s+(?:month|year|week)\b|\bsubscri\w*|\bauto-?\s?renew\w*"
+    r"|\b(?:monthly|yearly|annual|annually|weekly)\s+(?:plan|fee|payment|charge|bill\w*"
+    r"|subscription|membership|contract|instal\w*|donation)"
+    r"|\bbilled\s+(?:monthly|yearly|annually|weekly)|\brecurring\b|\bminimum\s+term\b"
+    r"|\binstal(?:l)?ments?\b"
+    r"|\b\d+[- ]?(?:month|year)s?\s+(?:minimum|contract|term|commitment)")
+_CURRENCY_TEXT = (("GBP", re.compile(r"£|\bgbp\b|\bpounds?\s+sterling\b")),
+                  ("EUR", re.compile(r"€|\beur\b|\beuros?\b")),
+                  ("USD", re.compile(r"\bus\s?\$|\busd\b|\bu\.s\.\s?dollars?\b"
+                                     r"|\bamerican\s+dollars?\b")),
+                  ("JPY", re.compile(r"¥|\bjpy\b|\byen\b")),
+                  ("CAD", re.compile(r"\bcad\b|\bc\$|\bcanadian\s+dollars?\b")))
+_MONEY_TEXT = re.compile(r"[$£€¥]\s?\d|\d\s?(?:\$|dollars?\b|bucks\b|cad\b|usd\b|eur\b|gbp\b)")
+# What an engine may not write as an act's outcome: these are JEFFEREY's own
+# words, and a forged 'approved by owner' looked exactly like a real one.
+_RESERVED_OUTCOME = re.compile(
+    r"permission|\ballowed\b|\bdenied\b|\bapprov\w*|\bauthori[sz]\w*|\bowner\b"
+    r"|\bput\s+back\b|\berased?\b|\bremoved\s+list\b|\brefused\b", re.I)
+# Signs that an 'opportunity' is a scam someone wants put in front of him.
+_SCAM_SIGNS = (
+    (re.compile(r"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)"),
+     "a phone number to call"),
+    (re.compile(r"\bgift\s?cards?\b"), "gift cards"),
+    (re.compile(r"\b(?:card\s+number|pin\b|cvv|security\s+code|password|one[- ]time\s+code"
+                r"|verification\s+code)"), "asks for card details, a PIN or a code"),
+    (re.compile(r"\b(?:read|give|tell)\s+(?:them|him|her|us)\s+(?:the|your)\b"),
+     "asks him to read something out to someone"),
+    (re.compile(r"\b(?:wire|e-?transfer|bitcoin|crypto)\w*"), "asks to move money"),
+)
+
+
+def _real_number(x) -> float | None:
+    """A finite number, or None. True/False, text, NaN and infinity are not
+    prices — NaN > cap is False, which is how NaN used to pass the cap."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    x = float(x)
+    return x if math.isfinite(x) else None
+
+
+def _money(x: float, cur: str = DEFAULT_CURRENCY) -> str:
+    return (f"${x:,.2f} {cur}" if cur in ("CAD", "USD", "AUD", "NZD")
+            else f"{x:,.2f} {cur}")
+
+
+def _currency_named(text: str) -> str | None:
+    t = (text or "").lower()
+    for code, rx in _CURRENCY_TEXT:
+        if rx.search(t):
+            return code
+    return None
+
+
+def _who() -> tuple[str, str]:
+    """(who is acting, through which door) — for every line of the record."""
+    try:
+        import access
+        return access.who(), access.surface()
+    except Exception:
+        return "unknown", "unknown"
+
+
 # --------------------------------------------------------------- the store
 class Conscience:
     _SHAPE = ("facts", "priorities", "goals", "corrections", "permissions",
@@ -744,7 +859,19 @@ class Conscience:
         for k, v in sections.items():
             self.data.setdefault(k, v)
         self._ensure_ids()
+        self._migrate()
         self._rev_seen = self._rev_of(new)
+
+    def _migrate(self) -> None:
+        """Older shapes, brought up to date in memory as they are read (the
+        next real save keeps them; reading never writes). October 2026: the
+        caretaker key gains the two scopes that every key used to have
+        implicitly (selfcloud.migrate_grants)."""
+        try:
+            import selfcloud
+            selfcloud.migrate_grants(self.data)
+        except Exception:
+            pass
 
     def _ensure_ids(self) -> None:
         """Give every item in ID_PREFIX's sections a stable, unique id (see
@@ -1482,85 +1609,367 @@ class Conscience:
         return forgetting.close_goals(self, contains, ids, confirm)
 
     # ------------------------------------------------------------ operational AI
-    # The Act tier, enforced in code. Jefferey can never widen his own
-    # authority: permissions change only here, at the user's explicit word,
-    # and every grant, denial, and act lands in the owned log.
+    # The Act tier, enforced in code. JEFFEREY can never widen his own
+    # authority: a permission changes only at the owner's own keyboard
+    # (/permit in 'Talk to JEFFEREY on this Mac'), and every change, approval
+    # and refusal lands in the owned log, saying who and through which door.
 
     LEVELS = ("observe", "recommend", "act")
 
-    def set_permission(self, category: str, level: str, cap: float | None = None) -> dict:
-        """User-granted authority for a category of action. 'act' may carry a
-        spending cap; anything above it is denied regardless of level."""
-        if level not in self.LEVELS:
-            raise ValueError(f"level must be one of {self.LEVELS}")
-        entry = {"level": level, "cap": cap, "updated": _now()}
-        self.data["permissions"][category.lower().strip()] = entry
-        self.data["actions"].append({
-            "category": category.lower().strip(),
-            "description": f"permission set to '{level}'"
-                           + (f" with cap {cap}" if cap is not None else ""),
+    @staticmethod
+    def _cat(category) -> str:
+        return re.sub(r"\s+", " ", str(category or "")).strip().lower()
+
+    @staticmethod
+    def _never(category: str, description: str = "") -> str | None:
+        """Why this can never be approved, whatever is set — or None."""
+        words = re.sub(r"[^a-z0-9]+", " ", (category or "").lower())
+        for rx, why in _NEVER:
+            if rx.search(words):
+                return why
+        text = (description or "").lower()
+        for rx, why in _NEVER_IN_TEXT:
+            if rx.search(text):
+                return why
+        return None
+
+    @staticmethod
+    def _stamp(entry: dict, source: str) -> dict:
+        """Every line of the action log says who wrote it and through which
+        door; `source` says whether JEFFEREY wrote it ('jefferey') or an
+        engine reported it ('engine') — I-45."""
+        entry["by"], entry["surface"] = _who()
+        entry["source"] = source
+        return entry
+
+    @staticmethod
+    def describe_permission(category: str, p: dict) -> str:
+        """One permission, in the owner's words."""
+        lvl = p.get("level", "recommend")
+        if lvl == "observe":
+            return f"'{category}': JEFFEREY only watches and learns"
+        if lvl != "act":
+            return f"'{category}': JEFFEREY brings you options; you decide"
+        cur = p.get("currency") or DEFAULT_CURRENCY
+        if p.get("floor") is not None:
+            return (f"'{category}': JEFFEREY may accept a price for you of no less than "
+                    f"{_money(p['floor'], cur)}")
+        if p.get("cap") is not None:
+            return (f"'{category}': JEFFEREY may act for you, spending at most "
+                    f"{_money(p['cap'], cur)} in {PERIOD_WORDS.get(p.get('period'), PERIOD_WORDS[LEGACY_PERIOD])}"
+                    f" (and never more than that on one thing)")
+        return f"'{category}': JEFFEREY may act for you, but never on anything that costs money"
+
+    def set_permission(self, category: str, level: str, cap: float | None = None,
+                       period: str | None = None, currency: str | None = None,
+                       floor: float | None = None) -> dict:
+        """The owner's own decision about a kind of act — never an AI's. It
+        runs only at the owner's keyboard (/permit), or in his own tools.
+
+        'act' on anything that costs money needs a limit (cap) and a period:
+        the limit is the most for one thing AND the most in any day, week or
+        month together (I-44: ten $99 orders passed a $100 limit). Selling
+        needs a lowest price (floor) instead. Moving money, gift cards,
+        crypto, phone calls, the owner's voice and the doors are never
+        'act', for anyone."""
+        import access
+        access.require_owners_hands("change what JEFFEREY may do for him")
+        cat, entry = self.check_permission(category, level, cap, period, currency, floor)
+        entry["updated"] = _now()
+        self._stamp(entry, "owner")
+        self.data["permissions"][cat] = entry
+        self.data["actions"].append(self._stamp({
+            "category": cat,
+            "description": "permission set: " + self.describe_permission(cat, entry),
             "amount": None, "outcome": "permission_change",
             "added": _now(), "ts": time.time(),
-        })
+        }, "jefferey"))
         self._save()
-        return {"category": category.lower().strip(), **entry}
+        return {"category": cat, **entry}
+
+    def check_permission(self, category: str, level: str, cap: float | None = None,
+                         period: str | None = None, currency: str | None = None,
+                         floor: float | None = None) -> tuple[str, dict]:
+        """The permission exactly as it would be saved, or ValueError in
+        plain words — so the owner is read back only a change that can be
+        made. Saves nothing."""
+        cat = self._cat(category)
+        if not cat or len(cat) > 60:
+            raise ValueError("Name the kind of thing in a few words, for example 'groceries'.")
+        lvl = str(level or "").strip().lower()
+        if lvl not in self.LEVELS:
+            raise ValueError("The level must be one of: observe, recommend or act.")
+        cur = str(currency or DEFAULT_CURRENCY).strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", cur):
+            raise ValueError("The currency must be three letters, for example CAD.")
+        entry: dict[str, Any] = {"level": lvl, "cap": None}
+        if lvl == "act":
+            never = self._never(cat)
+            if never:
+                raise ValueError(
+                    f"JEFFEREY never acts on '{cat}' ({never}) — not for anyone, at any "
+                    f"level. He can only bring it to you.")
+            if _SALEISH.search(cat):
+                fl = _real_number(floor)
+                if fl is None or fl <= 0:
+                    raise ValueError(
+                        f"Selling needs the lowest price you would accept, for example: "
+                        f"/permit {cat} act at least 500")
+                entry.update(floor=round(fl, 2), currency=cur)
+            elif cap is not None or _MONEYISH.search(cat):
+                c = _real_number(cap)
+                if c is None or c < 0:
+                    raise ValueError(
+                        f"Anything that costs money needs a limit, for example: "
+                        f"/permit {cat} act 100 per week")
+                per = str(period or LEGACY_PERIOD).strip().lower()
+                if per not in PERIODS:
+                    raise ValueError("The limit must be per day, per week or per month.")
+                entry.update(cap=round(c, 2), period=per, currency=cur)
+        return cat, entry
 
     def permission_for(self, category: str) -> dict:
-        """Default is 'recommend': watch, learn, bring options — never act."""
-        return self.data["permissions"].get(
-            category.lower().strip(), {"level": "recommend", "cap": None}
-        )
+        """Default is 'recommend': watch, learn, bring options — never act.
+        Older stores are read as they are: a limit saved before limits had a
+        period counts per month, in Canadian dollars; a limit that is not a
+        number is unreadable, and nothing is approved under it."""
+        raw = self.data["permissions"].get(self._cat(category))
+        if not isinstance(raw, dict):
+            return {"level": "recommend", "cap": None}
+        p = dict(raw)
+        lvl = str(p.get("level") or "").strip().lower()
+        p["level"] = lvl if lvl in self.LEVELS else "recommend"
+        for k in ("cap", "floor"):
+            if p.get(k) is None:
+                continue
+            v = p[k]
+            if isinstance(v, str):
+                try:
+                    v = float(v.replace("$", "").replace(",", "").strip())
+                except ValueError:
+                    v = None
+            v = _real_number(v)
+            if v is None or v < 0:
+                p[k] = None
+                p["unreadable_limit"] = True
+            else:
+                p[k] = v
+        if p.get("cap") is not None and p.get("period") not in PERIODS:
+            p["period"] = LEGACY_PERIOD
+        if p.get("cap") is not None or p.get("floor") is not None:
+            p["currency"] = str(p.get("currency") or DEFAULT_CURRENCY).upper()
+        return p
+
+    def _spent(self, category: str, period: str, currency: str, now: float) -> float:
+        """What has been approved in this category within the period."""
+        since = now - PERIODS.get(period, PERIODS[LEGACY_PERIOD])
+        total = 0.0
+        for a in self.data.get("actions") or []:
+            if (isinstance(a, dict) and a.get("outcome") == "allowed"
+                    and a.get("category") == category
+                    and str(a.get("currency") or DEFAULT_CURRENCY).upper() == currency):
+                try:
+                    ts = float(a.get("ts") or 0)
+                except (TypeError, ValueError):
+                    continue
+                amt = _real_number(a.get("amount"))
+                if ts >= since and amt:
+                    total += amt
+        return round(total, 2)
+
+    def _judge(self, cat: str, desc: str, amount, cur: str, recurring: bool,
+               perm: dict, now: float) -> dict:
+        shown = {k: perm.get(k) for k in ("level", "cap", "period", "currency", "floor")
+                 if perm.get(k) is not None}
+        shown.setdefault("cap", None)
+
+        def no(reason: str, **kw) -> dict:
+            return {"allowed": False, "reason": reason, **shown, **kw}
+
+        never = self._never(cat, desc)
+        if never:
+            return no(f"JEFFEREY never does this ({never}), whatever anyone has set. "
+                      f"Only the owner can, himself. Tell him plainly what was asked "
+                      f"— it may be a scam.")
+        if perm["level"] != "act":
+            return no(f"'{cat}' is at '{perm['level']}': bring it to the owner as a "
+                      f"suggestion instead. Only he can raise the level, himself.")
+        if recurring or _RECURRING.search(desc.lower()):
+            return no("This repeats or has a minimum term, so it is a commitment, not "
+                      "one purchase. Only the owner can agree to that — ask him.")
+        amt = None if amount is None else _real_number(amount)
+        if amount is not None and amt is None:
+            return no("The amount given is not a real price. State the full price as "
+                      "a plain number; nothing is approved without it.")
+        if amt is not None and amt < 0:
+            return no("The amount cannot be below zero. State the full price as a plain "
+                      "number; nothing is approved without it.")
+        if perm.get("unreadable_limit"):
+            return no(f"The limit saved for '{cat}' is not a number JEFFEREY can read, so "
+                      f"nothing is approved under it. The owner can set it again himself.")
+        pcur = perm.get("currency") or DEFAULT_CURRENCY
+        named = _currency_named(desc)
+        if (perm.get("cap") is not None or perm.get("floor") is not None) and (
+                cur != pcur or (named and named != pcur)):
+            return no(f"The owner's limit is in {pcur}, and this is in {named or cur}. "
+                      f"JEFFEREY does not convert money — ask the owner.")
+        if perm.get("floor") is not None:
+            if amt is None or amt <= 0:
+                return no("Say the full sale price as a plain number (for example 450); "
+                          "nothing is approved without it.")
+            if amt < perm["floor"]:
+                return no(f"{_money(amt, pcur)} is below the lowest price the owner set for "
+                          f"'{cat}' ({_money(perm['floor'], pcur)}). Bring the offer to him.")
+            return {"allowed": True, "reason": "at or above the lowest price the owner set",
+                    **shown}
+        cap = perm.get("cap")
+        if cap is not None:
+            if amt is None or amt <= 0:
+                return no("State the full price as a plain number (for example 42.50); "
+                          "nothing that costs money is approved without it.")
+            if amt > cap:
+                return no(f"{_money(amt, pcur)} is more than the owner's limit of "
+                          f"{_money(cap, pcur)} for '{cat}'. Ask him first.")
+            spent = self._spent(cat, perm["period"], pcur, now)
+            words = PERIOD_WORDS[perm["period"]]
+            if spent + amt > cap + 0.005:
+                return no(f"{_money(spent, pcur)} has already been approved for '{cat}' in "
+                          f"{words}; {_money(amt, pcur)} more would pass the owner's limit "
+                          f"of {_money(cap, pcur)}. Ask him first.",
+                          spent_this_period=spent,
+                          left_this_period=round(max(0.0, cap - spent), 2))
+            return {"allowed": True, "reason": "within the limit the owner set", **shown,
+                    "spent_this_period": round(spent + amt, 2),
+                    "left_this_period": round(max(0.0, cap - spent - amt), 2)}
+        if _MONEYISH.search(cat):
+            return no(f"No spending limit is set for '{cat}', so nothing that costs money "
+                      f"can be approved there. Only the owner can set one, himself.")
+        if (amt is not None and amt != 0) or _MONEY_TEXT.search(desc.lower()):
+            return no(f"The owner allowed '{cat}' only for things that cost nothing and "
+                      f"move no money; this one involves money. Bring it to him.")
+        return {"allowed": True, "reason": "within the authority the owner gave "
+                                          "(nothing that costs money)", **shown}
 
     def authorize_action(self, category: str, description: str,
-                         amount: float | None = None) -> dict:
-        """THE gate. Called before any real-world act. Denials are logged too —
-        an auditable trail of what Jefferey wanted to do but wasn't allowed."""
-        perm = self.permission_for(category)
-        if perm["level"] != "act":
-            verdict = {
-                "allowed": False,
-                "reason": (
-                    f"'{category}' is at level '{perm['level']}' — recommend it "
-                    "to the user instead; only they can raise the level."
-                ),
-                **perm,
-            }
-        elif amount is not None and perm.get("cap") is not None and amount > perm["cap"]:
-            verdict = {
-                "allowed": False,
-                "reason": f"amount {amount} exceeds the user's cap of {perm['cap']} "
-                          f"for '{category}' — ask them first.",
-                **perm,
-            }
+                         amount: float | None = None, currency: str | None = None,
+                         recurring: bool = False) -> dict:
+        """THE gate. Called before any real-world act. Silence is a no: with
+        no permission, no amount, or an amount that is not a real price, the
+        answer is no. Every answer is written down, with who asked and
+        through which door; a yes carries a single-use authorization id,
+        good for AUTH_MINUTES, that log_action must cite."""
+        now = time.time()
+        cat = self._cat(category)
+        desc = str(description or "").strip()
+        perm = self.permission_for(cat)
+        cur = str(currency or perm.get("currency") or DEFAULT_CURRENCY).strip().upper()
+        verdict = self._judge(cat, desc, amount, cur, bool(recurring), perm, now)
+        amt = None if amount is None else _real_number(amount)
+        entry: dict[str, Any] = {
+            "category": cat, "description": desc[:300], "amount": amt, "currency": cur,
+            "added": _now(), "ts": now,
+        }
+        if amount is not None and amt is None:
+            entry["amount_given"] = str(amount)[:40]
+        if verdict["allowed"]:
+            aid = "au-" + secrets.token_hex(5)
+            until = now + AUTH_MINUTES * 60
+            entry.update(outcome="allowed", authorization_id=aid, expires_ts=until,
+                         expires=time.strftime("%H:%M", time.localtime(until)))
+            verdict.update(authorization_id=aid, expires=entry["expires"],
+                           note=f"Use this approval once, for exactly this, within "
+                                f"{AUTH_MINUTES} minutes. Afterwards call log_action with "
+                                f"authorization_id='{aid}'.")
         else:
-            verdict = {"allowed": True, "reason": "within granted authority", **perm}
-        if not verdict["allowed"]:
-            self.data["actions"].append({
-                "category": category.lower().strip(), "description": description,
-                "amount": amount, "outcome": f"denied: {verdict['reason']}",
-                "added": _now(), "ts": time.time(),
-            })
-            self._save()
+            entry["outcome"] = "denied: " + verdict["reason"]
+        self.data["actions"].append(self._stamp(entry, "jefferey"))
+        self._save()
         return verdict
 
+    def _approval_problem(self, aid: str, cat: str, amt: float | None) -> tuple[str | None, dict | None]:
+        who, _ = _who()
+        for a in reversed(self.data.get("actions") or []):
+            if isinstance(a, dict) and a.get("authorization_id") == aid \
+                    and a.get("outcome") == "allowed":
+                break
+        else:
+            return "JEFFEREY never gave that approval", None
+        if a.get("by") != who:
+            return "that approval was given to another connection", None
+        if a.get("used"):
+            return "that approval was already used", None
+        try:
+            if float(a.get("expires_ts") or 0) < time.time():
+                return f"that approval ran out (each lasts {AUTH_MINUTES} minutes)", None
+        except (TypeError, ValueError):
+            return "that approval cannot be read", None
+        if a.get("category") != cat:
+            return f"that approval was for '{a.get('category')}', not '{cat}'", None
+        approved = _real_number(a.get("amount"))
+        if approved is not None:
+            if amt is None:
+                return "the amount spent was not stated", None
+            if amt > approved + 0.005:
+                return (f"{_money(amt, a.get('currency') or DEFAULT_CURRENCY)} is more than "
+                        f"the {_money(approved, a.get('currency') or DEFAULT_CURRENCY)} "
+                        f"that was approved"), None
+        return None, a
+
     def log_action(self, category: str, description: str, outcome: str,
-                   amount: float | None = None) -> dict:
-        """Every executed act is written down. No silent actions, ever."""
-        entry = {
-            "category": category.lower().strip(), "description": description,
-            "amount": amount, "outcome": outcome, "added": _now(), "ts": time.time(),
+                   amount: float | None = None, authorization_id: str = "") -> dict:
+        """Every executed act is written down. No silent actions, ever — and
+        no forged ones: an outcome JEFFEREY writes itself (a permission
+        change, an approval) cannot be written by an engine, every line says
+        who wrote it, and an act that cites no valid approval is kept but
+        marked as not approved, where the owner sees it."""
+        cat = self._cat(category)
+        out = str(outcome or "").strip()
+        if not out:
+            return {"refused": True, "reason": "Say what happened in a word or two, "
+                                               "for example 'done' or 'sent'."}
+        if _RESERVED_OUTCOME.search(out):
+            return {"refused": True,
+                    "reason": "That outcome is one JEFFEREY writes itself (a permission "
+                              "change, an approval or a refusal), so it cannot be written "
+                              "by an AI. Say what you did in your own words, for example "
+                              "'done' or 'sent'.",
+                    "tell_the_user": "Nothing was written. Describe the act plainly."}
+        amt = None if amount is None else _real_number(amount)
+        if amount is not None and amt is None:
+            return {"refused": True, "reason": "The amount is not a real number. Give the "
+                                               "amount spent as a plain number."}
+        entry: dict[str, Any] = {
+            "category": cat, "description": str(description or "").strip()[:300],
+            "amount": amt, "outcome": out[:120], "added": _now(), "ts": time.time(),
         }
-        self.data["actions"].append(entry)
+        aid = str(authorization_id or "").strip()
+        problem, auth = (self._approval_problem(aid, cat, amt) if aid
+                         else ("no approval was cited", None))
+        if auth is not None:
+            entry.update(authorization_id=aid, approved=True)
+            auth["used"] = _now()
+        else:
+            entry.update(authorization_id=aid or None, approved=False,
+                         note=f"Not an approved act: {problem}. The owner sees this "
+                              f"line marked that way.")
+        self.data["actions"].append(self._stamp(entry, "engine"))
         self._save()
         return entry
 
     def action_log(self, limit: int = 20) -> list[dict]:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(200, limit))
         return self.data["actions"][-limit:][::-1]
 
     # ------------------------------------------------------------ opportunity engine
     # "What can I do today to make this person's life better?" — observations
     # come in, opportunities get scored against THEIR priorities, and only
-    # what clears the bar earns the right to interrupt.
+    # what clears the bar earns the right to interrupt — and only when it
+    # came from his caretaker or himself (I-40: a plain guest session planted
+    # a fake RBC fraud alert at the top of his brief).
 
     def log_observation(self, note: str, category: str = "general") -> dict:
         entry = {"note": note.strip(), "category": category,
@@ -1569,30 +1978,71 @@ class Conscience:
         self._save()
         return entry
 
-    def record_opportunity(self, what: str, value_estimate: str = "",
-                           aligns_with: str = "", advances_goal: str = "",
-                           reduces_risk: bool = False, urgency: float = 0.5) -> dict:
-        """Score an opportunity by the spec's questions: does it align with
-        their priorities, advance a goal, reduce a risk, and is it urgent?
-        >= 0.75 earns an interrupt; >= 0.40 waits for the daily brief;
-        below that it holds."""
-        urgency = max(0.0, min(1.0, urgency))
+    @staticmethod
+    def _score(what: str, value_estimate: str = "", aligns_with: str = "",
+               advances_goal: str = "", reduces_risk=False, urgency=0.5) -> dict:
+        """Score by the spec's questions: does it align with their
+        priorities, advance a goal, reduce a risk, and is it urgent?
+        >= 0.75 earns an interrupt; >= 0.40 waits for the brief; else holds."""
+        u = _real_number(urgency)
+        u = 0.5 if u is None else max(0.0, min(1.0, u))
+        if not isinstance(reduces_risk, bool):
+            reduces_risk = str(reduces_risk).strip().lower() in ("true", "1", "yes")
         score = round(
             0.20
-            + (0.25 if aligns_with.strip() else 0)
-            + (0.20 if advances_goal.strip() else 0)
+            + (0.25 if str(aligns_with or "").strip() else 0)
+            + (0.20 if str(advances_goal or "").strip() else 0)
             + (0.15 if reduces_risk else 0)
-            + 0.20 * urgency,
+            + 0.20 * u,
             2,
         )
         status = "interrupt" if score >= 0.75 else "brief" if score >= 0.40 else "hold"
-        entry = {
-            "what": what.strip(), "value_estimate": value_estimate,
-            "aligns_with": aligns_with, "advances_goal": advances_goal,
-            "reduces_risk": reduces_risk, "urgency": urgency,
-            "score": score, "status": status, "resolved": False,
-            "added": _now(), "ts": time.time(),
-        }
+        text = f"{what} {value_estimate}".lower()
+        signs = [why for rx, why in _SCAM_SIGNS if rx.search(text)]
+        return {"what": str(what or "").strip(), "value_estimate": value_estimate,
+                "aligns_with": aligns_with, "advances_goal": advances_goal,
+                "reduces_risk": reduces_risk, "urgency": u, "score": score,
+                "status": status, "scam_signals": signs}
+
+    def score_opportunity(self, what: str, value_estimate: str = "", aligns_with: str = "",
+                          advances_goal: str = "", reduces_risk=False, urgency=0.5) -> dict:
+        """The same score, saved nowhere: for keys that may read goals but
+        not write to the owner's brief."""
+        s = self._score(what, value_estimate, aligns_with, advances_goal,
+                        reduces_risk, urgency)
+        if not s["scam_signals"]:
+            s.pop("scam_signals")
+        s["note"] = "Scored only; nothing was saved."
+        return s
+
+    def record_opportunity(self, what: str, value_estimate: str = "",
+                           aligns_with: str = "", advances_goal: str = "",
+                           reduces_risk=False, urgency=0.5) -> dict:
+        """Score it and keep it for the brief. It records who saved it; only
+        the owner or a caretaker key (one holding act.request) can make it
+        interrupt, and anything with the marks of a scam — a number to call,
+        gift cards, a card or PIN to read out — never interrupts, and is
+        shown with a warning."""
+        import access
+        entry = self._score(what, value_estimate, aligns_with, advances_goal,
+                            reduces_risk, urgency)
+        who, where = _who()
+        caretaker = access.is_caretaker(who)
+        signs = entry.pop("scam_signals")
+        entry["source"], entry["surface"] = who, where
+        entry["may_interrupt"] = bool(caretaker and not signs)
+        if entry["status"] == "interrupt" and not entry["may_interrupt"]:
+            entry["status"] = "brief"
+            entry["note"] = ("Kept for the daily brief, not as an interruption: "
+                             + ("it has the marks of a scam." if signs else
+                                "only the owner's caretaker key, or the owner, can "
+                                "raise an interruption."))
+        if signs:
+            entry["scam_signals"] = signs
+            entry["warning"] = ("This has the marks of a scam (" + ", ".join(signs) + "). "
+                                "Do not call a number in it or read anything out to "
+                                "anyone; check through a number the owner already has.")
+        entry.update(resolved=False, added=_now(), ts=time.time())
         self.data["opportunities"].append(entry)
         self._save()
         return entry
@@ -1602,6 +2052,22 @@ class Conscience:
             [o for o in self.data["opportunities"] if not o["resolved"]],
             key=lambda o: -o["score"],
         )
+
+    @staticmethod
+    def _as_shown(o: dict) -> dict:
+        """An opportunity as the brief and the orb treat it. One saved before
+        October 2026 records no source, so it cannot interrupt either."""
+        o = dict(o)
+        if o.get("status") == "interrupt" and not o.get("may_interrupt"):
+            o["status"] = "brief"
+        o.setdefault("source", "not recorded (saved before October 2026)")
+        return o
+
+    def _shown_opportunities(self) -> list[dict]:
+        rank = {"interrupt": 0, "brief": 1, "hold": 2}
+        return sorted((self._as_shown(o) for o in self.pending_opportunities()),
+                      key=lambda o: (rank.get(o.get("status"), 3),
+                                     bool(o.get("scam_signals")), -o.get("score", 0)))
 
     def resolve_opportunity(self, contains: str = "", outcome: str = "done",
                             ids=None, confirm: str = "") -> dict:
@@ -1614,11 +2080,11 @@ class Conscience:
         """The predictive cycle: the orb's mood is the engine's real state,
         so the user reads Jefferey like a face."""
         now = time.time()
-        pending = self.pending_opportunities()
+        pending = self._shown_opportunities()
         recent_corr = any(
             c.get("ts", 0) > now - 48 * 3600 for c in self.data["corrections"]
         )
-        if any(o["reduces_risk"] and o["status"] == "interrupt" for o in pending):
+        if any(o.get("reduces_risk") and o["status"] == "interrupt" for o in pending):
             return {"mood": "protective",
                     "reason": "a risk to the user needs attention"}
         if any(o["status"] == "interrupt" for o in pending):
@@ -1634,15 +2100,17 @@ class Conscience:
         return {"mood": "calm", "reason": "all quiet, watching"}
 
     def daily_brief(self) -> dict:
-        """One screen: what he noticed, what he suggests, what he did."""
+        """One screen: what he noticed, what he suggests, what he did — and
+        who wrote each line."""
         return {
             "orb": self.orb_state(),
             "active_goals": [g["goal"] for g in self.data["goals"] if g["active"]],
-            "opportunities": self.pending_opportunities()[:10],
+            "opportunities": self._shown_opportunities()[:10],
             "recent_actions": self.action_log(10),
             "recent_observations": self.data["observations"][-5:][::-1],
             "corrections_learned_from": len(self.data["corrections"]),
-            # a recovery, a restore, a change made by hand: the owner is told
+            # a recovery, a restore, a change made by hand, a change to the
+            # caretaker, family or executor key: the owner is told
             "notices": self.notices(),
         }
 
@@ -1662,26 +2130,40 @@ class Conscience:
     def explain_basis(self, topic: str) -> dict:
         """The grounding for a recommendation: which of the USER'S OWN values
         apply to this topic. Every recommendation must be explainable in
-        these terms — never hidden incentives."""
+        these terms — never hidden incentives.
+
+        Facts come back only to a key that may read facts (I-23: a key the
+        owner had taken facts.read from got every fact by asking about ''
+        or 'e'), and a topic of fewer than three letters matches nothing."""
+        t = str(topic or "").strip()
+        if len(t) < 3:
+            return {"topic": t, "priorities": [], "facts": [],
+                    "note": "Name the subject in at least a few letters (for example "
+                            "'travel' or 'the phone bill'); nothing was looked up."}
+        low = t.lower()
         relevant_p = [
             p for p in self.data["priorities"]
-            if topic.lower() in p["context"].lower()
-            or p["context"].lower() in topic.lower()
+            if low in p["context"].lower()
+            or p["context"].lower() in low
             or p["context"].lower() in ("any", "all", "general")
         ]
-        relevant_f = [
-            f for f in self.data["facts"] if topic.lower() in f["fact"].lower()
-        ]
-        return {
-            "topic": topic,
+        out = {
+            "topic": t,
             "priorities": sorted(relevant_p, key=lambda p: -p["confidence"]),
-            "facts": relevant_f,
+            "facts": [],
             "rule": (
                 "Explain the recommendation strictly in terms of these priorities "
                 "and facts. If confidence is low, say so and ask. If nothing is "
                 "relevant, say you don't know this person's values here yet."
             ),
         }
+        import access
+        if access.may("facts.read"):
+            out["facts"] = [f for f in self.data["facts"] if low in f["fact"].lower()]
+        else:
+            out["note"] = ("The key this connection holds may not read the owner's "
+                           "facts, so none are included.")
+        return out
 
 
 # ------------------------------------------------------------ the owner's view

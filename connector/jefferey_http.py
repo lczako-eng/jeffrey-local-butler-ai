@@ -10,38 +10,57 @@ of build priority 03.
 Run:
     pip install fastapi uvicorn
     python connector/jefferey_http.py            # http://127.0.0.1:8377
+    python connector/jefferey_http.py --schema   # the schema, for GPT Actions
 
     JEFFEREY_HTTP_TOKEN=...   bearer token (auto-generated + printed if unset)
-    JEFFEREY_PUBLIC_URL=...   public https URL (needed for GPT Actions import)
+    JEFFEREY_HTTP_TOKENS=...  one token per key, e.g.
+        jefferey:<43 random characters>,gpt-raw:<43 others>
+        Make each one with:
+        python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+    JEFFEREY_PUBLIC_URL=...   the public https address, if this is reachable
+                              from outside this Mac
     JEFFEREY_HTTP_PORT=8377   port override
+
+Keys (October 2026, I-59): a token shorter than 32 characters, or the same
+token given to two keys, stops the server at start-up with a plain message.
+A wrong token is written down with where it came from, and five wrong ones
+from one address in ten minutes lock that address out for ten minutes. A
+token whose key the owner switched off gets nothing at all. With a public
+address set, the /docs, /redoc and /openapi.json pages are switched off —
+they told any passer-by every route there is.
 
 Wire up a custom GPT (chatgpt.com → Create a GPT):
     1. Instructions: paste connector/directives.md, plus one line —
        "Call GET /directives and GET /conscience at the start of every chat."
-    2. Actions → Import from URL: <JEFFEREY_PUBLIC_URL>/openapi.json
-       (expose your machine with a tunnel, e.g. `cloudflared tunnel` or
-       `ngrok http 8377`, or host this file on any small server)
-    3. Authentication: API Key → Bearer → the token this server prints.
+    2. Actions → paste the schema that `--schema` prints (with
+       JEFFEREY_PUBLIC_URL set, so it names the right address).
+    3. Authentication: API Key → Bearer → the token for that key.
     4. Talk to it. Override a recommendation. Watch it learn you —
-       into the SAME conscience.json Jefferey uses on Claude.
+       into the SAME conscience.json JEFFEREY uses on Claude.
 """
 
 from __future__ import annotations
 
 import functools
+import json
 import os
 import secrets
 import sys
+import time
 from pathlib import Path
 
 # Everything this process creates is readable by the owner's account only.
 os.umask(0o077)
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).parent))
+import access
+# This server serves engines, never the owner's own hands (I-43).
+access.refuse_owner_console_env("ChatGPT (HTTP)")
 from conscience import Conscience, StoreProblem
 from representative import Representative
 from guardian import Guardian
@@ -50,9 +69,8 @@ from selfcloud import SelfCloud
 from interview import Interview
 from rules import ConscienceRules
 from reminisce import Reminisce
-import access
 import egress
-from access import AccessDenied, OwnerOnly, gate, owner_only
+from access import AccessDenied, OwnerOnly, gate
 from egress import EgressRefused
 
 # A damaged store does not stop the server: every route explains instead.
@@ -84,9 +102,11 @@ rules = ConscienceRules(conscience)
 album = Reminisce(conscience, life)
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
-TOKEN = os.environ.get("JEFFEREY_HTTP_TOKEN") or secrets.token_urlsafe(24)
+TOKEN = os.environ.get("JEFFEREY_HTTP_TOKEN") or secrets.token_urlsafe(32)
 PUBLIC_URL = os.environ.get("JEFFEREY_PUBLIC_URL", "").rstrip("/")
 PORT = int(os.environ.get("JEFFEREY_HTTP_PORT", "8377"))
+MIN_TOKEN = 32                 # characters; a one-letter token fell in 11 tries
+FAIL_LIMIT, FAIL_WINDOW = 5, 600   # wrong tokens per address, per ten minutes
 
 
 def _token_map() -> dict[str, str]:
@@ -94,20 +114,44 @@ def _token_map() -> dict[str, str]:
     (a Custom GPT, a Claude session, a family member's app), so the token is
     not just a password — it says WHICH KEY the caller holds.
 
-        JEFFEREY_HTTP_TOKENS="jefferey:s3cr3t,gpt-raw:other,family:third"
+        JEFFEREY_HTTP_TOKENS="jefferey:<token_urlsafe(32)>,gpt-raw:<another>"
 
     With nothing set, the single JEFFEREY_HTTP_TOKEN maps to JEFFEREY_CLIENT
-    (default `claude-raw` — the narrow key, per access.py)."""
+    (default `claude-raw` — the narrow key, per access.py).
+
+    A token shorter than MIN_TOKEN characters, or one token given to two
+    keys (the last one used to win, so the family app got the caretaker's
+    key), refuses the start with a plain message (I-59)."""
     raw = os.environ.get("JEFFEREY_HTTP_TOKENS", "").strip()
-    if not raw:
-        return {TOKEN: os.environ.get("JEFFEREY_CLIENT", access.DEFAULT_CLIENT)}
+    problems: list[str] = []
     out: dict[str, str] = {}
-    for pair in raw.split(","):
-        if ":" not in pair:
-            continue
-        client, tok = pair.split(":", 1)
-        if client.strip() and tok.strip():
-            out[tok.strip()] = client.strip().lower()
+    if not raw:
+        out[TOKEN] = os.environ.get("JEFFEREY_CLIENT", access.DEFAULT_CLIENT).strip().lower()
+        if len(TOKEN) < MIN_TOKEN:
+            problems.append(f"the key in JEFFEREY_HTTP_TOKEN is only {len(TOKEN)} "
+                            f"characters long; it must be at least {MIN_TOKEN}")
+    else:
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            client, sep, tok = pair.partition(":")
+            client, tok = client.strip().lower(), tok.strip()
+            if not sep or not client or not tok:
+                problems.append("one entry does not look like name:token")   # never echoed: it may be a token
+                continue
+            if len(tok) < MIN_TOKEN:
+                problems.append(f"the token for '{client}' is only {len(tok)} characters "
+                                f"long; it must be at least {MIN_TOKEN}")
+            if tok in out:
+                problems.append(f"'{out[tok]}' and '{client}' were given the same token; "
+                                f"every key needs its own")
+            out[tok] = client
+    if problems:
+        raise SystemExit(
+            "JEFFEREY will not start the ChatGPT connection, because "
+            + "; ".join(problems) + ".\nMake a strong token for each key with:\n"
+            "    python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"")
     return out
 
 
@@ -125,15 +169,48 @@ access.provision(cloud, set(TOKENS.values()))
 egress.bind("http")
 
 
+_FAILS: dict[str, list[float]] = {}
+
+
+def _bad_token(where: str, why: str) -> None:
+    """Written down in the owner's access log, with where it came from."""
+    try:
+        cloud._log("unknown", "bad_token", f"{why}, from {where}", False, actor="unknown")
+    except Exception:
+        pass
+
+
 async def require_owner(request: Request) -> None:
     """Every byte in the store is personal. No token, no access — and the
-    token decides which key you hold for the rest of this request."""
-    auth = request.headers.get("authorization", "")
-    for tok, client in TOKENS.items():
-        if secrets.compare_digest(auth, f"Bearer {tok}"):
-            access.use_client(client)   # per-request identity, not per-call
-            return
-    raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+    token decides which key you hold for the rest of this request. A token
+    whose key the owner switched off gets nothing (I-09: a revoked key still
+    read the key list and revoked others)."""
+    where = request.client.host if request.client else "an unknown address"
+    now = time.time()
+    recent = [t for t in _FAILS.get(where, []) if now - t < FAIL_WINDOW]
+    if len(recent) >= FAIL_LIMIT:
+        _FAILS[where] = recent
+        raise HTTPException(status_code=429, detail=(
+            "Too many wrong keys from this address. Wait ten minutes, then try "
+            "again with the right one."))
+    scheme, _, tok = request.headers.get("authorization", "").strip().partition(" ")
+    tok = tok.strip()
+    client = None
+    if scheme.lower() == "bearer" and tok:
+        for known, who in TOKENS.items():
+            if secrets.compare_digest(tok.encode(), known.encode()):
+                client = who
+    if client is None:
+        recent.append(now)
+        _FAILS[where] = recent
+        _bad_token(where, "a missing or wrong key" if tok else "no key")
+        raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+    _FAILS.pop(where, None)
+    access.use_client(client)          # per-request identity, not per-call
+    try:
+        access.require_live()
+    except AccessDenied as e:
+        raise HTTPException(status_code=403, detail=str(e))
 
 
 app = FastAPI(
@@ -146,7 +223,25 @@ app = FastAPI(
     ),
     servers=[{"url": PUBLIC_URL}] if PUBLIC_URL else None,
     dependencies=[Depends(require_owner)],
+    # Reachable from outside this Mac: no open pages listing every route.
+    # The schema for GPT Actions comes from `--schema`, on this Mac.
+    docs_url=None if PUBLIC_URL else "/docs",
+    redoc_url=None if PUBLIC_URL else "/redoc",
+    openapi_url=None if PUBLIC_URL else "/openapi.json",
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def _invalid(request: Request, exc: RequestValidationError):
+    """What was sent does not fit. Said in words, WITHOUT echoing the values
+    back (FastAPI's own answer repeated them — and could not even be written
+    when one was NaN, so the caller got a crash instead of a 422)."""
+    parts = []
+    for e in exc.errors():
+        where = ".".join(str(x) for x in e.get("loc", ()) if x not in ("body", "query"))
+        parts.append(f"'{where or 'the request'}': {e.get('msg', 'not valid')}")
+    return JSONResponse(status_code=422, content={
+        "detail": "Some of what was sent is not valid — " + "; ".join(parts) + "."})
 
 
 @app.exception_handler(AccessDenied)
@@ -306,50 +401,47 @@ def close_goal(contains: str = "", ids: str = "", confirm: str = "") -> dict:
 
 
 # ---------------------------------------------------------------- operational AI
-class PermissionIn(BaseModel):
-    category: str
-    level: str = Field(description="'observe', 'recommend' (default), or 'act'")
-    cap: float | None = Field(default=None, description="spending cap for 'act'")
-
-
-@door(app.post("/permissions", operation_id="set_permission"))
-@owner_only
-def set_permission(p: PermissionIn) -> dict:
-    """ONLY when the user explicitly grants or changes authority, in their
-    own words. Jefferey never expands his own permissions."""
-    try:
-        return conscience.set_permission(p.category, p.level, p.cap)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-
+# Raising a permission is not a route. The owner types it himself (/permit in
+# 'Talk to JEFFEREY on this Mac'); JEFFEREY never widens JEFFEREY.
 class ActionAskIn(BaseModel):
     category: str
     description: str
-    amount: float | None = None
+    amount: float | None = Field(default=None, allow_inf_nan=False,
+                                 description="the FULL price, as a plain number")
+    currency: str = "CAD"
+    recurring: bool = Field(default=False, description="true if it repeats or has "
+                                                       "a minimum term")
 
 
 @door(app.post("/actions/authorize", operation_id="authorize_action"))
+@gate("act.request")
 def authorize_action(a: ActionAskIn) -> dict:
-    """THE gate. Call before doing anything in the real world on the user's
-    behalf. If denied, recommend instead — only the user can raise the
-    level. Denials are logged."""
-    return conscience.authorize_action(a.category, a.description, a.amount)
+    """THE gate. Call before doing anything in the real world on the owner's
+    behalf, with the full price whenever money is involved. A yes carries a
+    single-use authorization_id, good for 30 minutes; cite it in log_action.
+    A no is final: recommend instead — only the owner can raise the level.
+    Moving money, gift cards, crypto, phone calls and the doors are never
+    approved."""
+    return conscience.authorize_action(a.category, a.description, a.amount,
+                                       a.currency, a.recurring)
 
 
 class ActionLogIn(BaseModel):
     category: str
     description: str
     outcome: str
-    amount: float | None = None
+    amount: float | None = Field(default=None, allow_inf_nan=False)
+    authorization_id: str = ""
 
 
 @door(app.post("/actions", operation_id="log_action"))
 @gate("facts.write")
 def log_action(a: ActionLogIn) -> dict:
-    """Write down an act just performed on the user's behalf. No silent
-    actions, ever."""
-    return conscience.log_action(a.category, a.description, a.outcome, a.amount)
+    """Write down an act just performed on the owner's behalf, citing the
+    authorization_id. No silent actions, ever; an act with no valid approval
+    is kept but marked 'not approved'."""
+    return conscience.log_action(a.category, a.description, a.outcome, a.amount,
+                                 a.authorization_id)
 
 
 @door(app.get("/actions", operation_id="action_log"))
@@ -384,12 +476,23 @@ class OpportunityIn(BaseModel):
 
 
 @door(app.post("/opportunities", operation_id="record_opportunity"))
-@gate("goals.read")
+@gate("goals.write")
 def record_opportunity(o: OpportunityIn) -> dict:
-    """Score a way to make the user's life better against THEIR priorities.
-    Returns the score and whether it earns an interrupt (>=0.75), waits for
-    the daily brief (>=0.40), or holds. Only interrupt when it says to."""
+    """Score a way to make the user's life better against THEIR priorities,
+    and keep it for the brief, with who saved it. Returns the score and
+    whether it earns an interrupt (>=0.75), waits for the daily brief
+    (>=0.40), or holds. Only interrupt when it says to."""
     return conscience.record_opportunity(
+        o.what, o.value_estimate, o.aligns_with, o.advances_goal,
+        o.reduces_risk, o.urgency,
+    )
+
+
+@door(app.post("/opportunities/score", operation_id="score_opportunity"))
+@gate("goals.read")
+def score_opportunity(o: OpportunityIn) -> dict:
+    """The same score, saved nowhere."""
+    return conscience.score_opportunity(
         o.what, o.value_estimate, o.aligns_with, o.advances_goal,
         o.reduces_risk, o.urgency,
     )
@@ -702,32 +805,22 @@ def story_progress() -> dict:
 
 
 # ---------------------------------------------------------------- self-cloud
+# Giving out or widening a key is not a route: the owner types /grant or
+# /scope add himself. A key may give up its OWN access here; changing any
+# other key is the owner's. (A switched-off key never gets this far.)
 @door(app.get("/selfcloud", operation_id="selfcloud_status"))
 def selfcloud_status() -> dict:
-    """Who holds a key to this person's Self-Cloud, what's revoked, and any
-    recent refusals."""
+    """Who holds a key to this person's Self-Cloud, what's revoked, recent
+    refusals and recent changes to the important keys. A key other than the
+    caretaker's sees only itself."""
     return cloud.status()
 
 
 @door(app.get("/selfcloud/grants", operation_id="selfcloud_grants"))
 def selfcloud_grants() -> dict:
-    """Every key in full, plus every scope that exists."""
+    """Every key in full, plus every scope that exists. A key other than the
+    caretaker's sees only itself."""
     return cloud.grants()
-
-
-class GrantIn(BaseModel):
-    client: str
-    scopes: list[str] | None = None
-    label: str = ""
-    note: str = ""
-
-
-@door(app.post("/selfcloud/grants", operation_id="selfcloud_grant"))
-@owner_only
-def selfcloud_grant(g: GrantIn) -> dict:
-    """ONLY at the owner's explicit word. Never grant a key on your own
-    initiative, and never widen your own."""
-    return cloud.grant(g.client, g.scopes, g.label, g.note)
 
 
 class ScopeIn(BaseModel):
@@ -735,34 +828,29 @@ class ScopeIn(BaseModel):
     scope: str
 
 
-@door(app.post("/selfcloud/scopes/add", operation_id="selfcloud_add_scope"))
-@owner_only
-def selfcloud_add_scope(s: ScopeIn) -> dict:
-    """Widen one key by exactly one scope, at the owner's word."""
-    return cloud.add_scope(s.client, s.scope)
-
-
 @door(app.post("/selfcloud/scopes/remove", operation_id="selfcloud_remove_scope"))
 def selfcloud_remove_scope(s: ScopeIn) -> dict:
-    """Narrow a key by one scope."""
+    """Give up one scope of the key this token holds."""
     return cloud.remove_scope(s.client, s.scope)
 
 
 @door(app.delete("/selfcloud/grants", operation_id="selfcloud_revoke"))
 def selfcloud_revoke(client: str) -> dict:
-    """Kill a key completely. Never argue with a revocation."""
+    """Switch off the key this token holds. Never argue with a revocation."""
     return cloud.revoke(client)
 
 
 @door(app.get("/selfcloud/check", operation_id="selfcloud_check_access"))
 def selfcloud_check_access(client: str, scope: str) -> dict:
-    """Would this client be allowed this scope? Deny by default."""
-    return cloud.check_access(client, scope)
+    """Would this client be allowed this scope? Deny by default. Only the
+    caretaker key may ask about keys other than its own."""
+    return cloud.ask_access(client, scope)
 
 
 @door(app.get("/selfcloud/log", operation_id="selfcloud_access_log"))
 def selfcloud_access_log(limit: int = 30) -> list:
-    """Who asked for what, and what happened."""
+    """Who asked for what, and what happened (1 to 200 entries); a key other
+    than the caretaker's sees only its own lines."""
     return cloud.access_log(limit)
 
 
@@ -882,16 +970,27 @@ def what_left_the_house(days: int = 7) -> dict:
     return egress.summary(days)
 
 
+def schema() -> dict:
+    """The routes, for pasting into GPT Actions — printed on this Mac, never
+    served to the internet."""
+    return app.openapi()
+
+
 if __name__ == "__main__":
+    if "--schema" in sys.argv[1:]:
+        print(json.dumps(schema(), indent=2))
+        sys.exit(0)
     import uvicorn
 
     print("JEFFEREY HTTP connector — one conscience, many engines")
     print(f"  store : {conscience.path}")
-    print(f"  local : http://127.0.0.1:{PORT}   (openapi: /openapi.json)")
     if PUBLIC_URL:
-        print(f"  public: {PUBLIC_URL}")
+        print(f"  local : http://127.0.0.1:{PORT}")
+        print(f"  public: {PUBLIC_URL}   (no open /docs or /openapi.json pages; "
+              f"use --schema)")
     else:
+        print(f"  local : http://127.0.0.1:{PORT}   (openapi: /openapi.json)")
         print("  public: set JEFFEREY_PUBLIC_URL before importing into GPT Actions")
-    if "JEFFEREY_HTTP_TOKEN" not in os.environ:
+    if "JEFFEREY_HTTP_TOKEN" not in os.environ and not os.environ.get("JEFFEREY_HTTP_TOKENS"):
         print(f"  token : {TOKEN}   (generated — set JEFFEREY_HTTP_TOKEN to pin it)")
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")

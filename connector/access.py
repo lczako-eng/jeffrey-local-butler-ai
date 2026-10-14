@@ -20,11 +20,19 @@ Three rules fix that, and they are the whole of this file:
    registration. A denial raises; it does not return a polite dict the model
    can narrate its way around.
 
-3. **Widening needs the owner's own hands.** Narrowing a key (revoke, remove
-   a scope) is always allowed. *Widening* one — granting, adding a scope,
-   raising a permission level — requires `JEFFEREY_OWNER_CONSOLE=1`, which
-   the owner's terminal sets and an MCP host config does not. Jefferey can
-   never widen Jefferey.
+3. **Widening needs the owner's own hands.** *Widening* a key or an
+   authority — granting, adding a scope, raising a permission level — is
+   never a tool any engine is offered, on any surface. The owner types it
+   (/permit, /grant … in 'Talk to JEFFEREY on this Mac') and confirms it at
+   the keyboard; only that code path holds the owner console, and it holds it
+   IN THIS PROCESS (`owner_console()`), never in an environment variable a
+   model's process could inherit. (Before the October 2026 stress test the
+   console was `JEFFEREY_OWNER_CONSOLE=1`, which the terminal set for its
+   whole life — so the model there could raise its own authority. MCP and
+   HTTP now refuse to start when that variable is set at all.)
+   A key may give up its OWN authority from anywhere (revoke itself, drop one
+   of its own scopes); narrowing ANOTHER key is the owner's decision too.
+   Jefferey can never widen Jefferey.
 
 The visibility ceiling for the life layer is derived here too, from the
 bound key's scopes, so `who_am_i` and `tell_story` no longer take an
@@ -36,6 +44,7 @@ from __future__ import annotations
 import functools
 import os
 import sys
+from contextlib import contextmanager
 from contextvars import ContextVar
 
 # The identity used when nothing says otherwise, and it is deliberately the
@@ -51,6 +60,17 @@ _CEILINGS = (("life.read", "private"), ("family.read", "family"),
 
 # Set per-request by surfaces that serve more than one client (HTTP).
 _request_client: ContextVar[str | None] = ContextVar("jefferey_client", default=None)
+
+# The owner's own hands, in this process only: set by owner_console() around
+# a command the owner typed and confirmed at his keyboard. Never read from
+# the environment, so no process (and no model) can inherit it.
+_owner_hands: ContextVar[bool] = ContextVar("jefferey_owner_hands", default=False)
+
+# Who the owner is, in the logs, when he acts with his own hands.
+OWNER = "owner"
+# Who acts when no engine is bound to this process at all (the owner's own
+# command-line tools, or a test): there is no AI on the other end.
+LOCAL = "local"
 
 
 # The canonical scope table: which key each tool needs. The MCP and HTTP
@@ -69,10 +89,18 @@ TOOL_SCOPES: dict[str, str] = {
     "conscience_include": "facts.write", "conscience_exclude": "facts.write",
     "set_rule": "facts.write", "remove_rule": "facts.write",
     "list_rules": "facts.read", "daily_brief": "facts.read",
-    # goals and the opportunity engine
+    # goals and the opportunity engine. record_opportunity SAVES an item that
+    # can open the owner's daily brief, so it is a write (it was goals.read,
+    # and a plain guest session planted a fake fraud alert there — I-40).
     "add_goal": "goals.write", "close_goal": "goals.write",
-    "log_observation": "goals.write", "record_opportunity": "goals.read",
+    "log_observation": "goals.write", "record_opportunity": "goals.write",
     "resolve_opportunity": "goals.write",
+    # ...and the read-only half: score an idea without saving it.
+    "score_opportunity": "goals.read",
+    # THE gate for acting in the world. Only the acting caretaker holds this
+    # scope; a guest, family, executor, revoked or unknown key gets no answer
+    # at all (it used to be ungated — I-06).
+    "authorize_action": "act.request",
     # money
     "expect_charge": "money.write", "mark_cancelled": "money.write",
     "check_charge": "money.read", "review_statement": "money.read",
@@ -100,10 +128,36 @@ TOOL_SCOPES: dict[str, str] = {
     "what_left_the_house": "facts.read",
 }
 
-# Tools that WIDEN what an AI may do. Narrowing (revoke, remove_scope) never
-# needs the owner's console; widening always does.
+# Actions that WIDEN what an AI may do. None of them is a tool on any surface
+# any more: the owner types them at his own keyboard (/permit, /grant, /scope
+# add in 'Talk to JEFFEREY on this Mac'). The names are kept so every surface
+# can refuse them in plain words, and so a test can prove they stay absent.
 OWNER_ONLY_TOOLS = frozenset({"set_permission", "selfcloud_grant",
                               "selfcloud_add_scope"})
+
+# Narrowing tools: a key may narrow ITSELF from anywhere; narrowing another
+# key needs the owner's own hands (I-09).
+NARROWING_TOOLS = frozenset({"selfcloud_revoke", "selfcloud_remove_scope"})
+
+# Tools that change something. The egress door writes its record of the call
+# BEFORE one of these runs, so a log that cannot be written stops the change
+# (I-12) instead of letting it land unrecorded.
+WRITE_TOOLS = frozenset(
+    {t for t, s in TOOL_SCOPES.items() if s.endswith(".write") or s == "act.request"}
+    | NARROWING_TOOLS
+    | {"fill_pdf"})                     # writes a new file on the owner's disk
+
+
+def owner_only_refusal(tool: str) -> dict:
+    """What an engine is told when it asks for a widening action."""
+    return {"refused": True, "tool": tool,
+            "reason": ("Raising a permission or giving out a key is never done by "
+                       "an AI. Only the owner can do it, typing it himself at his "
+                       "own keyboard in 'Talk to JEFFEREY on this Mac' (for example "
+                       "/permit groceries act 100 per week)."),
+            "tell_the_user": ("Tell the owner, in plain words, what you would need "
+                              "and why, and that only he can allow it by typing it "
+                              "himself. Then stop; do not try another way.")}
 
 
 class AccessDenied(PermissionError):
@@ -112,6 +166,22 @@ class AccessDenied(PermissionError):
 
 class OwnerOnly(PermissionError):
     """A widening action was attempted outside the owner's own console."""
+
+
+def refusal(tool: str, exc: Exception) -> dict:
+    """An access refusal as a RESULT the model must report — never a bare
+    'Error executing tool' (the MCP SDK reduces any exception to that, so a
+    key mistake looked like a crash — I-64)."""
+    if isinstance(exc, OwnerOnly):
+        tell = ("Tell the owner plainly that only he can allow this, typing it "
+                "himself at his own keyboard, and what you would need and why. "
+                "Then stop; do not try another way.")
+    else:
+        tell = ("Say plainly that the key this connection holds does not allow "
+                "this, and do not attempt it another way. If the owner expected "
+                "it to work, the key's name in this connection's settings may be "
+                "misspelled, or the owner may need to widen it himself.")
+    return {"refused": True, "tool": tool, "reason": str(exc), "tell_the_user": tell}
 
 
 class Gate:
@@ -165,22 +235,26 @@ class Gate:
         if client not in PRESETS:
             self._provisioned.add(client)
             print(f"\n  ⚠  JEFFEREY_CLIENT={client!r} has no key and no preset.\n"
-                  f"     Every scoped call will be denied until the owner runs:\n"
-                  f"       selfcloud_grant('{client}', [...])\n",
+                  f"     Every scoped call will be refused until the owner types, in\n"
+                  f"     'Talk to JEFFEREY on this Mac':  /grant {client} <scopes>\n",
                   file=sys.stderr)
             return
         # Marked provisioned only once the key is SAVED. An earlier version
         # marked it first, so a grant that lost a race with another engine's
         # write was never retried: every later call was refused as 'never
         # granted' until the app was restarted. One retry, after re-reading.
+        # (`auto=True`: issuing a preset exactly as written is not widening,
+        # so it does not need the owner's hands; nothing else may pass it.)
         try:
             self.cloud.grant(client, note="auto-issued from its preset on "
-                                          "first use; the owner may narrow it")
+                                          "first use; the owner may narrow it",
+                             auto=True)
         except ConscienceConflict:
             self.cloud.c.refresh()
             if client not in self.cloud.c.data.get("selfcloud_grants", {}):
                 self.cloud.grant(client, note="auto-issued from its preset on "
-                                              "first use; the owner may narrow it")
+                                              "first use; the owner may narrow it",
+                                 auto=True)
         self._provisioned.add(client)
 
     def announce(self) -> None:
@@ -204,10 +278,26 @@ class Gate:
         verdict = self.check(scope)
         if not verdict["allowed"]:
             raise AccessDenied(
-                f"'{verdict['client']}' may not do this: {verdict['reason']}. "
-                f"The owner can widen this key from their own console; "
-                f"Jefferey cannot, and will not ask you to work around it."
+                f"The key this connection holds ('{verdict['client']}') does not "
+                f"allow this: {verdict['reason']}. Only the owner can change a key, "
+                f"at his own keyboard; JEFFEREY cannot, and will not ask you to "
+                f"work around it."
             )
+
+    def may(self, scope: str, client: str | None = None) -> bool:
+        """Does this key hold `scope`? A question, not an access event: it
+        decides what a result may contain, and writes nothing."""
+        if client is None:
+            client = self.current_client()
+            self._provision(client)
+        return bool(self.cloud.check_access(client, scope, log=False)["allowed"])
+
+    def live(self, client: str | None = None) -> dict | None:
+        """The caller's key if it exists and is switched on, else None."""
+        client = client or self.current_client()
+        self._provision(client)
+        g = self.cloud.c.data.get("selfcloud_grants", {}).get(client)
+        return g if isinstance(g, dict) and g.get("active") else None
 
     def ceiling(self) -> str:
         """How deep into the life layer this key may see: private > family >
@@ -258,6 +348,141 @@ def current_client() -> str:
     return GATE.current_client() if GATE else DEFAULT_CLIENT
 
 
+# ------------------------------------------------------------ the owner's hands
+@contextmanager
+def owner_console():
+    """The owner, at his own keyboard, has typed a command and confirmed it.
+    Only code that read that confirmation from a person (jefferey_chat's
+    /permit, /grant …) enters this block. It lives in this process alone."""
+    tok = _owner_hands.set(True)
+    try:
+        yield
+    finally:
+        _owner_hands.reset(tok)
+
+
+def is_owner_console() -> bool:
+    return _owner_hands.get()
+
+
+def who() -> str:
+    """Who is acting, for the record: the owner with his own hands, the key
+    bound to this call, or — with no engine bound to this process at all — a
+    local tool of the owner's."""
+    if is_owner_console():
+        return OWNER
+    if GATE is None:
+        return LOCAL
+    return GATE.current_client()
+
+
+def may(scope: str) -> bool:
+    """Does the caller's key hold `scope`? The owner and local tools (no
+    engine bound) may see everything; writes nothing."""
+    if owners_hands():
+        return True
+    try:
+        return GATE.may(scope)
+    except Exception:
+        return False
+
+
+def is_caretaker(client: str | None) -> bool:
+    """The owner, a local tool, or a key the owner made a caretaker (one that
+    holds act.request — the 'jefferey' preset does). Only these may raise an
+    interrupt in the owner's brief."""
+    c = (client or "").strip().lower()
+    if c in (OWNER, LOCAL):
+        return True
+    if GATE is None or not c:
+        return False
+    try:
+        return GATE.may("act.request", client=c)
+    except Exception:
+        return False
+
+
+def owners_hands() -> bool:
+    """True when no AI can be on the other end of this call: the owner typed
+    and confirmed it (owner_console), or no engine is bound to this process
+    at all (the owner's own command-line tools). Every surface an engine can
+    reach binds a gate at start-up, so there this is only ever the console."""
+    return is_owner_console() or GATE is None
+
+
+def require_owners_hands(what: str) -> None:
+    """Widening — a key, a scope, a permission — is never done because an AI
+    asked (I-04). The surfaces no longer offer it at all; this is the same
+    rule once more, where the change is actually made."""
+    if not owners_hands():
+        raise OwnerOnly(
+            f"Only the owner can {what}, typing it himself at his own keyboard in "
+            f"'Talk to JEFFEREY on this Mac'. Tell him what you would need and "
+            f"why, then stop. JEFFEREY never widens JEFFEREY.")
+
+
+def require_live() -> dict:
+    """The caller's key must exist and be switched on. A revoked or unknown
+    key is dead everywhere — it does not even get to read the key list or the
+    access log (I-09: a revoked key still read both and revoked others)."""
+    if owners_hands():
+        return {}
+    g = GATE.live()
+    if g is None:
+        me = GATE.current_client()
+        stored = GATE.cloud.c.data.get("selfcloud_grants", {}).get(me)
+        why = (f"it was switched off by the owner on {stored.get('revoked_on')}"
+               if isinstance(stored, dict) else "the owner never gave out a key by that name")
+        raise AccessDenied(
+            f"The key this connection holds ('{me}') does not work: {why}. If the "
+            f"owner expected it to work, the key's name in this connection's "
+            f"settings may be misspelled.")
+    return g
+
+
+def require_self_or_owner(target: str, tool: str = "") -> None:
+    """A key may give up its own authority from anywhere; narrowing ANOTHER
+    key is the owner's decision (I-09: a guest revoked the caretaker, the
+    family key and the executor's legacy key)."""
+    if owners_hands():
+        return
+    me = current_client()
+    if (target or "").strip().lower() != me:
+        raise OwnerOnly(
+            f"This connection holds the '{me}' key, and a key may only give up "
+            f"its OWN access. Changing the '{(target or '').strip().lower()}' key "
+            f"is the owner's decision: he does it himself, typing /revoke or "
+            f"/scope at his own keyboard in 'Talk to JEFFEREY on this Mac'.")
+
+
+def surface() -> str:
+    """Which door this call came through, for the record."""
+    if is_owner_console():
+        return "owner's terminal"
+    try:
+        import egress
+        return egress._SURFACE or "local"
+    except Exception:
+        return "local"
+
+
+def owner_console_env_set() -> bool:
+    return os.environ.get("JEFFEREY_OWNER_CONSOLE", "").strip() not in ("", "0")
+
+
+def refuse_owner_console_env(surface: str) -> None:
+    """MCP and HTTP serve engines, never the owner's own hands. A host config
+    that sets the old owner-console variable is a mistake (or an attack) —
+    refuse to start, loudly, rather than run with it (I-43)."""
+    if owner_console_env_set():
+        sys.exit(
+            f"JEFFEREY will not start the {surface} connection: the setting "
+            f"JEFFEREY_OWNER_CONSOLE is switched on for it. That setting would let "
+            f"the AI on the other end change its own permissions. Remove it from "
+            f"this connection's settings and start again. Raising a permission is "
+            f"something the owner types himself, in 'Talk to JEFFEREY on this Mac'.")
+
+
 def ceiling() -> str:
     if GATE is None:
         raise AccessDenied("no client identity is bound; refusing to guess one")
@@ -287,15 +512,19 @@ def gate(scope: str):
 
 def owner_only(fn):
     """Decorator for actions that WIDEN authority — granting a key, adding a
-    scope, raising a permission level. Narrowing never needs this."""
+    scope, raising a permission level. They run only inside owner_console(),
+    which nothing but a command the owner typed and confirmed ever enters
+    (or in a process with no engine bound at all — the owner's own tools).
+    The environment is not consulted: a variable can be inherited by any
+    process, including one a model drives."""
     @functools.wraps(fn)
     def inner(*args, **kwargs):
-        if os.environ.get("JEFFEREY_OWNER_CONSOLE") != "1":
+        if not owners_hands():
             raise OwnerOnly(
-                f"{fn.__name__} widens what an AI is allowed to do, so it runs "
-                "only from the owner's own console (JEFFEREY_OWNER_CONSOLE=1). "
-                "Tell the owner what you would need and why — then stop. "
-                "Jefferey never widens Jefferey."
+                f"{fn.__name__} widens what an AI is allowed to do, so only the "
+                "owner can do it, typing it himself at his own keyboard. Tell the "
+                "owner what you would need and why — then stop. JEFFEREY never "
+                "widens JEFFEREY."
             )
         return fn(*args, **kwargs)
     inner.__jefferey_owner_only__ = True

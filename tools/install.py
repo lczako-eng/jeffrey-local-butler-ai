@@ -185,16 +185,26 @@ def selftest() -> bool:
 
 
 # --------------------------------------------------------------- the wiring
-def server_entry(client: str, owner_console: bool) -> dict:
-    env = {"JEFFEREY_CLIENT": client}
-    if owner_console:
-        # Only ever on a surface that is literally the owner's own machine and
-        # his own hands. It is what allows WIDENING a permission. Never set it
-        # for a host where a model drives the conversation.
-        env["JEFFEREY_OWNER_CONSOLE"] = "1"
+def server_entry(client: str) -> dict:
+    # Never JEFFEREY_OWNER_CONSOLE: a host where a model drives the
+    # conversation must never be able to widen anything, and the server now
+    # refuses to start if it is set (October 2026, I-43). Widening is the
+    # owner's typed /permit or /grant in 'Talk to JEFFEREY on this Mac'.
     return {"command": str(venv_python()),
             "args": [str(CONNECTOR / "jefferey_mcp.py")],
-            "env": env}
+            "env": {"JEFFEREY_CLIENT": client}}
+
+
+def known_clients() -> list[str]:
+    """The keys JEFFEREY knows how to issue (selfcloud.PRESETS)."""
+    sys.path.insert(0, str(CONNECTOR))
+    try:
+        from selfcloud import PRESETS
+        return list(PRESETS)
+    except Exception:
+        return ["jefferey", "claude-raw", "gpt-raw", "family", "executor"]
+    finally:
+        sys.path.remove(str(CONNECTOR))
 
 
 def wire_claude_desktop(client: str) -> bool:
@@ -220,7 +230,7 @@ def wire_claude_desktop(client: str) -> bool:
 
     servers = data.setdefault("mcpServers", {})
     others = [k for k in servers if k != SERVER_KEY]
-    servers[SERVER_KEY] = server_entry(client, owner_console=False)
+    servers[SERVER_KEY] = server_entry(client)
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text(json.dumps(data, indent=2))
     ok(f"Connected Jefferey to Claude Desktop as '{client}'")
@@ -306,6 +316,7 @@ def main() -> int:
                     help="which Self-Cloud key this install holds "
                          "(jefferey = the caretaker; claude-raw = a guest)")
     a = ap.parse_args()
+    a.client = (a.client or "").strip().lower()
 
     say(f"\n{BOLD}JEFFEREY{OFF}  —  a Personal AI Shadow")
     say(f"{DIM}The intelligence is rented. The conscience is owned.{OFF}")
@@ -316,6 +327,13 @@ def main() -> int:
         say(f"\n{BOLD}Unhooking Jefferey{OFF}")
         unwire()
         return 0
+    # A misspelled key name ('claude_raw') used to be accepted, and every
+    # call in Claude then failed as a bare "Error executing tool" (I-64).
+    if a.client not in known_clients():
+        bad(f"'{a.client}' is not a key JEFFEREY knows. Choose one of: "
+            f"{', '.join(known_clients())}.")
+        say(f"  {DIM}For example:  python3 tools/install.py --client claude-raw{OFF}")
+        return 1
 
     total = 4
     step(1, total, "Checking this machine")

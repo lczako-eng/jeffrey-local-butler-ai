@@ -977,8 +977,10 @@ def _log(data: dict, description: str, outcome: str) -> None:
     acts = data.get("actions")
     if not isinstance(acts, list):
         acts = data["actions"] = []
+    by, where = _cs._who()          # who and through which door (I-45)
     acts.append({"category": "memory", "description": description, "amount": None,
-                 "outcome": outcome, "added": _cs._now(), "ts": time.time()})
+                 "outcome": outcome, "added": _cs._now(), "ts": time.time(),
+                 "by": by, "surface": where, "source": "jefferey"})
 
 
 # ------------------------------------------------------------ the tools

@@ -103,11 +103,17 @@ code, not vibes**:
 
 - **Observe → Recommend → Act.** Every action category defaults to
   *recommend*. `authorize_action` is the gate before anything touches the
-  real world; it default-denies, enforces per-category spending caps, and
-  logs every denial. Only `set_permission` — at the user's explicit word —
-  raises a level. Jefferey can never widen his own authority.
-- **No silent actions.** Every act, denial, and permission change lands in
-  the audit log inside the user's own conscience file (`action_log`).
+  real world, and only the caretaker key may ask it. It default-denies;
+  needs the full price for anything that costs money; holds each spending
+  limit to a total per day, week or month, in one currency; needs a lowest
+  price for selling; and never approves moving money, gift cards, crypto,
+  phone calls or the doors. Only the owner raises a level, typing `/permit`
+  himself in `jefferey_chat.py` — it is not a tool on any surface. JEFFEREY
+  can never widen his own authority.
+- **No silent actions, no forged ones.** Every approval (with a single-use
+  `authorization_id`), denial, act and permission change lands in the audit
+  log inside the owner's conscience file (`action_log`), saying who wrote it
+  and through which door; an act that cites no approval is marked so.
 
 ## The Opportunity Engine + the predictive orb
 

@@ -367,11 +367,15 @@ class Representative:
     def draft_guidance(self, purpose: str, recipient: str = "") -> dict:
         """What Jefferey must know before writing anything in the user's name:
         their voice, their values on this subject, and the hard limits."""
+        # explain_basis returns facts only to a key that may read them, and
+        # nothing for a purpose of under three letters (I-23).
         basis = self.c.explain_basis(purpose)
         profile = self.c.data.get("profile", {})
         signer = profile.get("full_name") or (
             f"{profile.get('first_name','')} {profile.get('last_name','')}".strip() or None)
+        extra = {"note": basis["note"]} if basis.get("note") else {}
         return {
+            **extra,
             "purpose": purpose,
             "recipient": recipient,
             "write_as": signer or "the user (no name in profile yet — ask before signing)",

@@ -185,11 +185,11 @@ class NoWildcards(DeletionTest):
         # learning-45: DELETE /facts?contains= with the caretaker token → 200,
         # every fact gone.
         r = self.py("""
-            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:tokA"
+            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:tokA-0123456789abcdefghijklmnopqrstu"
             import jefferey_http as h
             from fastapi.testclient import TestClient
             c = TestClient(h.app)
-            A = {"Authorization": "Bearer tokA"}
+            A = {"Authorization": "Bearer tokA-0123456789abcdefghijklmnopqrstu"}
             for f in ["one fact", "two facts", "three facts"]:
                 c.post("/facts", json={"fact": f}, headers=A)
             r1 = c.delete("/facts", params={"contains": ""}, headers=A)
@@ -366,12 +366,14 @@ class TwoSteps(DeletionTest):
 
     def test_the_code_works_once_for_the_same_tool_and_key_only(self):
         r = self.py("""
-            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:tokA,helper:tokC"
+            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:tokA-0123456789abcdefghijklmnopqrstu,helper:tokC-0123456789abcdefghijklmnopqrstu"
             import jefferey_http as h
             from fastapi.testclient import TestClient
-            h.cloud.grant("helper", ["facts.read", "facts.write", "goals.read", "goals.write"])
+            import access
+            with access.owner_console():      # giving out a key is the owner's own act
+                h.cloud.grant("helper", ["facts.read", "facts.write", "goals.read", "goals.write"])
             c = TestClient(h.app)
-            A, C = {"Authorization": "Bearer tokA"}, {"Authorization": "Bearer tokC"}
+            A, C = {"Authorization": "Bearer tokA-0123456789abcdefghijklmnopqrstu"}, {"Authorization": "Bearer tokC-0123456789abcdefghijklmnopqrstu"}
             c.post("/facts", json={"fact": "The recital is June 12"}, headers=A)
             c.post("/goals", json={"goal": "The recital costume"}, headers=A)
             shown = c.delete("/facts", params={"contains": "recital"}, headers=A).json()
@@ -813,7 +815,7 @@ class RealErasure(DeletionTest):
     def test_erase_is_the_owners_alone(self):
         r = self.py("""
             import jefferey_chat as jc, jefferey_mcp as m, access, egress
-            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:tokA"
+            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:tokA-0123456789abcdefghijklmnopqrstu"
             import jefferey_http as h
             names = [t["name"] for t in jc.TOOLS]
             mcp = [t.name for t in asyncio.run(m.mcp.list_tools())]

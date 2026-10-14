@@ -27,10 +27,16 @@ WHICH KEY THIS SERVER HOLDS
 
         "env": { "JEFFEREY_CLIENT": "jefferey" }
 
-    The model cannot choose or widen this. Actions that widen authority at all
-    — granting a key, adding a scope, raising a permission level — additionally
-    require JEFFEREY_OWNER_CONSOLE=1, which the owner's own terminal sets and
-    an MCP host config should never set.
+    The model cannot choose or widen this. Widening authority at all —
+    giving out a key, adding a scope, raising a permission level — is not a
+    tool here, ever: the owner types it himself (/permit, /grant) in 'Talk to
+    JEFFEREY on this Mac' and confirms it at the keyboard. This server
+    refuses to start if JEFFEREY_OWNER_CONSOLE is set in its config (the old
+    switch that let whatever process held it widen keys).
+
+    A refusal — by the key, or by the door — comes back as a result the model
+    reads and reports ({refused, reason, tell_the_user}), never as a bare
+    'Error executing tool'.
 """
 
 import functools
@@ -49,6 +55,9 @@ except ImportError:  # mcp >= 2.0
     from mcp.server.mcpserver import MCPServer as _Server
 
 sys.path.insert(0, str(Path(__file__).parent))
+import access
+# MCP serves an engine, never the owner's own hands (I-43).
+access.refuse_owner_console_env("Claude")
 from conscience import Conscience, StoreProblem
 from representative import Representative
 from guardian import Guardian
@@ -57,9 +66,8 @@ from selfcloud import SelfCloud
 from interview import Interview
 from rules import ConscienceRules
 from reminisce import Reminisce
-import access
 import egress
-from access import gate, owner_only
+from access import gate
 
 mcp = _Server("jefferey")
 
@@ -88,6 +96,8 @@ def door(register):
                 return fn(*args, **kwargs)
             except StoreProblem as e:
                 return e.as_result(fn.__name__)
+            except ValueError as e:      # a plain-words "that is not valid"
+                return {"refused": True, "tool": fn.__name__, "reason": str(e)}
         return egress.door(register, as_result=True)(fresh)
     return wrap
 # Tools that never touch the store keep working when it is damaged, so the
@@ -232,31 +242,33 @@ def close_goal(contains: str = "", ids: list[str] | None = None, confirm: str = 
 
 
 # ---------------------------------------------------------------- operational AI
+# Raising a permission is not a tool. The owner types it himself (/permit in
+# 'Talk to JEFFEREY on this Mac'); JEFFEREY never widens JEFFEREY.
 @door(mcp.tool())
-@owner_only
-def set_permission(category: str, level: str, cap: float | None = None) -> dict:
-    """ONLY when the user explicitly grants or changes authority, in their own
-    words. Levels: 'observe' (watch and learn), 'recommend' (bring ranked
-    options — the default), 'act' (execute in this category, optionally under
-    a spending cap). Never call this on your own initiative — Jefferey never
-    expands his own permissions."""
-    return conscience.set_permission(category, level, cap)
-
-
-@door(mcp.tool())
-def authorize_action(category: str, description: str, amount: float | None = None) -> dict:
-    """THE gate. Call before doing anything in the real world on the user's
-    behalf. Returns allowed true/false with the reason. If denied, recommend
-    instead — only the user can raise the level. Denials are logged."""
-    return conscience.authorize_action(category, description, amount)
+@gate("act.request")
+def authorize_action(category: str, description: str, amount: float | None = None,
+                     currency: str = "CAD", recurring: bool = False) -> dict:
+    """THE gate. Call before doing anything in the real world on the owner's
+    behalf, with the FULL price as `amount` (a plain number) whenever money is
+    involved — without it nothing that costs money is approved. Set
+    recurring=true for anything that repeats or has a minimum term. A yes
+    carries a single-use authorization_id, good for 30 minutes: act once,
+    then cite it in log_action. A no is final: recommend instead; only the
+    owner can raise the level, himself. Moving money, gift cards, crypto,
+    phone calls and the doors are never approved."""
+    return conscience.authorize_action(category, description, amount, currency, recurring)
 
 
 @door(mcp.tool())
 @gate("facts.write")
-def log_action(category: str, description: str, outcome: str, amount: float | None = None) -> dict:
-    """Write down an act just performed on the user's behalf. No silent
-    actions, ever — the log lives in the user's own store."""
-    return conscience.log_action(category, description, outcome, amount)
+def log_action(category: str, description: str, outcome: str, amount: float | None = None,
+               authorization_id: str = "") -> dict:
+    """Write down an act just performed on the owner's behalf, citing the
+    authorization_id authorize_action gave you. No silent actions, ever. An
+    act with no valid approval is kept but marked 'not approved' for the
+    owner to see; outcomes JEFFEREY writes itself (permission changes,
+    approvals) are refused."""
+    return conscience.log_action(category, description, outcome, amount, authorization_id)
 
 
 @door(mcp.tool())
@@ -278,7 +290,7 @@ def log_observation(note: str, category: str = "general") -> dict:
 
 
 @door(mcp.tool())
-@gate("goals.read")
+@gate("goals.write")
 def record_opportunity(
     what: str,
     value_estimate: str = "",
@@ -291,10 +303,23 @@ def record_opportunity(
     what it is, its value ('saves $380/yr'), which learned priority it aligns
     with, which goal it advances, whether it reduces a risk, and urgency 0-1.
     Returns the score and whether it earns an interrupt (>=0.75), waits for
-    the daily brief (>=0.40), or holds. Only interrupt when it says to."""
+    the daily brief (>=0.40), or holds. Only interrupt when it says to. It
+    saves the item, with who saved it; anything with the marks of a scam
+    comes back with a warning and never interrupts."""
     return conscience.record_opportunity(
         what, value_estimate, aligns_with, advances_goal, reduces_risk, urgency
     )
+
+
+@door(mcp.tool())
+@gate("goals.read")
+def score_opportunity(what: str, value_estimate: str = "", aligns_with: str = "",
+                      advances_goal: str = "", reduces_risk: bool = False,
+                      urgency: float = 0.5) -> dict:
+    """The same score as record_opportunity, saved nowhere — to weigh an idea
+    without putting it in the owner's brief."""
+    return conscience.score_opportunity(
+        what, value_estimate, aligns_with, advances_goal, reduces_risk, urgency)
 
 
 @door(mcp.tool())
@@ -597,11 +622,16 @@ def story_progress() -> dict:
 # ---------------------------------------------------------------- self-cloud
 # Self-Cloud is the OWNER'S vault. Jefferey is a caretaker holding a key they
 # granted and can take back — not the owner of it.
+# Giving out or widening a key is not a tool: the owner types /grant or
+# /scope add himself. A key may give up its OWN access from here; changing
+# any other key is the owner's. A revoked or unknown key gets none of these.
 @door(mcp.tool())
 def selfcloud_status() -> dict:
     """Who currently holds a key to this person's Self-Cloud, what has been
-    revoked, and any recent refusals. Show this whenever they ask who can see
-    their data."""
+    revoked, recent refusals, and recent changes to the caretaker, family and
+    executor keys. Show this whenever they ask who can see their data. A key
+    other than the caretaker's sees only itself."""
+    access.require_live()
     return cloud.status()
 
 
@@ -609,53 +639,42 @@ def selfcloud_status() -> dict:
 def selfcloud_grants() -> dict:
     """Every key to the Self-Cloud in full — client, scopes, and when it was
     granted or revoked — plus every scope that exists. Written to be read by
-    the owner without help."""
+    the owner without help. A key other than the caretaker's sees only itself."""
+    access.require_live()
     return cloud.grants()
 
 
 @door(mcp.tool())
-@owner_only
-def selfcloud_grant(client: str, scopes: list | None = None, label: str = "",
-                    note: str = "") -> dict:
-    """ONLY at the owner's explicit word. Give a client a key: 'claude-raw',
-    'gpt-raw', 'jefferey', 'family', 'executor', or a name they choose. With
-    no scopes, the preset for that kind of client is used as a starting
-    point. Never grant a key on your own initiative, and never widen your
-    own."""
-    return cloud.grant(client, list(scopes) if scopes else None, label, note)
-
-
-@door(mcp.tool())
-@owner_only
-def selfcloud_add_scope(client: str, scope: str) -> dict:
-    """Widen one key by exactly one scope — only when the owner says so.
-    You may never call this about your own key ('jefferey')."""
-    return cloud.add_scope(client, scope)
-
-
-@door(mcp.tool())
 def selfcloud_remove_scope(client: str, scope: str) -> dict:
-    """Narrow a key by one scope, at the owner's word."""
+    """Give up one scope of the key THIS connection holds. Changing any other
+    key is the owner's decision, made himself."""
+    access.require_live()
     return cloud.remove_scope(client, scope)
 
 
 @door(mcp.tool())
 def selfcloud_revoke(client: str) -> dict:
-    """Kill a key completely. Instant and total; the record that it existed
-    stays. Never argue with a revocation — including your own."""
+    """Switch off the key THIS connection holds — instant and total; the
+    record that it existed stays. Switching off any other key is the owner's
+    decision, made himself. Never argue with a revocation."""
+    access.require_live()
     return cloud.revoke(client)
 
 
 @door(mcp.tool())
 def selfcloud_check_access(client: str, scope: str) -> dict:
     """Would this client be allowed this scope? Deny by default. Use it to
-    answer 'can ChatGPT see my photos?' truthfully rather than from memory."""
-    return cloud.check_access(client, scope)
+    answer 'can ChatGPT see my photos?' truthfully rather than from memory.
+    Only the caretaker key may ask about keys other than its own."""
+    access.require_live()
+    return cloud.ask_access(client, scope)
 
 
 @door(mcp.tool())
 def selfcloud_access_log(limit: int = 30) -> list:
-    """Who asked for what, and what happened. The owner's audit trail."""
+    """Who asked for what, and what happened (1 to 200 entries). The owner's
+    audit trail; a key other than the caretaker's sees only its own lines."""
+    access.require_live()
     return cloud.access_log(limit)
 
 

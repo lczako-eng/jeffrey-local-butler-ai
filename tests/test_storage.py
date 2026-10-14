@@ -224,9 +224,9 @@ class ReadsDoNotWrite(StoreTest):
             from fastapi.testclient import TestClient
             import jefferey_http as h
             c = TestClient(h.app)
-            A = {"Authorization": "Bearer tok-owner-aaaaaaaa"}
-            F = {"Authorization": "Bearer tok-family-bbbbbbb"}
-            G = {"Authorization": "Bearer tok-gpt-ccccccccc"}
+            A = {"Authorization": "Bearer tok-owner-aaaaaaaa-0123456789abcdef"}
+            F = {"Authorization": "Bearer tok-family-bbbbbbb-0123456789abcdef"}
+            G = {"Authorization": "Bearer tok-gpt-ccccccccc-0123456789abcdef"}
             assert c.post("/facts", json={"fact": "Born in Szeged"}, headers=A).status_code == 200
             c.get("/life", headers=F); c.get("/life/gaps", headers=G)   # keys issued
             p = h.conscience.path
@@ -236,8 +236,8 @@ class ReadsDoNotWrite(StoreTest):
             after = (p.read_bytes(), len(h.conscience.snapshots()))
             out({"fam": sorted(set(fam)), "gpt": sorted(set(gpt)),
                  "same": before[0] == after[0], "snaps": [before[1], after[1]]})
-        """, JEFFEREY_HTTP_TOKENS="jefferey:tok-owner-aaaaaaaa,family:tok-family-bbbbbbb,"
-                                  "gpt-raw:tok-gpt-ccccccccc")
+        """, JEFFEREY_HTTP_TOKENS="jefferey:tok-owner-aaaaaaaa-0123456789abcdef,family:tok-family-bbbbbbb-0123456789abcdef,"
+                                  "gpt-raw:tok-gpt-ccccccccc-0123456789abcdef")
         self.assertEqual(r["fam"], [200])
         self.assertEqual(r["gpt"], [403])
         self.assertTrue(r["same"], "a family read or a refused call rewrote the store")
@@ -935,9 +935,9 @@ class DamagedStoreIsNotACrash(StoreTest):
             from fastapi.testclient import TestClient
             import jefferey_http as h
             res = TestClient(h.app).get("/conscience",
-                                        headers={"Authorization": "Bearer tok-owner-aaaaaaaa"})
+                                        headers={"Authorization": "Bearer tok-owner-aaaaaaaa-0123456789abcdef"})
             out({"status": res.status_code, "body": res.json()})
-        """, JEFFEREY_HTTP_TOKENS="jefferey:tok-owner-aaaaaaaa")
+        """, JEFFEREY_HTTP_TOKENS="jefferey:tok-owner-aaaaaaaa-0123456789abcdef")
         self.assertEqual(r["status"], 503)
         self.assertIn("cannot be read", r["body"]["detail"])
         self.assertNotIn(str(self.tmp), r["body"]["detail"])
