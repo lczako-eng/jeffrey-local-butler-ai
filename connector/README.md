@@ -143,12 +143,19 @@ The part that earns his keep on day one. Jefferey carries **no mail account
 of his own** — he rides the Gmail/Outlook connector the host engine already
 has. What he adds is representation:
 
-- `triage_message` — reads anything that wants money, time, or a decision.
-  Returns a verdict (`likely_scam` / `suspicious` / `money_watch` /
-  `needs_decision` / `routine`), the predatory tactics **named in plain
-  words** (gift cards, manufactured urgency, "don't tell anyone", remote
-  access, impersonated institutions), amounts and deadlines found, and the
-  user's own priorities that apply. Built for the people who get targeted.
+- `triage_message` — reads anything that wants money, time, or a decision,
+  in English or French, with the sender. Returns a verdict (`safety` /
+  `likely_scam` / `suspicious` / `check_first` / `money_watch` /
+  `needs_decision` / `routine`), whether to interrupt, the predatory tactics
+  **named in plain words** (a grandchild's "new number", gift cards, a code
+  "sent by mistake", overpayment, a courier "agent", "don't tell anyone",
+  remote access, look-alike links and addresses), what it touches, amounts
+  and deadlines found, and the user's own priorities that apply. Money,
+  cards, codes, secrecy, urgency or a family claim never come back
+  `routine`; someone asking when he is home alone is `safety`. Disguised
+  words (look-alike letters, invisible characters, `g1ft c@rd`) are read
+  through, and are a sign in themselves. Built for the people who get
+  targeted.
 - `draft_guidance` → write in their voice, from their values, signed as
   them. Sending requires `authorize_action` on `correspondence`.
 - `fill_form` / `pdf_form_fields` / `fill_pdf` — completes HTML and PDF

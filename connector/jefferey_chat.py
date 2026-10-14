@@ -399,13 +399,20 @@ TOOLS = [
     {
         "name": "triage_message",
         "description": (
-            "Read an incoming message the way a good friend would: what does "
-            "it want, does it matter by THIS person's priorities, and is "
-            "anyone trying to take advantage of them? Returns a verdict "
-            "(likely_scam / suspicious / money_watch / needs_decision / "
-            "routine), the predatory tactics spotted in plain words, amounts "
-            "and deadlines, and their relevant values. Never reply, click, "
-            "pay, or unsubscribe on their behalf without authorize_action."
+            "Read an incoming message (a text, an email, a call he typed in, "
+            "English or French) the way a good friend would: what does it "
+            "want, does it matter by THIS person's priorities, and is anyone "
+            "trying to take advantage of them? Pass the sender exactly as "
+            "shown (a number he has not saved counts). Returns a verdict — "
+            "safety (someone asking when he is home alone: tell him at once) "
+            "/ likely_scam / suspicious / check_first (it touches money, "
+            "cards, codes, secrecy, urgency or a family claim: tell him, and "
+            "he checks by calling back on a number he already has) / "
+            "money_watch / needs_decision / routine — whether to interrupt "
+            "him now, the tactics spotted in plain words, what it touches, "
+            "amounts and deadlines, and his relevant values. Relay the advice. "
+            "Never reply, click, pay, or unsubscribe on their behalf without "
+            "authorize_action."
         ),
         "input_schema": {
             "type": "object",
@@ -1831,19 +1838,27 @@ def kept_home_paste(text: str, e: EgressRefused) -> dict | None:
         return None
     try:
         verdict = rep.triage_message("", "", text)
+        # The secret itself is one warning sign; say "scam" only on the
+        # others — read again with the secret hidden (I-13).
+        without = rep.triage_message("", "", egress.mask_text(text)[0])
     except Exception:
         return None
-    # The secret itself is one warning sign; say "scam" only on the others.
     others = [f for f in verdict.get("scam_flags", [])
               if not f.startswith("it carries what looks like")]
-    score = verdict.get("scam_score", 0) - (0.3 if len(others) < len(verdict.get("scam_flags", [])) else 0)
-    if others and score >= 0.25:
+    score = without.get("scam_score", 0)
+    if verdict.get("verdict") == "safety":
+        print("\n  ⚠  JEFFEREY checked it here, on your Mac: this message "
+              + "; ".join(verdict.get("safety_flags", [])[:3]) + ".")
+        print("  Do not answer that. Never tell anyone you do not know when you are home "
+              "alone, or who lives with you.\n")
+    elif others and score >= 0.25:
         word = "is very likely a scam" if score >= 0.5 else "looks suspicious"
         print(f"\n  ⚠  JEFFEREY checked it here, on your Mac: this message {word}.")
         for flag in others[:5]:
             print(f"     · {flag}")
         print("  Do not click, call or reply. If it claims to be your bank or a company "
-              "you deal with, call the number on your card or your statement.\n")
+              "you deal with, call the number on your card or your statement. If it says "
+              "it is family, call them back on the number you already have for them.\n")
     else:
         print("  JEFFEREY checked it here, on your Mac, and saw no other sign of a scam. "
               "Still, keep the secret in it to yourself.\n")

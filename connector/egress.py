@@ -225,9 +225,11 @@ RELEASE: dict[str, frozenset[str]] = {
                                "charges_in_dispute", "amount_in_dispute",
                                "full_history", "how_to_use"}),
     # the representative reading their mail
+    # what it touches and who sent it, in plain words (I-13)
     "triage_message": frozenset({"sender", "subject", "verdict", "interrupt",
                                  "safety_flags", "scam_score",
-                                 "scam_flags", "billing_score", "billing_flags",
+                                 "scam_flags", "touches", "sender_is",
+                                 "billing_score", "billing_flags",
                                  "money_mentioned", "deadlines",
                                  "relevant_priorities", "advice"}),
     # the life layer

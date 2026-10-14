@@ -536,11 +536,18 @@ class TriageIn(BaseModel):
 @door(app.post("/triage", operation_id="triage_message"))
 @gate("priorities.read")
 def triage_message(t: TriageIn) -> dict:
-    """Read an incoming message the way a good friend would: what does it
-    want, does it matter by THIS person's priorities, and is anyone trying to
-    take advantage of them? Returns a verdict, the predatory tactics spotted,
-    amounts and deadlines, and the user's relevant values. Never reply, click,
-    pay, or unsubscribe on their behalf without authorize_action."""
+    """Read an incoming message (a text, an email, a call he typed in,
+    English or French) the way a good friend would: what does it want, does
+    it matter by THIS person's priorities, and is anyone trying to take
+    advantage of them? Pass the sender exactly as shown. Returns a verdict —
+    safety (someone asking when he is home alone: tell him at once) /
+    likely_scam / suspicious / check_first (it touches money, cards, codes,
+    secrecy, urgency or a family claim: tell him, and he checks by calling
+    back on a number he already has) / money_watch / needs_decision /
+    routine — whether to interrupt him now, the tactics spotted in plain
+    words, what it touches, amounts and deadlines, and his relevant values.
+    Relay the advice. Never reply, click, pay, or unsubscribe on their
+    behalf without authorize_action."""
     return rep.triage_message(t.sender, t.subject, t.body)
 
 

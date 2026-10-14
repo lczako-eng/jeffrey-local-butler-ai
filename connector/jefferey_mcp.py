@@ -372,13 +372,19 @@ def orb_state() -> dict:
 # the host's own mail/file connectors; these tools supply the representation.
 @door(mcp.tool())
 @gate("priorities.read")
-def triage_message(sender: str, subject: str, body: str) -> dict:
-    """Read an incoming message the way a good friend would: what does it
-    want, does it matter by THIS person's priorities, and is anyone trying to
-    take advantage of them? Returns a verdict (likely_scam / suspicious /
-    money_watch / needs_decision / routine), the predatory tactics spotted in
-    plain words, amounts and deadlines found, and the user's relevant values.
-    Never reply, click, pay, or unsubscribe on their behalf without
+def triage_message(body: str, sender: str = "", subject: str = "") -> dict:
+    """Read an incoming message (a text, an email, a call he typed in,
+    English or French) the way a good friend would: what does it want, does
+    it matter by THIS person's priorities, and is anyone trying to take
+    advantage of them? Pass the sender exactly as shown (a number he has not
+    saved counts); a text has no subject. Returns a verdict — safety
+    (someone asking when he is home alone: tell him at once) / likely_scam /
+    suspicious / check_first (it touches money, cards, codes, secrecy,
+    urgency or a family claim: tell him, and he checks by calling back on a
+    number he already has) / money_watch / needs_decision / routine —
+    whether to interrupt him now, the tactics spotted in plain words, what it
+    touches, amounts and deadlines, and his relevant values. Relay the
+    advice. Never reply, click, pay, or unsubscribe on their behalf without
     authorize_action."""
     return rep.triage_message(sender, subject, body)
 
