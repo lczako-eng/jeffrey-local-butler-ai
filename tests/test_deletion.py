@@ -699,6 +699,11 @@ class RealErasure(DeletionTest):
             call("remember_fact", {"fact": "Diagnosed with Alzheimer's in March; not told the kids yet"})
             call("add_memory", {"text": "Kandahar, 2011: the night the convoy was hit."})
             call("get_conscience"); call("who_am_i"); call("get_conscience")
+            # (Life package, October 2026: a health fact is private now — I-11 —
+            # so it is no longer sent in bulk; a question that names it still
+            # brings it to his caretaker key, and that send is what is erased.)
+            call("explain_basis", {"topic": "my Alzheimer's"})
+            call("explain_basis", {"topic": "Alzheimer's diagnosis"})
             out({"n": len(egress.entries())})
         """, JEFFEREY_CLIENT="jefferey")
         before = [json.loads(l) for l in self.egress.read_text().splitlines()]

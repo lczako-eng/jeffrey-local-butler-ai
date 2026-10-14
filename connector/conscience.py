@@ -66,6 +66,8 @@ except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
 import home
+import grounding
+import provenance
 DEFAULT_STORE = home.conscience_path()   # on the drive if one is plugged in
 
 # ------------------------------------------------------------------ history
@@ -159,10 +161,41 @@ class _Unreadable(ValueError):
         self.plain, self.torn, self.certain = plain, torn, certain
 
 
-# Confidence learning rates
-_REINFORCE = 0.15   # consistent correction: conf += (1 - conf) * RATE
-_CONTRADICT = 0.30  # contradicting correction: conf -= conf * RATE
-_FLIP_BELOW = 0.25  # below this, the hierarchy flips and confidence resets
+# How values are learned (October 2026, I-48). For and against are counted
+# separately, and confidence comes from the counts: (for + 1) / (for +
+# against + 2) for a value learned from his choices. A value he STATED
+# counts like four observations at the confidence he stated, and is never
+# reversed by inference: a choice that contradicts it raises a question for
+# him instead. A learned value turns round only when the evidence against
+# outweighs the evidence for. One correction repeated in one conversation
+# (an AI in a loop) counts once.
+_STATED_WEIGHT = 4
+ENGINE_CONFIDENCE_CAP = 0.6   # the most an AI may say it is sure of (I-25)
+UNCONFIRMED_CAP = 0.8         # the most evidence alone may reach; above it, only
+                              # what the owner set or confirmed himself
+DEDUP_SECONDS = 600           # the same correction within ten minutes: once
+FACT_VISIBILITY = ("private", "engines", "family", "legacy")
+LIFE_VISIBILITY = ("private", "family", "legacy")
+FACTS_PAGE, FACTS_MAX = 100, 500       # get_conscience
+BASIS_FACTS, BASIS_MAX, BASIS_PRIORITIES = 10, 25, 10   # explain_basis
+
+
+def _page(limit, offset, default: int, most: int) -> tuple[int, int]:
+    """A page of a long answer: (limit, offset), whatever was sent."""
+    try:
+        lim = int(limit) if limit is not None else default
+    except (TypeError, ValueError):
+        lim = default
+    try:
+        off = int(offset or 0)
+    except (TypeError, ValueError):
+        off = 0
+    return max(1, min(most, lim)), max(0, off)
+
+
+def _refusal(tool: str, reason: str) -> dict:
+    return {"refused": True, "tool": tool, "reason": reason,
+            "tell_the_user": "Nothing was stored. Say plainly what was missing."}
 
 
 def _now() -> str:
@@ -872,6 +905,46 @@ class Conscience:
             selfcloud.migrate_grants(self.data)
         except Exception:
             pass
+        self._migrate_who_said_what()
+
+    def _migrate_who_said_what(self) -> None:
+        """October 2026 (I-10, I-11, I-25, I-48): facts learn what kind of
+        private they are and who may see them; values count for and against
+        separately; people get a visibility (private, like everything else
+        that was never marked). Whatever an older file holds is kept and
+        still read; what it lacks is worked out here, in memory — the next
+        real save keeps it. Nothing is dropped."""
+        for f in self.data.get("facts") or []:
+            if not isinstance(f, dict):
+                continue
+            if not isinstance(f.get("sensitivity"), list):
+                f["sensitivity"] = grounding.sensitivity(f.get("fact", ""),
+                                                         f.get("category", ""))
+            if f.get("visibility") not in FACT_VISIBILITY:
+                f["visibility"] = "private" if f["sensitivity"] else "engines"
+            if not isinstance(f.get("source"), dict):
+                f["source"] = dict(provenance.UNKNOWN_SOURCE)
+            if f.get("status") not in ("confirmed", "pending"):
+                f["status"] = "confirmed"
+        for p in self.data.get("priorities") or []:
+            if not isinstance(p, dict):
+                continue
+            if not isinstance(p.get("for"), int):
+                try:
+                    p["for"] = max(1, int(p.get("evidence") or 1))
+                except (TypeError, ValueError):
+                    p["for"] = 1
+            if not isinstance(p.get("against"), int):
+                p["against"] = 0
+            p.setdefault("stated", False)
+            if not isinstance(p.get("source"), dict):
+                p["source"] = dict(provenance.UNKNOWN_SOURCE)
+            if p.get("status") not in ("confirmed", "pending"):
+                p["status"] = "confirmed"
+        for section in ("people", "memories", "media"):
+            for it in self.data.get(section) or []:
+                if isinstance(it, dict) and it.get("visibility") not in LIFE_VISIBILITY:
+                    it["visibility"] = "private"
 
     def _ensure_ids(self) -> None:
         """Give every item in ID_PREFIX's sections a stable, unique id (see
@@ -1505,11 +1578,44 @@ class Conscience:
                     fix(p, 0o600)
 
     # ------------------------------------------------------------ facts
+    # October 2026 (I-11, I-25). A fact records what kind of private it is
+    # and who said it. Health, money, children, the safety of the home and
+    # other people's confidences are 'private' by default: only the owner's
+    # own caretaker key sees them — in bulk only on a model on this Mac, and
+    # on a rented engine only when a question names them. Anything else is
+    # 'engines': any key that may read facts. His own disclosure rules apply
+    # on top, to every engine. Anyone who may write may narrow; only the
+    # owner widens (/share). What an AI wrote down in its own words waits as
+    # 'pending' until he confirms it (/pending).
     def remember_fact(self, fact: str, category: str = "general") -> dict:
-        entry = {"fact": fact.strip(), "category": category, "added": _now()}
+        text = str(fact or "").strip()
+        if not text:
+            return _refusal("remember_fact", "There is nothing to remember: the fact is empty.")
+        category = str(category or "general").strip() or "general"
+        kinds = grounding.sensitivity(text, category)
+        src = provenance.source(text=text)
+        entry = {"fact": text, "category": category, "added": _now(),
+                 "visibility": "private" if kinds else "engines",
+                 "sensitivity": kinds, "source": src,
+                 "status": provenance.status_for(src)}
         self.data["facts"].append(entry)
         self._save()
-        return entry
+        out = dict(entry)
+        notes = []
+        if kinds:
+            notes.append(
+                "Kept private, because it is about "
+                + " and ".join(grounding.CLASS_WORDS_PLAIN[k] for k in kinds)
+                + ". Only his own caretaker key sees it, and only when a question names "
+                  "it. Only he can let other AIs see it, typing /share "
+                + f"{entry['id']} engines himself.")
+        if entry["status"] == "pending":
+            notes.append("It is marked 'not yet confirmed by him', because an AI wrote "
+                         "it down in its own words; he confirms it with /pending in "
+                         "'Talk to JEFFEREY on this Mac'.")
+        if notes:
+            out["note"] = " ".join(notes)
+        return out
 
     def forget_fact(self, contains: str = "", ids=None, confirm: str = "") -> dict:
         """Two steps, never a wildcard (forgetting.py): without `confirm`,
@@ -1519,36 +1625,210 @@ class Conscience:
         import forgetting
         return forgetting.forget_facts(self, contains, ids, confirm)
 
+    @staticmethod
+    def _fact_tags(f: dict) -> list[str]:
+        return [str(f.get("category") or "")] + list(f.get("sensitivity") or [])
+
+    def visible_facts(self, rd: dict | None = None, bulk: bool = True
+                      ) -> tuple[list[dict], list[tuple[dict, str]]]:
+        """The facts whoever reads this result may see — and the ones held
+        back, each with why ('private' or 'rules'). `bulk`: a whole-memory
+        read (get_conscience, the system prompt, who_am_i), where private
+        facts go only to the owner's own caretaker on this Mac. A question
+        that names a subject (explain_basis) may reach his private facts
+        through his caretaker key on any engine."""
+        import rules as _rules
+        rd = rd or provenance.reader()
+        seen, held = [], []
+        for f in self.data.get("facts") or []:
+            if not isinstance(f, dict):
+                continue
+            if not rd["owner"]:
+                if f.get("visibility", "engines") != "engines" and (bulk or not rd["caretaker"]):
+                    held.append((f, "private"))
+                    continue
+                if _rules.held_back(self.data, rd["audiences"], f.get("fact", ""),
+                                    self._fact_tags(f)):
+                    held.append((f, "rules"))
+                    continue
+            seen.append(f)
+        return seen, held
+
+    @staticmethod
+    def _fact_view(f: dict, reason: str | None = None) -> dict:
+        """A fact as an engine reads it: what it says, and how far to trust it."""
+        v = {k: f[k] for k in ("id", "fact", "category", "added", "visibility") if k in f}
+        kinds = [k for k in f.get("sensitivity") or [] if k in grounding.CLASS_WORDS_PLAIN]
+        if kinds:
+            v["private_because"] = [grounding.CLASS_WORDS_PLAIN[k] for k in kinds]
+        if provenance.pending(f):
+            v["unconfirmed"] = True
+        if reason:
+            v["match_reason"] = reason
+        return v
+
     # ------------------------------------------------------------ priorities
     def _find_priority(self, context: str, a: str, b: str) -> dict | None:
+        n = grounding.normalise
         for p in self.data["priorities"]:
-            if p["context"].lower() == context.lower() and {
-                p["higher"].lower(),
-                p["lower"].lower(),
-            } == {a.lower(), b.lower()}:
+            if not isinstance(p, dict):
+                continue
+            if n(p.get("context")) == n(context) and {
+                n(p.get("higher")), n(p.get("lower"))} == {n(a), n(b)}:
                 return p
         return None
+
+    @staticmethod
+    def _confidence(p: dict) -> float:
+        """From the evidence, never from a number an AI chose: (for + 1) /
+        (for + against + 2) for a learned value; a stated one counts like four
+        observations at the confidence it was stated with. Above 0.8 only
+        for what the owner set or confirmed himself."""
+        f = max(0, int(p.get("for") or 0))
+        a = max(0, int(p.get("against") or 0))
+        if p.get("stated"):
+            s = _real_number(p.get("stated_confidence"))
+            s = 0.6 if s is None else s
+            c = (s * _STATED_WEIGHT + f) / (_STATED_WEIGHT + f + a)
+        else:
+            c = (f + 1) / (f + a + 2)
+        cap = 0.99 if provenance.owner_backed(p) else UNCONFIRMED_CAP
+        return round(max(0.05, min(cap, c)), 2)
+
+    @staticmethod
+    def _prio_view(p: dict, reason: str | None = None) -> dict:
+        """A value as an engine reads it, with the evidence for and against."""
+        v = {k: p[k] for k in ("id", "context", "higher", "lower", "confidence", "for",
+                               "against", "evidence", "updated") if k in p}
+        if p.get("stated"):
+            v["stated"] = True
+            v["locked"] = True       # never reversed by inference; a question instead
+        if provenance.pending(p):
+            v["unconfirmed"] = True
+        if p.get("question"):
+            v["question_for_owner"] = p["question"]
+        if isinstance(p.get("proposed"), dict):
+            v["proposed_change"] = {k: p["proposed"].get(k) for k in ("higher", "lower")}
+        if reason:
+            v["match_reason"] = reason
+        return v
+
+    def _log_change(self, kind: str, context: str, was: str, now: str, src: dict,
+                    **extra) -> None:
+        """A change to a value goes in the correction log, with what it was
+        and who changed it (I-48: a reversal used to leave no trace)."""
+        self.data["corrections"].append({
+            "context": context, "kind": kind, "was": was, "inferred": now,
+            "source": src, "added": _now(), "ts": time.time(), **extra})
+
+    @staticmethod
+    def _rank(src: dict) -> int:
+        return {provenance.OWNER: 3, provenance.IMPORTED: 3, provenance.OWNER_WORDS: 2,
+                provenance.ENGINE: 1}.get((src or {}).get("stated_by"), 0)
 
     def set_priority(
         self, context: str, higher: str, lower: str, confidence: float = 0.6
     ) -> dict:
-        """Explicitly declare a priority: in <context>, <higher> beats <lower>."""
+        """He STATED a priority: in <context>, <higher> beats <lower>.
+
+        October 2026 (I-25, I-48): an AI may not write a value about
+        everything ('general', 'any'), may not claim more than 0.6
+        confidence for him, and a statement is locked against inference. A
+        statement that reverses one he made himself is not applied: it waits
+        for his own yes (/pending). Every reversal is logged with what it
+        was and who changed it."""
+        import access
+        context, higher, lower = (" ".join(str(x or "").split()) for x in (context, higher, lower))
+        engine = not access.owners_hands()
+        problem = grounding.context_problem(context, engine)
+        if problem:
+            return _refusal("set_priority", problem)
+        if not higher or not lower or grounding.normalise(higher) == grounding.normalise(lower):
+            return _refusal("set_priority", "A value needs two different things: what "
+                                            "matters more, and what it matters more than.")
+        c = _real_number(confidence)
+        c = max(0.05, min(0.99, 0.6 if c is None else c))
+        if engine:
+            c = min(c, ENGINE_CONFIDENCE_CAP)
+        src = provenance.source(values=(higher, lower))
+        status = provenance.status_for(src)
         p = self._find_priority(context, higher, lower)
-        if p:
-            p.update(
-                higher=higher, lower=lower,
-                confidence=round(max(0.05, min(0.99, confidence)), 2),
-                updated=_now(),
-            )
-        else:
-            p = {
-                "context": context, "higher": higher, "lower": lower,
-                "confidence": round(max(0.05, min(0.99, confidence)), 2),
-                "evidence": 1, "updated": _now(),
-            }
+        extra: dict = {}
+        if p is None:
+            p = {"context": context, "higher": higher, "lower": lower, "stated": True,
+                 "stated_confidence": c, "for": 0, "against": 0, "evidence": 1,
+                 "source": src, "status": status, "updated": _now()}
             self.data["priorities"].append(p)
+        elif grounding.normalise(p.get("higher")) == grounding.normalise(higher):
+            # Said again. It is a statement now; never less trusted than it was.
+            if self._rank(src) > self._rank(p.get("source")) and (
+                    status == "confirmed" or provenance.pending(p)):
+                p["source"], p["status"] = src, status
+            old = _real_number(p.get("stated_confidence")) if p.get("stated") else None
+            p["stated_confidence"] = c if old is None else max(old, c)
+            p["stated"] = True
+            p.pop("question", None)
+            p["updated"] = _now()
+        else:
+            was = f"{p.get('higher')} > {p.get('lower')}"
+            now = f"{higher} > {lower}"
+            locked = bool(p.get("stated")) and not provenance.pending(p)
+            if locked and engine and status != "confirmed":
+                p["proposed"] = {"higher": higher, "lower": lower, "confidence": c,
+                                 "source": src, "at": _now()}
+                self._log_change("reversal_asked", context, was, now, src, applied=False)
+                q = (f"An AI says that for {context}, {higher} now matters more to you than "
+                     f"{lower}. You had said the opposite, so nothing was changed.")
+                self._note("priority_question",
+                           q + " If it is right, type /pending in 'Talk to JEFFEREY on this "
+                               "Mac' and confirm it.")
+                self._save()
+                return {**self._prio_view(p), "changed": False,
+                        "question_for_owner": q,
+                        "note": ("He stated the opposite himself, so it was not reversed. "
+                                 "Ask him plainly whether it has changed. Only his own yes "
+                                 "(/pending in 'Talk to JEFFEREY on this Mac', or saying so "
+                                 "himself there) changes it.")}
+            self._log_change("reversal", context, was, now, src, applied=True,
+                             confidence_was=p.get("confidence"))
+            for k in ("proposed", "question", "confirmed_by_owner"):
+                p.pop(k, None)
+            p.update(higher=higher, lower=lower, stated=True, stated_confidence=c,
+                     source=src, status=status, updated=_now())
+            p["for"], p["against"] = 0, 0
+            extra["reversed"] = {"was": was, "logged": True}
+        p["evidence"] = int(p.get("for") or 0) + int(p.get("against") or 0) or 1
+        p["confidence"] = self._confidence(p)
         self._save()
-        return p
+        out = {**self._prio_view(p), **extra}
+        if engine and _real_number(confidence) is not None and _real_number(confidence) > c:
+            out["note"] = (f"Kept at {c:.0%} sure: an AI may not say it is surer than that "
+                           "for him. Only he can confirm it higher (/pending).")
+        return out
+
+    def _same_correction(self, context: str, hi: str, lo: str) -> bool:
+        """Was this exact correction already counted in this conversation?
+        (One override, repeated by an AI in a loop, used to count twelve
+        times.) On the terminal a conversation step is the owner's turn;
+        elsewhere, the same correction within ten minutes."""
+        n = grounding.normalise
+        key = (n(context), n(hi), n(lo))
+        turn, now = provenance.turn(), time.time()
+        for c in reversed(self.data.get("corrections", [])[-200:]):
+            if not isinstance(c, dict) or c.get("kind") not in (None, "correction"):
+                continue
+            h, l = c.get("higher"), c.get("lower")
+            if h is None:
+                h, _, l = str(c.get("inferred", "")).partition(" > ")
+            if (n(c.get("context")), n(h), n(l)) != key:
+                continue
+            if turn is not None:
+                return c.get("turn") == turn
+            try:
+                return now - float(c.get("ts") or 0) < DEDUP_SECONDS
+            except (TypeError, ValueError):
+                return False
+        return False
 
     def record_correction(
         self, context: str, suggested: str, chosen: str,
@@ -1556,44 +1836,85 @@ class Conscience:
     ) -> dict:
         """The heart of the conscience: the user overrode a recommendation.
 
-        Learn WHY — which value they were protecting — and update the
-        hierarchy's confidence accordingly.
-        """
-        self.data["corrections"].append({
-            "context": context, "suggested": suggested, "chosen": chosen,
-            "inferred": f"{inferred_higher} > {inferred_lower}", "added": _now(),
-            "ts": time.time(),
-        })
-
-        p = self._find_priority(context, inferred_higher, inferred_lower)
+        Learn WHY — which value they were protecting. For and against are
+        counted separately; a learned value turns round only when the
+        evidence against outweighs the evidence for; a value he STATED is
+        never reversed by inference — a contradiction becomes a question for
+        him. The same correction twice in one conversation counts once."""
+        import access
+        context, hi, lo = (" ".join(str(x or "").split())
+                           for x in (context, inferred_higher, inferred_lower))
+        engine = not access.owners_hands()
+        problem = grounding.context_problem(context, engine)
+        if problem:
+            return _refusal("record_correction", problem)
+        if not hi or not lo or grounding.normalise(hi) == grounding.normalise(lo):
+            return _refusal("record_correction", "Say which value he protected and which "
+                                                 "he gave up; they must be different.")
+        if self._same_correction(context, hi, lo):
+            p = self._find_priority(context, hi, lo)
+            out = self._prio_view(p) if p else {"context": context}
+            out.update(already_counted=True,
+                       note="This same correction was already counted in this "
+                            "conversation; one correction counts once.")
+            return out
+        src = provenance.source()
+        entry = {"context": context, "suggested": suggested, "chosen": chosen,
+                 "inferred": f"{hi} > {lo}", "higher": hi, "lower": lo,
+                 "added": _now(), "ts": time.time(), "turn": provenance.turn(),
+                 "source": src}
+        self.data["corrections"].append(entry)
+        extra: dict = {}
+        p = self._find_priority(context, hi, lo)
         if p is None:
-            p = self.set_priority(context, inferred_higher, inferred_lower, 0.55)
-            p["evidence"] = 1
-        elif p["higher"].lower() == inferred_higher.lower():
-            # consistent evidence → reinforce
-            p["confidence"] = round(p["confidence"] + (1 - p["confidence"]) * _REINFORCE, 2)
-            p["evidence"] += 1
-            p["updated"] = _now()
+            p = {"context": context, "higher": hi, "lower": lo, "stated": False,
+                 "for": 1, "against": 0, "source": src,
+                 "status": provenance.status_for(src), "updated": _now()}
+            self.data["priorities"].append(p)
+        elif grounding.normalise(p.get("higher")) == grounding.normalise(hi):
+            p["for"] = int(p.get("for") or 0) + 1
         else:
-            # contradiction → erode; flip if it collapses
-            p["confidence"] = round(p["confidence"] * (1 - _CONTRADICT), 2)
-            p["evidence"] += 1
-            p["updated"] = _now()
-            if p["confidence"] < _FLIP_BELOW:
-                p["higher"], p["lower"] = inferred_higher, inferred_lower
-                p["confidence"] = 0.5
+            p["against"] = int(p.get("against") or 0) + 1
+            if p.get("stated"):
+                q = (f"He said that for {p['context']}, {p['higher']} matters more than "
+                     f"{p['lower']}. This time he chose {hi} over {lo}. Ask him, once "
+                     f"and plainly, whether that has changed; nothing was reversed.")
+                if not p.get("question"):
+                    self._note("priority_question",
+                               f"You once said that for {p['context']}, {p['higher']} "
+                               f"matters more than {p['lower']}. Recently {hi} was chosen "
+                               f"over {lo}. Has that changed? Nothing was changed; tell "
+                               f"JEFFEREY in your own words if it has.")
+                p["question"] = q
+                extra["question_for_owner"] = q
+            elif p["against"] > p["for"]:
+                was = f"{p['higher']} > {p['lower']}"
+                p["higher"], p["lower"] = hi, lo
+                p["for"], p["against"] = p["against"], p["for"]
+                entry["flipped_from"] = was
+                extra["flipped"] = {"was": was,
+                                    "why": "the choices against it now outweigh the ones for it"}
+        p["evidence"] = int(p.get("for") or 0) + int(p.get("against") or 0)
+        p["updated"] = _now()
+        p["confidence"] = self._confidence(p)
         self._save()
-        return p
+        return {**self._prio_view(p), **extra}
 
     def priorities_for(self, context: str | None = None) -> list[dict]:
-        ps = self.data["priorities"]
+        """His values, most certain first — about a subject (whole words:
+        'car' is not 'caregiver'), or all of them. A value he holds about
+        everything is listed last."""
+        ps = [p for p in self.data["priorities"] if isinstance(p, dict)]
         if context:
-            ps = [
-                p for p in ps
-                if context.lower() in p["context"].lower()
-                or p["context"].lower() in ("any", "all", "general")
-            ]
-        return sorted(ps, key=lambda p: -p["confidence"])
+            q = grounding.expand(grounding.content(context))
+            if not q:
+                return []
+            ps = [p for p in ps
+                  if grounding.content(p.get("context", "")) & q
+                  or grounding.normalise(p.get("context")) in grounding.CATCH_ALL]
+        general = lambda p: grounding.normalise(p.get("context")) in grounding.CATCH_ALL  # noqa: E731
+        return [self._prio_view(p) for p in
+                sorted(ps, key=lambda p: (general(p), -float(p.get("confidence") or 0)))]
 
     # ------------------------------------------------------------ goals
     def add_goal(self, goal: str) -> dict:
@@ -2101,68 +2422,325 @@ class Conscience:
 
     def daily_brief(self) -> dict:
         """One screen: what he noticed, what he suggests, what he did — and
-        who wrote each line."""
-        return {
+        who wrote each line. A key that does not hold his private life sees
+        no line about his health, money, children, home or someone else's
+        confidence, and every engine is kept from what his own rules forbid
+        (I-11: a plain guest session read 'booked VAC mental-health intake')."""
+        import rules as _rules
+        rd = provenance.reader()
+        obs = self.data["observations"][-5:][::-1]
+        acts = self.action_log(10)
+        held = 0
+        if not rd["owner"]:
+            def ok(text, cat):
+                kinds = grounding.sensitivity(text, cat)
+                if kinds and not rd["caretaker"]:
+                    return False
+                return not _rules.held_back(self.data, rd["audiences"], text,
+                                            [str(cat or "")] + kinds)
+            keep_obs = [o for o in obs if ok(o.get("note", ""), o.get("category", ""))]
+            keep_acts = [a for a in acts if ok(a.get("description", ""), a.get("category", ""))]
+            held = len(obs) - len(keep_obs) + len(acts) - len(keep_acts)
+            obs, acts = keep_obs, keep_acts
+        out = {
             "orb": self.orb_state(),
             "active_goals": [g["goal"] for g in self.data["goals"] if g["active"]],
             "opportunities": self._shown_opportunities()[:10],
-            "recent_actions": self.action_log(10),
-            "recent_observations": self.data["observations"][-5:][::-1],
+            "recent_actions": acts,
+            "recent_observations": obs,
             "corrections_learned_from": len(self.data["corrections"]),
             # a recovery, a restore, a change made by hand, a change to the
             # caretaker, family or executor key: the owner is told
             "notices": self.notices(),
         }
+        if held:
+            out["held_back"] = {"count": held, "why": (
+                "Some recent lines are private, or kept from this connection by his "
+                "own rules. Do not guess at them.")}
+        if rd["owner"] or rd["caretaker"]:
+            waiting = len(self.pending_items())
+            if waiting:
+                out["waiting_for_owner"] = {"count": waiting, "how": (
+                    "Things an AI wrote down that he has not confirmed, or asked to "
+                    "share. He sees them with /pending in 'Talk to JEFFEREY on this Mac'.")}
+        return out
 
     # ------------------------------------------------------------ views
-    def snapshot(self) -> dict:
-        """Everything the reasoning engine may see. The user owns all of it."""
-        return {
+    def snapshot(self, limit=None, offset=0, top: int = 50) -> dict:
+        """What the reasoning engine may see of the whole conscience — never
+        all of it at once (I-41: 5,000 facts were 900,000 characters, past any
+        engine's reading), and never what is private to an engine that may
+        not hold it (I-11). The most recent facts first, a page at a time; the values
+        he holds most surely first. What is held back is counted, not shown."""
+        rd = provenance.reader()
+        facts, held = self.visible_facts(rd, bulk=True)
+        lim, off = _page(limit, offset, FACTS_PAGE, FACTS_MAX)
+        # the newest page first (offset reaches further back), each page in
+        # the order he told them
+        end = max(0, len(facts) - off)
+        page = facts[max(0, end - lim):end]
+        prios = sorted((p for p in self.data["priorities"] if isinstance(p, dict)),
+                       key=lambda p: -float(p.get("confidence") or 0))
+        out = {
             "owner": self.data.get("owner"),
-            "priorities": sorted(self.data["priorities"], key=lambda p: -p["confidence"]),
-            "facts": self.data["facts"],
-            "active_goals": [g for g in self.data["goals"] if g["active"]],
+            "priorities": [self._prio_view(p) for p in prios[:top]],
+            "facts": [self._fact_view(f) for f in page],
+            "active_goals": [g for g in self.data["goals"] if g.get("active")],
             "corrections_learned_from": len(self.data["corrections"]),
             "notices": self.notices(),
+        }
+        if len(prios) > top:
+            out["more_priorities"] = len(prios) - top
+        if len(facts) > off + lim:
+            out["more_facts"] = len(facts) - off - lim
+            out["how_to_see_more"] = (f"Older facts: call again with offset={off + lim}, "
+                                      f"or ask explain_basis about the subject you need.")
+        private = sum(1 for _, why in held if why == "private")
+        ruled = sum(1 for _, why in held if why == "rules")
+        if private or ruled:
+            out["held_back"] = {
+                "private": private, "by_his_rules": ruled,
+                "why": ("Private facts (his health, money, children, the safety of his "
+                        "home, other people's confidences) are not sent all at once. "
+                        + ("Ask explain_basis about the subject and the ones that matter "
+                           "come back. " if rd["caretaker"] else "")
+                        + "Never guess at what is held back.")}
+        if rd["owner"] or rd["caretaker"]:
+            waiting = len(self.pending_items())
+            if waiting:
+                out["waiting_for_owner"] = waiting
+        return out
+
+    def owner_view(self) -> dict:
+        """Everything, for the owner's own screen (/conscience) — never sent
+        anywhere."""
+        return {
             "store_path": str(self.path),
+            "owner": self.data.get("owner"),
+            "priorities": sorted((p for p in self.data["priorities"] if isinstance(p, dict)),
+                                 key=lambda p: -float(p.get("confidence") or 0)),
+            "facts": self.data["facts"],
+            "active_goals": [g for g in self.data["goals"] if g.get("active")],
+            "corrections_learned_from": len(self.data["corrections"]),
+            "notices": self.notices(),
+            "waiting_for_you": self.pending_items(),
         }
 
-    def explain_basis(self, topic: str) -> dict:
+    def explain_basis(self, topic: str, limit=None, offset=0) -> dict:
         """The grounding for a recommendation: which of the USER'S OWN values
-        apply to this topic. Every recommendation must be explainable in
-        these terms — never hidden incentives.
+        and facts apply to this topic. Every recommendation must be
+        explainable in these terms — never hidden incentives.
 
-        Facts come back only to a key that may read facts (I-23: a key the
-        owner had taken facts.read from got every fact by asking about ''
-        or 'e'), and a topic of fewer than three letters matches nothing."""
+        Whole words, never fragments (I-28: 'car' grounded a caregiver
+        choice, 'rent' pulled a PTSD medication into a landlord letter): a
+        value applies when every word of its context is in the subject; a
+        fact when it shares a word with the subject, or the subject names
+        its kind ('my medications' names his health). A subject that names
+        nothing is refused. Most relevant first, at most ten values and a
+        page of facts, each with the reason it matched. Facts come back only
+        to a key that may read facts (I-23), private ones only to his
+        caretaker key, and nothing his rules keep from this engine."""
         t = str(topic or "").strip()
-        if len(t) < 3:
-            return {"topic": t, "priorities": [], "facts": [],
-                    "note": "Name the subject in at least a few letters (for example "
-                            "'travel' or 'the phone bill'); nothing was looked up."}
-        low = t.lower()
-        relevant_p = [
-            p for p in self.data["priorities"]
-            if low in p["context"].lower()
-            or p["context"].lower() in low
-            or p["context"].lower() in ("any", "all", "general")
-        ]
+        problem = grounding.topic_problem(t)
+        if problem:
+            return {"topic": t, "priorities": [], "facts": [], "note": problem}
+        tw = grounding.expand(grounding.content(t))
+        rows = []
+        for p in self.data["priorities"]:
+            if not isinstance(p, dict):
+                continue
+            m = grounding.context_match(p.get("context", ""), tw)
+            if m:
+                rows.append(((0 if m[0] == "about" else 1, provenance.pending(p),
+                              -float(p.get("confidence") or 0)), self._prio_view(p, m[1])))
+        rows.sort(key=lambda r: r[0])
         out = {
             "topic": t,
-            "priorities": sorted(relevant_p, key=lambda p: -p["confidence"]),
+            "priorities": [v for _, v in rows[:BASIS_PRIORITIES]],
             "facts": [],
             "rule": (
                 "Explain the recommendation strictly in terms of these priorities "
-                "and facts. If confidence is low, say so and ask. If nothing is "
-                "relevant, say you don't know this person's values here yet."
+                "and facts. If confidence is low, say so and ask. Anything marked "
+                "unconfirmed was written down by an AI and not yet confirmed by him: "
+                "say so if you rely on it. If nothing is relevant, say you don't know "
+                "this person's values here yet."
             ),
         }
         import access
-        if access.may("facts.read"):
-            out["facts"] = [f for f in self.data["facts"] if low in f["fact"].lower()]
-        else:
+        if not access.may("facts.read"):
             out["note"] = ("The key this connection holds may not read the owner's "
                            "facts, so none are included.")
+            return out
+        rd = provenance.reader()
+        seen, held = self.visible_facts(rd, bulk=False)
+        scored = []
+        for f in seen:
+            m = grounding.fact_match(f.get("fact", ""), f.get("category", ""),
+                                     f.get("sensitivity") or [], tw)
+            if m:
+                scored.append(((-m[0], provenance.pending(f)), f, m[1]))
+        scored.sort(key=lambda r: r[0])
+        lim, off = _page(limit, offset, BASIS_FACTS, BASIS_MAX)
+        out["facts"] = [self._fact_view(f, why) for _, f, why in scored[off:off + lim]]
+        if len(scored) > off + lim:
+            out["more_facts"] = len(scored) - off - lim
+            out["how_to_see_more"] = f"Call again with offset={off + lim}."
+        kept = sum(1 for f, _ in held
+                   if grounding.fact_match(f.get("fact", ""), f.get("category", ""),
+                                           f.get("sensitivity") or [], tw))
+        if kept:
+            out["held_back"] = {"count": kept, "why": (
+                "Some facts on this subject are private, or kept from this connection "
+                "by his own rules. Do not guess at them.")}
+        return out
+
+    # ------------------------------------------------------- waiting for him
+    _CONFIRMABLE = ("facts", "priorities", "memories", "media")
+
+    def pending_items(self) -> list[dict]:
+        """What waits for the owner's own yes: things an AI wrote down in its
+        own words, values it says changed, and requests to share something
+        more widely. Shown with /pending in 'Talk to JEFFEREY on this Mac'."""
+        out = []
+        for f in self.data.get("facts") or []:
+            if isinstance(f, dict) and provenance.pending(f):
+                out.append({"id": f.get("id"), "kind": "fact", "what": f.get("fact", ""),
+                            "why": "an AI wrote it down; you have not confirmed it"})
+        for p in self.data.get("priorities") or []:
+            if not isinstance(p, dict):
+                continue
+            what = f"for {p.get('context')}: {p.get('higher')} over {p.get('lower')}"
+            if isinstance(p.get("proposed"), dict):
+                out.append({"id": p.get("id"), "kind": "change of a value",
+                            "what": (f"for {p.get('context')}: {p['proposed'].get('higher')} "
+                                     f"over {p['proposed'].get('lower')} — you had said "
+                                     f"{p.get('higher')} over {p.get('lower')}"),
+                            "why": "an AI says this changed; confirming changes it"})
+            elif p.get("question"):
+                out.append({"id": p.get("id"), "kind": "question about a value", "what": what,
+                            "why": "a recent choice went the other way; confirming keeps it"})
+            elif provenance.pending(p):
+                out.append({"id": p.get("id"), "kind": "value", "what": what,
+                            "why": "an AI wrote it down; you have not confirmed it"})
+        for sec, kind in (("memories", "moment"), ("media", "picture or recording")):
+            for m in self.data.get(sec) or []:
+                if not isinstance(m, dict):
+                    continue
+                what = (m.get("text") or m.get("caption") or m.get("path") or "")[:160]
+                if provenance.pending(m):
+                    out.append({"id": m.get("id"), "kind": kind, "what": what,
+                                "why": "kept in an AI's words, not yours; confirming says it is right"})
+                ask = m.get("requested_visibility")
+                if ask and ask != m.get("visibility"):
+                    out.append({"id": m.get("id"), "kind": "request to share", "what": what,
+                                "why": f"an AI asked to make it '{ask}'; type /share "
+                                       f"{m.get('id')} {ask} if you want that"})
+        for f in self.data.get("facts") or []:
+            ask = f.get("requested_visibility") if isinstance(f, dict) else None
+            if ask and ask != f.get("visibility"):
+                out.append({"id": f.get("id"), "kind": "request to share",
+                            "what": f.get("fact", ""),
+                            "why": f"an AI asked to make it '{ask}'; type /share "
+                                   f"{f.get('id')} {ask} if you want that"})
+        return out
+
+    def _find_item(self, item_id: str, sections=None) -> tuple[str | None, dict | None]:
+        i = str(item_id or "").strip()
+        for sec in sections or ("facts", "priorities", "memories", "media", "people"):
+            for it in self.data.get(sec) or []:
+                if isinstance(it, dict) and it.get("id") == i:
+                    return sec, it
+        return None, None
+
+    def confirm(self, ids) -> dict:
+        """The owner says: yes, that is right. Only his own hands (/confirm,
+        typed at his terminal). A value an AI said had changed is changed
+        now, and the change is logged as his."""
+        import access
+        access.require_owners_hands("confirm what an AI wrote down")
+        want = [str(x).strip() for x in (ids if isinstance(ids, (list, tuple))
+                                         else str(ids or "").replace(",", " ").split())
+                if str(x).strip()]
+        if want == ["all"]:
+            want = [x["id"] for x in self.pending_items() if x["kind"] != "request to share"]
+        done, unknown = [], []
+        src = provenance.source()
+        for i in want:
+            sec, it = self._find_item(i, self._CONFIRMABLE)
+            if it is None:
+                unknown.append(i)
+                continue
+            if sec == "priorities" and isinstance(it.get("proposed"), dict):
+                pr = it.pop("proposed")
+                was = f"{it.get('higher')} > {it.get('lower')}"
+                self._log_change("reversal", it.get("context", ""), was,
+                                 f"{pr.get('higher')} > {pr.get('lower')}", src, applied=True)
+                it.update(higher=pr.get("higher"), lower=pr.get("lower"), stated=True,
+                          stated_confidence=_real_number(pr.get("confidence")) or 0.6)
+                it["for"], it["against"] = 0, 0
+            it.pop("question", None)
+            it["status"] = "confirmed"
+            it["confirmed_by_owner"] = _now()
+            if sec == "priorities":
+                it["evidence"] = int(it.get("for") or 0) + int(it.get("against") or 0) or 1
+                it["confidence"] = self._confidence(it)
+            done.append(i)
+        if done:
+            self._save()
+        return {"confirmed": done, "unknown_ids": unknown}
+
+    def set_visibility(self, ids, visibility: str) -> dict:
+        """Who may see something: a fact ('private', 'engines', 'family',
+        'legacy'), or a moment, picture or person ('private', 'family',
+        'legacy'). Making something MORE private is free to any key that
+        may write; letting more people see it is the owner's own act (/share,
+        typed himself) — an AI that asks gets a plain answer, and the
+        request waits in /pending (I-26)."""
+        import access
+        want = grounding.normalise(visibility)
+        id_list = [str(x).strip() for x in (ids if isinstance(ids, (list, tuple))
+                                            else str(ids or "").replace(",", " ").split())
+                   if str(x).strip()]
+        if not id_list:
+            return _refusal("set_visibility", "Name what to change by its id (from "
+                                              "who_am_i or get_conscience).")
+        changed, not_changed, need_owner = [], [], []
+        for i in id_list:
+            sec, it = self._find_item(i, ("facts", "memories", "media", "people"))
+            if it is None:
+                not_changed.append({"id": i, "why": "nothing has that id"})
+                continue
+            allowed = FACT_VISIBILITY if sec == "facts" else LIFE_VISIBILITY
+            if want not in allowed:
+                not_changed.append({"id": i, "why": "it can be one of: " + ", ".join(allowed)})
+                continue
+            if sec == "facts" and not access.may("facts.write"):
+                not_changed.append({"id": i, "why": "this key may not change facts"})
+                continue
+            cur = it.get("visibility") or ("engines" if sec == "facts" else "private")
+            if cur == want:
+                not_changed.append({"id": i, "why": f"it is already '{want}'"})
+                continue
+            if want != "private" and not access.owners_hands():
+                it["requested_visibility"] = want
+                need_owner.append(i)
+                continue
+            it["visibility"] = want
+            it.pop("requested_visibility", None)
+            it["visibility_changed"] = {"from": cur, "to": want, "by": access.who(),
+                                        "at": _now()}
+            changed.append({"id": i, "from": cur, "to": want})
+        if changed or need_owner:
+            self._save()
+        out: dict = {"changed": changed}
+        if not_changed:
+            out["not_changed"] = not_changed
+        if need_owner:
+            out["needs_owner"] = need_owner
+            out["tell_the_user"] = (
+                "Only he can let more people see something. If he wants it, he types "
+                f"/share {' '.join(need_owner)} {want} himself in 'Talk to JEFFEREY on "
+                "this Mac'. Nothing was widened.")
         return out
 
 

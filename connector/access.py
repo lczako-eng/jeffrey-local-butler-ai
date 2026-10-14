@@ -81,6 +81,8 @@ TOOL_SCOPES: dict[str, str] = {
     "record_correction": "priorities.write", "set_priority": "priorities.write",
     "explain_basis": "priorities.read", "priorities_for": "priorities.read",
     "draft_guidance": "priorities.read",
+    # reads a draft against his rules and his safety; keeps nothing (I-24)
+    "check_draft": "priorities.read",
     # facts, profile, rules, the daily brief
     "get_conscience": "facts.read", "remember_fact": "facts.write",
     "forget": "facts.write", "get_profile": "facts.read",
@@ -114,6 +116,11 @@ TOOL_SCOPES: dict[str, str] = {
     # the life layer (who_am_i and tell_story use ceiling() instead)
     "add_person": "life.write", "add_memory": "life.write", "add_media": "life.write",
     "story_gaps": "life.read", "forget_life": "life.write",
+    # one person, by id: notes added to, never replaced (I-27)
+    "update_person": "life.write",
+    # who may see something: narrowing from any key that may write; widening
+    # is the owner's own /share, whatever key asks (I-26)
+    "set_visibility": "life.write",
     "next_question": "life.read", "record_answer": "life.write",
     "interview_progress": "life.read",
     # The owner's own rules about who may hear what. A REFUSAL that quotes

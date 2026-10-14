@@ -1,0 +1,436 @@
+"""
+Grounding — whole words, what kind of private, and who is listening
+====================================================================
+
+Three small things JEFFEREY needs everywhere, kept in one place so every
+surface answers the same way (the October 2026 stress test):
+
+1. **Whole words (I-28).** Grounding used to match fragments of words: 'car'
+   grounded a caregiver choice, 'art' grounded heart surgery, 'rent' pulled a
+   PTSD medication into a letter to a landlord (from cuRRENT), an empty
+   context grounded everything, and 'booking a flight to Calgary' found
+   nothing. Now text is split into whole words, lower-cased and lightly
+   stemmed (flights → flight, booking → book, Mom's → mom), the little words
+   ('the', 'my', 'write', 'letter') are ignored, and a subject that names
+   nothing is refused instead of matched against everything.
+
+2. **What kind of private (I-11).** A fact about health, money, children,
+   the safety of the home, or someone else's confidence is private by
+   default: only the owner's own caretaker key sees it, and only when the
+   subject names it.
+
+3. **Who is listening (I-24).** 'karen', 'Karen Czako' and
+   'Karen Czako <karen@example.com>' are the same person to the owner's
+   rules. A rule that says NO matches every way she can be written; a rule
+   that says YES must match her exactly. When in doubt, the answer is no.
+"""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+
+# ------------------------------------------------------------------ words
+_QUOTES = str.maketrans({"‘": "'", "’": "'", "ʼ": "'", "`": "'",
+                         "´": "'", "“": '"', "”": '"'})
+_WORD = re.compile(r"[^\W_]+(?:'[^\W_]+)*")
+
+# Little words that never decide what something is about — in English and
+# the French a Canadian owner may write in — and the words of the task
+# itself ('write a letter to…'), which say what to do, not what about.
+STOP = frozenset("""
+a an the and or but nor of to in on at for with without about above below from by
+as into onto over under up down out off than then so if is are was were be been
+being am do does did done doing have has had having it its this that these those
+there here what which who whom whose when where why how all any each every both
+few more most other some such no not only own same too very can could will would
+shall should may might must just also again further once ever still even yet
+i me my mine myself we us our ours you your yours he him his she her hers they
+them their theirs one ones thing things something anything everything nothing
+someone anyone everyone get got gets getting make makes made let lets please
+need needs want wants like likes write writes writing written wrote letter
+letters email emails message messages reply replies draft drafts note notes
+send sending sent ask asking asked tell telling told say saying said help helping
+le la les un une des du de et ou en au aux mon ma mes ton ta tes son sa ses est
+sont je tu il elle nous vous ils elles ce cet cette ces qui que quoi pour par avec
+sans sur dans pas plus
+""".split())
+
+
+def normalise(text) -> str:
+    """One spelling for the same words: compatible characters folded,
+    straight quotes, case folded, runs of space made one."""
+    t = unicodedata.normalize("NFKC", str(text or "")).translate(_QUOTES).casefold()
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def words(text) -> list[str]:
+    """The whole words, in order. "Mom's" is 'mom'; French "l'alarme" is
+    'alarme'; "don't" is 'dont'."""
+    out = []
+    for w in _WORD.findall(normalise(text)):
+        if "'" in w:
+            head, _, tail = w.partition("'")
+            if len(head) == 1 or head == "qu":          # l'alarme, d'abord, qu'il
+                w = tail.replace("'", "")
+            elif tail == "s":                          # possessive
+                w = head
+            else:
+                w = w.replace("'", "")
+        if w:
+            out.append(w)
+    return out
+
+
+def stem(w: str) -> str:
+    """Light stemming, the same on both sides of every comparison: flights →
+    flight, booking → book, rented → rent, families → family. Never so
+    deep that two different words meet ('caring' stays 'caring', not
+    'car')."""
+    if len(w) <= 3 or w.isdigit():
+        return w
+    if w.endswith("ies") and len(w) > 4:
+        return w[:-3] + "y"
+    if w.endswith("sses"):
+        return w[:-2]
+    if w.endswith("s") and not w.endswith(("ss", "us", "is")):
+        w = w[:-1]
+    for suf in ("ing", "ed"):
+        if w.endswith(suf) and len(w) - len(suf) >= 4:
+            base = w[:-len(suf)]
+            if base[-1] == base[-2] and base[-1] not in "lsz":     # shopping → shop
+                base = base[:-1]
+            return base
+    return w
+
+
+def content(text) -> set[str]:
+    """The words that say what something is about: whole, stemmed, without
+    the little words, at least three letters (or a number)."""
+    out = set()
+    for w in words(text):
+        if w in STOP:
+            continue
+        s = stem(w)
+        if s in STOP:
+            continue
+        if len(s) >= 3 or s.isdigit():
+            out.add(s)
+    return out
+
+
+# A few everyday words that mean the same subject, so 'booking a flight'
+# reaches a value about travel and 'a caregiver for Mom' reaches one about
+# Mom's care. Only ever added to what was ASKED, never to what is stored.
+_ALSO = {
+    "caregiver": ("care",), "carer": ("care",), "caretaker": ("care",),
+    "caring": ("care",), "nurse": ("care",),
+    "flight": ("travel", "fly"), "fly": ("travel", "flight"), "plane": ("travel", "flight"),
+    "airline": ("travel", "flight"), "trip": ("travel",), "hotel": ("travel",),
+    "vacation": ("travel",), "holiday": ("travel",), "travel": ("trip",),
+    "med": ("medication",), "medicine": ("medication",), "pill": ("medication",),
+    "prescription": ("medication",), "medication": ("med",),
+    "mum": ("mom",), "mother": ("mom",), "mama": ("mom",), "mommy": ("mom",),
+    "mom": ("mother",), "father": ("dad",), "papa": ("dad",), "daddy": ("dad",),
+    "dad": ("father",), "physician": ("doctor",),
+}
+
+
+def expand(ws: set[str]) -> set[str]:
+    return set(ws) | {a for w in ws for a in _ALSO.get(w, ())}
+
+
+def phrase_in(phrase: str, text: str) -> bool:
+    """Is this phrase in the text as whole words ('lives alone' in 'He lives
+    alone now', never 'art' in 'heart')?"""
+    p = " ".join(words(phrase))
+    t = " ".join(words(text))
+    return bool(p) and f" {p} " in f" {t} "
+
+
+def topic_problem(topic) -> str | None:
+    """Why a subject cannot be looked up — or None when it names something."""
+    t = str(topic or "").strip()
+    if len(t) < 3 or not content(t):
+        return ("Name the subject in a word or two that mean something (for example "
+                "'travel', 'Mom's care' or 'the phone bill'); nothing was looked up.")
+    return None
+
+
+# Contexts that apply to everything. The owner may hold such a value; an AI
+# may not write one, because it is cited for every decision (I-25).
+CATCH_ALL = frozenset({"any", "all", "general", "everything", "always", "anything",
+                       "every", "overall", "in general", "all things", "life"})
+
+
+def context_problem(context, engine: bool) -> str | None:
+    """Why a priority's context cannot be stored, in plain words — or None."""
+    n = normalise(context)
+    if n in CATCH_ALL:
+        if engine:
+            return ("A value that applies to everything can only be set by the owner "
+                    "himself. Name the subject it is about (for example 'Mom's care' "
+                    "or 'travel'); nothing was stored.")
+        return None
+    if len(n) < 3 or not content(n):
+        return ("Name the subject this value is about in a word or two (for example "
+                "'travel' or 'Mom's care'); nothing was stored.")
+    return None
+
+
+def context_match(context, topic_words: set[str]) -> tuple[str, str] | None:
+    """Does a value held about `context` apply to a subject with these words?
+    ('about', reason) when every word of the context is in the subject;
+    ('general', reason) for a value about everything; else None."""
+    n = normalise(context)
+    if n in CATCH_ALL:
+        return ("general", "a value he holds about everything")
+    c = content(n)
+    if len(n) < 3 or not c:
+        return None
+    if c <= topic_words:
+        return ("about", "it is about " + " and ".join(sorted(c)))
+    return None
+
+
+# ------------------------------------------------------- what kind of private
+CLASSES = ("health", "money", "minors", "home_security", "third_party", "private")
+CLASS_WORDS_PLAIN = {
+    "health": "his health",
+    "money": "his money",
+    "minors": "children",
+    "home_security": "the safety of his home",
+    "third_party": "someone else's confidence",
+    "private": "something marked private",
+}
+
+
+def _stems(text: str) -> frozenset:
+    return frozenset(stem(w) for w in text.split())
+
+
+_SENSE_WORDS = {
+    "health": _stems("""health medical medication medications meds medicine prescription
+        prescribed pharmacy pharmacist doctor physician psychiatrist psychologist therapist
+        therapy counselling counseling diagnosis diagnosed ptsd alzheimer alzheimers
+        dementia cancer tumour tumor biopsy chemo chemotherapy diabetes diabetic insulin
+        warfarin sertraline donepezil metformin statin statins stroke surgery hospital
+        hospitalised hospitalized rehab addiction alcoholic alcoholism sober sobriety
+        depression depressed anxiety bipolar schizophrenia pregnant pregnancy miscarriage
+        hiv suicide suicidal disability wheelchair allergy allergic illness symptoms
+        parkinson parkinsons copd asthma arthritis cholesterol pills pill dialysis
+        santé médecin médicament médicaments maladie enceinte"""),
+    "money": _stems("""bank banking savings debt debts owe owes owed owing loan loans
+        mortgage bankrupt bankruptcy overdraft salary income pension inheritance invest
+        investment investments rrsp tfsa rrif brokerage credit banque dette dettes prêt
+        hypothèque épargne"""),
+    # Age, not relationship: a grandson may be forty. What marks a child is
+    # an age, a school, a baby.
+    "minors": _stems("""toddler toddlers baby babies infant infants newborn teen teens
+        teenager teenagers teenage kindergarten daycare preschool bébé"""),
+    "home_security": _stems("""alarm alarms alarme lockbox keypad deadbolt"""),
+    "third_party": _stems("""secret secrets secretly affair confided"""),
+    "private": frozenset(),
+}
+_SENSE_PHRASES = {
+    "health": ("blood pressure", "mental health", "memory clinic", "heart attack",
+               "heart condition", "heart surgery"),
+    "money": ("net worth", "credit card", "savings account", "bank account"),
+    "minors": ("high school", "middle school", "elementary school", "grade school",
+               "junior high", "école primaire"),
+    "home_security": ("spare key", "hidden key", "key under", "key is under", "key is in",
+                      "door code", "gate code", "garage code", "garage door code",
+                      "safe combination", "lives alone", "live alone", "living alone",
+                      "home alone", "alone at home", "by myself at home", "home most",
+                      "usually home", "away from home", "out of town", "on vacation",
+                      "while we are away", "while we're away", "while i am away",
+                      "while i'm away", "house is empty", "empty house", "nobody home",
+                      "no one home", "seul à la maison", "vit seul", "code de porte",
+                      "restraining order", "peace bond", "no contact order"),
+    "third_party": ("hasn't told", "has not told", "hasnt told", "haven't told",
+                    "doesn't know", "does not know", "doesnt know", "don't tell",
+                    "do not tell", "not to tell", "never told", "nobody knows",
+                    "no one knows", "in confidence", "keep it quiet", "between us",
+                    "behind her back", "behind his back"),
+}
+_SENSE_PATTERNS = {
+    "health": (re.compile(r"\b\d+(?:\.\d+)?\s?mg\b"),),
+    "money": (re.compile(r"[$€£]\s?\d{1,3}(?:,\d{3})+"), re.compile(r"[$€£]\s?\d{4,}"),
+              re.compile(r"\$?\b\d{2,}k\b")),
+    "minors": (re.compile(r"\b(?:[1-9]|1[0-7])\s*(?:years?|yrs?)[\s-]*old\b"),
+               re.compile(r"\b(?:aged?)\s*(?:[1-9]|1[0-7])\b"),
+               re.compile(r"\bgrade\s*(?:[1-9]|1[0-2])\b")),
+}
+# A category the owner (or an AI) gave a fact that already says what it is.
+_CATEGORY = {
+    "health": _stems("health medical medication medications medicine"),
+    "money": _stems("money finance finances financial bank banking debt debts"),
+    "minors": _stems("kids children grandchildren grandkids minors"),
+    "home_security": _stems("security safety"),
+    "private": _stems("private secret secrets confidential confidence"),
+}
+
+
+def sensitivity(text, category="") -> list[str]:
+    """What kind of private this is, if any: health, money, minors (children),
+    home_security, third_party (someone else's confidence) or private (marked
+    so). An empty list means nothing sensitive was recognised."""
+    t = normalise(text)
+    st = {stem(w) for w in words(t)}
+    cat = {stem(w) for w in words(category)}
+    found = set()
+    for cls in CLASSES:
+        if st & _SENSE_WORDS.get(cls, frozenset()):
+            found.add(cls)
+        elif any(phrase_in(p, t) for p in _SENSE_PHRASES.get(cls, ())):
+            found.add(cls)
+        elif any(rx.search(t) for rx in _SENSE_PATTERNS.get(cls, ())):
+            found.add(cls)
+        if cat & _CATEGORY.get(cls, frozenset()):
+            found.add(cls)
+    c = normalise(category)
+    if "never share" in c or "do not share" in c or "don't share" in c:
+        found.add("private")
+    return [c for c in CLASSES if c in found]
+
+
+# What a subject has to say to NAME a kind of private ("my medications"
+# names his health; "rent" names nothing private).
+CLASS_WORDS = {
+    "health": _stems("health medical medication medicine med pill doctor diagnosis "
+                     "illness hospital prescription pharmacy condition treatment"),
+    "money": _stems("money finance financial bank banking debt saving account loan "
+                    "mortgage budget investment pension tax"),
+    "minors": _stems("kid child children grandchild grandchildren grandkid grandson "
+                     "granddaughter school minor"),
+    "home_security": _stems("home house security safety alarm key lock away schedule "
+                            "alone address"),
+    "third_party": _stems("secret confidence"),
+    "private": _stems("private secret"),
+}
+# How an owner may name a kind in a rule ('medical', 'my finances', 'kids').
+CLASS_ALIASES = {
+    "health": "health", "medical": "health", "medication": "health",
+    "medications": "health", "meds": "health", "mental health": "health",
+    "diagnosis": "health", "money": "money", "finances": "money", "financial": "money",
+    "finance": "money", "debt": "money", "debts": "money", "bank": "money",
+    "kids": "minors", "children": "minors", "grandchildren": "minors",
+    "grandkids": "minors", "minors": "minors", "home security": "home_security",
+    "security": "home_security", "safety": "home_security",
+    "schedule": "home_security", "lives alone": "home_security",
+    "secrets": "third_party", "secret": "third_party", "confidences": "third_party",
+    "private": "private",
+}
+
+
+def fact_match(text, category, classes, topic_words: set[str]) -> tuple[int, str] | None:
+    """Does a fact belong to a subject with these words? (score, reason) —
+    the words they share, or the kind of thing the subject names — or None."""
+    f = content(text)
+    shared = topic_words & f
+    cat = (content(category) - {"general"}) & topic_words
+    named = [c for c in classes or () if CLASS_WORDS.get(c, frozenset()) & topic_words]
+    if not shared and not cat and not named:
+        return None
+    reasons = []
+    if shared:
+        reasons.append("it mentions " + ", ".join(sorted(shared)))
+    if cat:
+        reasons.append("it is filed under " + ", ".join(sorted(cat)))
+    if named:
+        reasons.append("you asked about " + " and ".join(CLASS_WORDS_PLAIN[c] for c in named))
+    return 2 * len(shared) + len(cat) + len(named), "; ".join(reasons)
+
+
+def tag_hits(rule_tags, text: str = "", tags=()) -> bool:
+    """Does a rule about these subjects reach something with this text and
+    these tags? A rule with no subject reaches everything. 'health' reaches
+    a fact recognised as health even if the word is not in it; a phrase
+    ('lives alone') must be there as whole words."""
+    rts = [normalise(t) for t in (rule_tags or []) if normalise(t)]
+    if not rts:
+        return True
+    tset = {normalise(t) for t in tags if normalise(t)}
+    classes = {CLASS_ALIASES.get(t, t) for t in tset} & set(CLASSES)
+    have = {stem(w) for w in words(text)} | {stem(w) for t in tset for w in words(t)}
+    for rt in rts:
+        if rt in tset:
+            return True
+        cls = CLASS_ALIASES.get(rt, rt if rt in CLASSES else None)
+        if cls and cls in classes:
+            return True
+        ws = words(rt)
+        if len(ws) == 1:
+            if stem(ws[0]) in have:
+                return True
+        elif ws and (phrase_in(rt, text) or any(phrase_in(rt, t) for t in tset)):
+            return True
+    return False
+
+
+# --------------------------------------------------------- who is listening
+SELF = "me"
+FAMILY_WORDS = _stems("""wife husband spouse partner son daughter child mother father
+    mom dad mum parent brother sister sibling grandson granddaughter grandchild
+    grandmother grandfather grandma grandpa aunt uncle niece nephew cousin stepson
+    stepdaughter stepmother stepfather family""")
+
+
+def norm_audience(s) -> str:
+    """'My Sister' and 'sister' are one audience; 'the family' is 'family'."""
+    n = normalise(s)
+    n = re.sub(r"^(?:my|the|our|ma|mon|mes)\s+", "", n)
+    return n.strip(" .,:;!\"'")
+
+
+_ADDRESSED = re.compile(r"^(.*?)<\s*([^<>\s]+@[^<>\s]+)\s*>\s*$")
+_EMAIL = re.compile(r"[^\s@<>]+@[^\s@<>]+")
+
+
+def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
+    """Every name this audience may be known by to the owner's rules:
+    (broad, strict). A rule that says NO is matched against `broad` — each
+    word of a display name, an e-mail address's name part, and the person
+    and relationship recorded in his life story ('Karen' → his ex-wife →
+    family). A rule that says YES is matched against `strict` only — the
+    whole name or address as written, or the recorded person it exactly is."""
+    raw = normalise(audience)
+    if not raw or norm_audience(raw) == SELF:
+        return frozenset(), frozenset()
+    m = _ADDRESSED.match(raw)
+    if m:
+        name, email = m.group(1).strip(" \"'"), m.group(2)
+    elif _EMAIL.fullmatch(raw):
+        name, email = "", raw
+    else:
+        name, email = raw, ""
+    strict: set[str] = set()
+    broad: set[str] = set()
+    if email:
+        local = email.split("@", 1)[0]
+        strict |= {email, local}
+        broad |= {p for p in re.split(r"[._+\-0-9]+", local) if len(p) >= 2}
+    if name:
+        n = norm_audience(name)
+        strict |= {name, n}
+        broad |= {w for w in words(n) if w not in STOP}
+    for p in people or ():
+        if not isinstance(p, dict):
+            continue
+        pn = norm_audience(p.get("name", ""))
+        if not pn:
+            continue
+        pw = set(words(pn))
+        rel = norm_audience(p.get("relationship", ""))
+        exact = pn in strict
+        if exact or (pw and pw <= broad):
+            broad |= {pn} | ({rel} if rel else set()) | set(words(rel))
+            if exact:
+                strict |= {pn} | ({rel} if rel else set())
+            if {stem(w) for w in words(rel)} & FAMILY_WORDS:
+                broad.add("family")
+    broad |= strict
+    for s in (broad, strict):
+        s.discard("")
+        s.discard(SELF)
+    return frozenset(broad), frozenset(strict)

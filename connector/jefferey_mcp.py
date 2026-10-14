@@ -137,11 +137,16 @@ def get_directives() -> str:
 
 @door(mcp.tool())
 @gate("facts.read")
-def get_conscience() -> dict:
-    """Read the full conscience: the user's priority hierarchy (with
-    confidence scores), remembered facts, active goals, and how many
-    corrections Jefferey has learned from. The user owns every byte."""
-    return conscience.snapshot()
+def get_conscience(limit: int = 100, offset: int = 0) -> dict:
+    """Read the conscience: the user's priority hierarchy (with confidence
+    and the evidence for and against), remembered facts (the most recent
+    page first — offset for older ones), active goals, and how many
+    corrections Jefferey has learned from. Private facts (health, money,
+    children, the safety of the home, other people's confidences) are
+    counted, not sent; explain_basis brings the ones a question names, to
+    his caretaker key. Anything marked unconfirmed was written by an AI and
+    not yet confirmed by him. The user owns every byte."""
+    return conscience.snapshot(limit, offset)
 
 
 # ---------------------------------------------------------------- learning
@@ -156,10 +161,13 @@ def record_correction(
 ) -> dict:
     """THE core learning act. The user overrode a recommendation — learn WHY.
     Record which value they were protecting (e.g. 'reliability') and which
-    they traded away (e.g. 'lowest price') in this context. Consistent
-    evidence raises confidence; contradictions erode and can flip the
-    hierarchy. Returns the updated priority with its confidence score —
-    tell the user what you learned and the confidence you now hold."""
+    they traded away (e.g. 'lowest price') in this context — a real subject,
+    never 'general'. Evidence for and against is counted separately; a
+    learned value turns round only when the choices against it outweigh the
+    ones for it. A value he STATED is never reversed this way: you get a
+    question_for_owner to ask him instead. The same correction twice in one
+    conversation counts once. Tell the user what you learned and the
+    confidence you now hold."""
     return conscience.record_correction(
         context, what_was_suggested, what_user_chose,
         value_protected, value_traded_away,
@@ -170,9 +178,11 @@ def record_correction(
 @gate("priorities.write")
 def set_priority(context: str, higher: str, lower: str, confidence: float = 0.6) -> dict:
     """The user explicitly stated a priority (e.g. context='travel',
-    higher='direct flights', lower='saving money'). Store it with the given
-    confidence (0-1). Use record_correction instead when learning from an
-    override rather than an explicit statement."""
+    higher='direct flights', lower='saving money'). The context must name a
+    subject ('general' or 'everything' is the owner's own to set). You may
+    claim at most 0.6 confidence; he confirms it higher himself. Reversing
+    something he stated himself is not applied: it becomes a question for
+    him. Use record_correction instead when learning from an override."""
     return conscience.set_priority(context, higher, lower, confidence)
 
 
@@ -181,7 +191,9 @@ def set_priority(context: str, higher: str, lower: str, confidence: float = 0.6)
 def remember_fact(fact: str, category: str = "general") -> dict:
     """Remember a durable FACT about the user (people, dates, situations,
     constraints). Facts are stored separately from values — never mix the
-    two. Ask before remembering anything sensitive."""
+    two. Ask before remembering anything sensitive: health, money, children,
+    the safety of his home and other people's confidences are kept private
+    automatically. What you write is marked unconfirmed until he confirms it."""
     return conscience.remember_fact(fact, category)
 
 
@@ -201,14 +213,16 @@ def forget(contains: str = "", ids: list[str] | None = None, confirm: str = "") 
 # ---------------------------------------------------------------- representing
 @door(mcp.tool())
 @gate("priorities.read")
-def explain_basis(topic: str) -> dict:
+def explain_basis(topic: str, limit: int = 10, offset: int = 0) -> dict:
     """Before recommending anything, fetch the user's OWN priorities and
-    facts relevant to this topic. Ground the recommendation and its
-    explanation strictly in what this returns — 'I chose X because you
-    consistently value A over B' — never in hidden incentives. If it
-    returns nothing relevant, say you don't yet know their values here,
-    and ask."""
-    return conscience.explain_basis(topic)
+    facts relevant to this topic (matched by whole words, each with why it
+    matched; most relevant first, a page at a time). Ground the
+    recommendation and its explanation strictly in what this returns — 'I
+    chose X because you consistently value A over B' — never in hidden
+    incentives. Name the subject plainly ('my medications', 'Mom's care').
+    If it returns nothing relevant, say you don't yet know their values
+    here, and ask."""
+    return conscience.explain_basis(topic, limit, offset)
 
 
 @door(mcp.tool())
@@ -373,11 +387,23 @@ def triage_message(sender: str, subject: str, body: str) -> dict:
 @gate("priorities.read")
 def draft_guidance(purpose: str, recipient: str = "") -> dict:
     """Call BEFORE writing anything in the user's name (an email, a letter,
-    a complaint, a cancellation). Returns their voice, the priorities and
-    facts that apply here, who to sign as, and the hard limits. Write the
-    draft from this — then show it to them. Sending requires
-    authorize_action on 'correspondence'."""
+    a complaint, a cancellation), with the recipient as it will appear
+    ('Karen Czako <k@example.com>'). Returns their voice, the priorities and
+    facts that apply here, who to sign as, the hard limits — and what his
+    own rules keep from this recipient (do_not_mention) and how he asked to
+    be spoken of. Write the draft from this, run check_draft on it, then
+    show it to them. Sending requires authorize_action on 'correspondence'."""
     return rep.draft_guidance(purpose, recipient)
+
+
+@door(mcp.tool())
+@gate("priorities.read")
+def check_draft(text: str, audience: str = "") -> dict:
+    """Check a draft BEFORE showing or sending it: does it touch a subject
+    his rules keep from this person, repeat one of his private facts, or
+    tell someone when he is home, alone or away, or how to get in? Fix
+    every problem it lists; never send a draft it did not pass."""
+    return rep.check_draft(text, audience)
 
 
 @door(mcp.tool())
@@ -522,8 +548,22 @@ def dispute_pack(merchant: str) -> dict:
 def add_person(name: str, relationship: str, notes: str = "",
                important_dates: str = "") -> dict:
     """Record someone who matters to the user (family, friends, the people
-    they'd want remembered). Only when they offer it — never interrogate."""
+    they'd want remembered). Only when they offer it — never interrogate.
+    The same name with a different relationship is a separate person
+    (possible_duplicate_of tells you); the same person gets new notes ADDED,
+    never replaced. Tell him which happened. Everyone is private until he
+    shares them himself."""
     return life.add_person(name, relationship, notes, important_dates)
+
+
+@door(mcp.tool())
+@gate("life.write")
+def update_person(person_id: str, name: str = "", relationship: str = "",
+                  notes: str = "", important_dates: str = "") -> dict:
+    """Change one person, by id (from who_am_i or add_person). New notes and
+    dates are added, dated; a changed name or relationship keeps what it was
+    in the notes. Only what he told you."""
+    return life.update_person(person_id, name, relationship, notes, important_dates)
 
 
 @door(mcp.tool())
@@ -531,10 +571,9 @@ def add_person(name: str, relationship: str, notes: str = "",
 def add_memory(text: str, when: str = "", people: str = "", tags: str = "",
                visibility: str = "private") -> dict:
     """Record a snippet of the user's life in their own words — a moment, a
-    turning point, a lesson, a joke only their family gets. visibility:
-    'private' (Jefferey only), 'family' (may be shared with named people),
-    'legacy' (meant to outlive them). Never invent one; only record what
-    they actually said."""
+    turning point, a lesson, a joke only their family gets. It is kept
+    PRIVATE whatever visibility you pass: only he shares it (/share). Never
+    invent one; only record what they actually said, in their words."""
     return life.add_memory(text, when, people, tags, visibility)
 
 
@@ -549,25 +588,27 @@ def add_media(path: str, caption: str = "", when: str = "", people: str = "",
 
 
 @door(mcp.tool())
-def who_am_i() -> dict:
+def who_am_i(limit: int = 50, offset: int = 0) -> dict:
     """What Jefferey understands about this person as a human being: the
-    people who matter, the moments recorded, the pictures, and what they
-    value. Speak from this — never invent a memory or a feeling.
+    people who matter, the moments recorded (the most recent page
+    first), the pictures, and what they value. Speak from this — never
+    invent a memory or a feeling.
 
     How much of it you see is decided by the key this session was started
-    with, not by you: there is no parameter to widen it."""
-    return life.who_am_i(access.ceiling())
+    with and by his own rules, not by you: there is no parameter to widen
+    it. What is held back is counted, never shown — do not guess at it."""
+    return life.who_am_i(access.ceiling(), limit, offset)
 
 
 @door(mcp.tool())
-def tell_story(theme: str = "") -> dict:
+def tell_story(theme: str = "", limit: int = 50, offset: int = 0) -> dict:
     """Gather what's needed to tell a piece of this person's story — for them
     now, or for the people they named, later. Tell it in their voice, in
     order, using only what is here.
 
     Which moments are in reach is decided by the key this session was started
     with — private, family, or legacy. You cannot ask for a wider audience."""
-    return life.tell_story(access.ceiling(), theme)
+    return life.tell_story(access.ceiling(), theme, limit, offset)
 
 
 @door(mcp.tool())
@@ -595,6 +636,17 @@ def forget_life(contains: str = "", ids: list[str] | None = None,
     return life.forget_life(contains, ids, confirm)
 
 
+@door(mcp.tool())
+@gate("life.write")
+def set_visibility(ids: list[str], visibility: str) -> dict:
+    """Who may see something, by id: a fact ('private', 'engines', 'family',
+    'legacy'), or a moment, picture or person ('private', 'family',
+    'legacy'). Making something MORE private is done at once. Letting more
+    people see it is the owner's own act: the answer tells him what to type
+    (/share), and nothing is widened by you."""
+    return life.set_visibility(ids or [], visibility)
+
+
 # ---------------------------------------------------------------- the album
 @door(mcp.tool())
 @gate("life.read")
@@ -612,8 +664,9 @@ def next_story_prompt() -> dict:
 def record_story(moment_id: str, text: str, people: str = "", when: str = "",
                  visibility: str = "private") -> dict:
     """Keep what they said about a moment — VERBATIM, in their words, pinned to
-    those photographs, permanently. Returns one gentle follow-up: ask it or
-    let it go, never two."""
+    those photographs, permanently, and private (only he shares it). If the
+    memory comes back with verbatim false, it is a summary, not his words:
+    tell him so. Returns one gentle follow-up: ask it or let it go, never two."""
     return album.record(moment_id, text, people, when, visibility)
 
 
@@ -707,8 +760,8 @@ def next_question(domain: str = "") -> dict:
 @gate("life.write")
 def record_answer(question_id: str, answer: str = "", declined: bool = False,
                   visibility: str = "private") -> dict:
-    """Keep what they said, in their own words, under the visibility they
-    chose ('private', 'family', 'legacy'). If they deflected, pass
+    """Keep what they said, in their own words — privately; if they want it
+    shared, they share it themselves (/share). If they deflected, pass
     declined=True — their 'no' is a complete answer and the question is
     retired permanently. Never re-ask either way."""
     return interview.record_answer(question_id, answer, declined, visibility)

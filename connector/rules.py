@@ -38,11 +38,16 @@ from __future__ import annotations
 import time
 
 import forgetting
+import grounding
 
 KINDS = ("disclosure", "reaction", "representation")
 
-# Audiences a rule can name. Anything else is treated as a named person or
-# group (e.g. "karen", "family", "my sister") and matched by exact word.
+# Audiences a rule can name. Anything else is a named person or group
+# ("karen", "family", "my sister"). Since October 2026 (I-24) a rule meets
+# its audience however it is written: 'Karen Czako <k@example.com>' is the
+# 'karen' a rule names, and his ex-wife Karen is 'family' too. A rule that
+# says NO matches every way the audience can be written; a rule that says
+# YES must match it exactly.
 SELF = "me"
 ANYONE = "anyone"
 
@@ -55,6 +60,54 @@ def _tags(s: str | list) -> list[str]:
     if isinstance(s, list):
         return [str(t).strip().lower() for t in s if str(t).strip()]
     return [t.strip().lower() for t in str(s).split(",") if t.strip()]
+
+
+def _aud(r: dict) -> str:
+    return grounding.norm_audience(r.get("audience", "")) or SELF
+
+
+def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, list]:
+    """The owner's rules for an audience known by these names, about
+    whatever `hit(rule)` says a rule reaches. (False, rule, []) when a rule
+    keeps it from them; (True, rule, limited_to) when one opens it; (None,
+    None, []) when no rule speaks. A rule naming this audience beats a rule
+    for 'anyone'; at the same level, no beats yes."""
+    rs = [r for r in data.get("rules") or [] if isinstance(r, dict)]
+    disc = [r for r in rs if r.get("kind") == "disclosure" and hit(r)]
+    reps = [r for r in rs if r.get("kind") == "representation" and hit(r)]
+    for names_no, names_yes in ((broad, strict), ({ANYONE}, {ANYONE})):
+        no = [r for r in disc if not r.get("allow") and _aud(r) in names_no]
+        if no:
+            return False, no[0], []
+        yes = [r for r in disc if r.get("allow") and _aud(r) in names_yes]
+        if yes:
+            return True, yes[0], []
+        say = [r for r in reps if _aud(r) in names_yes]
+        if say:
+            return True, say[0], [r.get("instruction", "") for r in say]
+    return None, None, []
+
+
+def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
+    """Does one of the owner's rules keep this (a fact, a moment, a person,
+    a picture) from whoever is reading? The rule that does, or None. Only a
+    rule that says no holds anything back here: what reaches a reader at all
+    was already decided by its visibility — this is the owner's rules on top
+    (I-10, I-11: the life layer and the facts never consulted them)."""
+    aud = frozenset(grounding.norm_audience(a) for a in audiences or () if a)
+    if not aud:
+        return None
+    ok, rule, _ = verdict(data, aud, aud,
+                          lambda r: grounding.tag_hits(r.get("tags") or [], text, tags))
+    return rule if ok is False else None
+
+
+def _caller_holds_private() -> bool:
+    try:
+        import access
+        return access.may("life.read")
+    except Exception:
+        return False
 
 
 class ConscienceRules:
@@ -133,37 +186,42 @@ class ConscienceRules:
         for this audience (or for 'anyone') is required; otherwise refuse.
         Silence is a 'no'.
         """
-        aud = audience.strip().lower()
+        aud = str(audience or "").strip().lower()
         want = set(_tags(tags))
-        if aud == SELF:
+        if grounding.norm_audience(aud) == SELF:
             return {"allowed": True, "audience": aud, "reason": "the owner may always hear about themself"}
+        # 'Karen Czako <k@example.com>' meets a rule for 'karen' (I-24: only
+        # the exact string used to match, so a 'never tell Karen' rule let
+        # her full name through to an 'anyone' allow).
+        broad, strict = grounding.audience_aliases(aud, self.c.data.get("people") or [])
+        broad = frozenset(grounding.norm_audience(a) for a in broad)
+        strict = frozenset(grounding.norm_audience(a) for a in strict)
+        text = " ".join(sorted(want))
 
         def on_topic(r):
-            return not r["tags"] or want & set(r["tags"])
+            return grounding.tag_hits(r.get("tags") or [], text, want)
 
-        # Precedence: a rule naming THIS audience beats a rule for "anyone".
-        # Within the same level, deny beats allow.
-        for level in (aud, ANYONE):
-            here = [r for r in self.rules("disclosure") if on_topic(r) and r["audience"] == level]
-            denies = [r for r in here if not r["allow"]]
-            allows = [r for r in here if r["allow"]]
-            if denies:
-                return {"allowed": False, "audience": aud, "tags": sorted(want),
-                        "reason": "the owner forbade it", "rule": denies[0]["instruction"]}
-            if allows:
-                return {"allowed": True, "audience": aud, "tags": sorted(want),
-                        "reason": "the owner permitted it", "rule": allows[0]["instruction"]}
+        ok, rule, limited = verdict(self.c.data, broad, strict, on_topic)
+        if ok is None:
+            return {"allowed": False, "audience": aud, "tags": sorted(want),
+                    "reason": ("no rule opens this to this audience — silence is a no. "
+                               "Say nothing about it, and if pressed, say it isn't yours "
+                               "to share.")}
+        out = {"allowed": ok, "audience": aud, "tags": sorted(want),
+               "reason": ("the owner forbade it" if not ok else
+                          "the owner told you what to say — say only that" if limited else
+                          "the owner permitted it"),
+               "rule": rule.get("instruction", "")}
+        if limited:
             # A representation rule ("to others, say I'm retired") IS the
             # owner's permission to say exactly that much — and no more.
-            reps = [r for r in self.rules("representation") if on_topic(r) and r["audience"] == level]
-            if reps:
-                return {"allowed": True, "audience": aud, "tags": sorted(want),
-                        "reason": "the owner told you what to say — say only that",
-                        "rule": reps[0]["instruction"], "limited_to": [r["instruction"] for r in reps]}
-
-        return {"allowed": False, "audience": aud, "tags": sorted(want),
-                "reason": ("no rule opens this to this audience — silence is a no. "
-                           "Say nothing about it, and if pressed, say it isn't yours to share.")}
+            out["limited_to"] = limited
+        if not _caller_holds_private():
+            # The words of his rule are themselves the secret ('Never tell
+            # Karen about Lisa'). Only his caretaker key reads them; others
+            # get the answer and the reason (family#6).
+            out.pop("rule", None)
+        return out
 
     def guidance_for(self, tags: str | list, audience: str = SELF) -> dict:
         """The standing instructions that apply right now — reaction rules
@@ -186,14 +244,42 @@ class ConscienceRules:
                            "differently. If none apply, default to the Directive Pack's voice.")
         else:
             out["disclosure"] = self.check_disclosure(aud, list(want))
-            out["speak_of_them_this_way"] = [
-                r["instruction"] for r in self.rules("representation")
-                if (not r["tags"] or want & set(r["tags"])) and r["audience"] in (aud, ANYONE)]
+            out["speak_of_them_this_way"] = self.representation_for(aud, list(want))
             out["rule"] = ("Before saying anything about the owner to this audience, obey "
                            "'disclosure'. If allowed, say it only in the way "
                            "'speak_of_them_this_way' prescribes. If nothing prescribes, say "
                            "less rather than more.")
         return out
+
+    def representation_for(self, audience: str, tags=(), text: str = "") -> list[str]:
+        """How he told JEFFEREY to speak of him to this audience (or to
+        anyone), on these subjects — in his own words."""
+        _, strict = grounding.audience_aliases(audience, self.c.data.get("people") or [])
+        names = {grounding.norm_audience(a) for a in strict} | {ANYONE}
+        want = set(_tags(list(tags)))
+        return [r["instruction"] for r in self.rules("representation")
+                if _aud(r) in names
+                and grounding.tag_hits(r.get("tags") or [], text or " ".join(sorted(want)), want)]
+
+    def denied_subjects(self, audience: str) -> list[str]:
+        """The subjects a rule of his keeps from this audience — their names
+        only, never his words (for draft_guidance's do_not_mention)."""
+        broad, strict = grounding.audience_aliases(audience, self.c.data.get("people") or [])
+        broad = {grounding.norm_audience(a) for a in broad}
+        strict = {grounding.norm_audience(a) for a in strict}
+        out = []
+        for r in self.rules("disclosure"):
+            if r.get("allow") or not r.get("tags"):
+                continue
+            if _aud(r) in broad:
+                out += r["tags"]
+            elif _aud(r) == ANYONE:
+                # a yes for exactly this audience opens it again
+                if not any(x.get("allow") and _aud(x) in strict
+                           and set(x.get("tags") or []) & set(r["tags"])
+                           for x in self.rules("disclosure")):
+                    out += r["tags"]
+        return sorted(set(out))
 
     def summary(self) -> dict:
         rs = self.c.data.get("rules", [])

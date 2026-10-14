@@ -29,6 +29,12 @@ conscience store.
   detection), drafting in the user's voice, and HTML/PDF form filling.
 - **`vault.py`** — secrets stored in the platform keychain, used by reference
   so the AI never sees them.
+- **`grounding.py`** — whole-word matching for grounding, what kind of
+  private a fact is (health, money, children, the home's safety, other
+  people's confidences), and every name an audience may go by for the
+  owner's rules.
+- **`provenance.py`** — who said what (the owner, his own typed words, or
+  an AI, unconfirmed), and who will read a result.
 
 ## Talk to Jefferey (standalone)
 

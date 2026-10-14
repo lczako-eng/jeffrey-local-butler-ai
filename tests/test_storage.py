@@ -437,26 +437,29 @@ class ReadsDoNotWrite(StoreTest):
 class HandEdits(StoreTest):
 
     def test_a_hand_edit_with_the_same_revision_is_adopted_not_undone(self):
+        # (Life package, October 2026: the facts here are everyday ones. An
+        # affair and a doctor are private now — I-11 — and are no longer sent
+        # in bulk at all, which would make this test pass for the wrong reason.)
         r = self.py("""
             import jefferey_mcp as m
-            mcp_call(m, "remember_fact", {"fact": "I had an affair in 2009"})
-            mcp_call(m, "remember_fact", {"fact": "My doctor is Dr Old"})
+            mcp_call(m, "remember_fact", {"fact": "I sold the cottage in 2009"})
+            mcp_call(m, "remember_fact", {"fact": "My barber is Sam Old"})
             p = m.conscience.path
             d = json.loads(p.read_text())
-            d["facts"] = [{"fact": "My doctor is Dr New", "category": "general", "added": "x"}]
+            d["facts"] = [{"fact": "My barber is Sam New", "category": "general", "added": "x"}]
             p.write_text(json.dumps(d, indent=2))              # same _rev, by hand
             g = mcp_call(m, "get_conscience")
             sent = [json.loads(l) for l in open(os.environ["JEFFEREY_EGRESS"])
                     if '"get_conscience"' in l][-1]["sent"]
             out({"served": [f["fact"] for f in g["facts"]], "notices": g.get("notices"),
                  "disk": [f["fact"] for f in json.loads(p.read_text())["facts"]],
-                 "sent_affair": "affair" in sent})
+                 "sent_affair": "cottage" in sent})
         """, JEFFEREY_CLIENT="jefferey")
-        self.assertEqual(r["served"], ["My doctor is Dr New"])
-        self.assertEqual(r["disk"], ["My doctor is Dr New"])
+        self.assertEqual(r["served"], ["My barber is Sam New"])
+        self.assertEqual(r["disk"], ["My barber is Sam New"])
         self.assertFalse(r["sent_affair"], "the deleted fact was re-sent to the engine")
         self.assertTrue(any("changed outside JEFFEREY" in n["what"] for n in r["notices"]))
-        self.assertGreaterEqual(self.copies_holding("affair"), 1, "the pre-edit version is kept")
+        self.assertGreaterEqual(self.copies_holding("cottage"), 1, "the pre-edit version is kept")
 
     def test_a_save_is_refused_when_the_file_changed_underneath(self):
         c = Conscience(self.store)

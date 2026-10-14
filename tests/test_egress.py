@@ -423,8 +423,13 @@ class TheScanKnowsHowPeopleWriteSecrets(EgressTest):
         self.assertEqual(r["conscience"][0], 200, r)
         facts = [f["fact"] for f in r["conscience"][1]["facts"]]
         self.assertIn("Anna visits on Sundays", facts)
-        self.assertIn("Le code de l'alarme est [hidden: looks like a PIN or a door, alarm or "
-                      "lock code]", facts)
+        # (Life package, October 2026, I-11: a fact about the safety of his
+        # home is private now, so a guest key is not sent it at all — this
+        # used to expect it here with the code hidden. The card line still
+        # goes, with the number hidden.)
+        self.assertFalse(any("alarme" in f for f in facts), facts)
+        self.assertEqual(r["conscience"][1]["held_back"]["private"], 1)
+        self.assertTrue(any(f.startswith("Visa [hidden: looks like") for f in facts), facts)
         self.assertIn("/secrets", r["conscience"][1]["kept_home"])
         self.assertEqual(r["profile"][0], 200, r)
         self.assertEqual(r["profile"][1]["city"], "Ottawa")

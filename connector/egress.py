@@ -74,7 +74,7 @@ ANY = "*any*"        # keys are the owner's own field names (get_profile) —
 # kept_home: the door's own plain note when part of an answer looked like a
 # secret and was hidden (see kept_home_note).
 COMMON = frozenset({"error", "note", "rule", "reason", "refused", "tool",
-                    "tell_the_user", "kept_home"})
+                    "tell_the_user", "kept_home", "trimmed"})
 
 # Tools that only READ what the engine hands them: they analyse it, answer,
 # and keep none of it (I-14). A secret-shaped string handed to one of these
@@ -86,7 +86,7 @@ COMMON = frozenset({"error", "note", "rule", "reason", "refused", "tool",
 READS_ONLY = frozenset({
     "triage_message", "draft_guidance", "score_opportunity", "explain_basis",
     "priorities_for", "check_disclosure", "guidance_for", "fill_form",
-    "pdf_form_fields", "tell_story", "selfcloud_check_access",
+    "pdf_form_fields", "tell_story", "selfcloud_check_access", "check_draft",
     # the first step of a removal keeps nothing of what was asked: the log
     # keeps only a fingerprint (FINGERPRINT_ARGS), the pending code only ids
     "forget", "forget_life", "close_goal", "conscience_exclude", "remove_rule",
@@ -111,6 +111,13 @@ FINGERPRINT_ARGS: dict[str, tuple[str, ...]] = {
     "forget_profile_field": ("field",),
 }
 
+# What a value carries out (I-48): the evidence for and against, whether he
+# stated it (locked against inference), whether an AI wrote it unconfirmed,
+# and any question it raises for him.
+_PRIORITY = frozenset({"id", "context", "higher", "lower", "confidence", "evidence",
+                       "updated", "for", "against", "stated", "locked", "unconfirmed",
+                       "question_for_owner", "proposed_change"})
+
 RELEASE: dict[str, frozenset[str]] = {
     # identity
     "get_directives": frozenset({TEXT, "directives"}),
@@ -118,22 +125,29 @@ RELEASE: dict[str, frozenset[str]] = {
     # not the engine's business.
     # notices: JEFFEREY's own plain words about the store (a recovery, a
     # restore, an edit by hand) — the owner must hear them, so they go out.
+    # A page at a time, private facts counted not shown (I-11, I-41).
     "get_conscience": frozenset({"owner", "priorities", "facts", "active_goals",
-                                 "corrections_learned_from", "notices"}),
-    # values and how they are learned
-    "record_correction": frozenset({"id", "context", "higher", "lower",
-                                    "confidence", "evidence", "updated"}),
-    "set_priority": frozenset({"id", "context", "higher", "lower", "confidence",
-                               "evidence", "updated"}),
-    # facts only reach a key that may read facts (conscience.explain_basis)
-    "explain_basis": frozenset({"topic", "priorities", "facts"}),
-    "priorities_for": frozenset({"id", "context", "higher", "lower", "confidence",
-                                 "evidence", "updated"}),
+                                 "corrections_learned_from", "notices",
+                                 "more_priorities", "more_facts", "how_to_see_more",
+                                 "held_back", "waiting_for_owner"}),
+    # values and how they are learned: for and against counted apart, a
+    # stated value locked against inference, a reversal logged (I-48)
+    "record_correction": frozenset(_PRIORITY | {"flipped", "already_counted"}),
+    "set_priority": frozenset(_PRIORITY | {"reversed", "changed"}),
+    # facts only reach a key that may read facts (conscience.explain_basis);
+    # whole words, each with why it matched (I-28)
+    "explain_basis": frozenset({"topic", "priorities", "facts", "more_facts",
+                                "how_to_see_more", "held_back"}),
+    "priorities_for": frozenset(_PRIORITY | {"match_reason"}),
+    # what his rules let this recipient be told (I-24)
     "draft_guidance": frozenset({"purpose", "recipient", "write_as",
                                  "their_priorities_here", "their_facts_here",
-                                 "voice", "rules"}),
+                                 "voice", "voice_is", "rules", "disclosure",
+                                 "speak_of_them_this_way", "meeting_safety"}),
+    "check_draft": frozenset({"ok", "audience", "problems", "advice"}),
     # facts, profile, rules, the daily brief
-    "remember_fact": frozenset({"id", "fact", "category", "added"}),
+    "remember_fact": frozenset({"id", "fact", "category", "added", "visibility",
+                                "sensitivity", "status"}),
     "forget": FORGET | {"removed_facts"},
     "get_profile": frozenset({ANY}),
     # a change to who the owner is comes back as a question first (I-30)
@@ -168,7 +182,8 @@ RELEASE: dict[str, frozenset[str]] = {
                              "instruction", "added"}),
     "daily_brief": frozenset({"orb", "active_goals", "opportunities",
                               "recent_actions", "recent_observations",
-                              "corrections_learned_from", "notices"}),
+                              "corrections_learned_from", "notices",
+                              "held_back", "waiting_for_owner"}),
     "orb_state": frozenset({"mood"}),
     # goals and the opportunity engine
     "add_goal": frozenset({"id", "goal", "added", "active"}),
@@ -210,22 +225,33 @@ RELEASE: dict[str, frozenset[str]] = {
                                "charges_in_dispute", "amount_in_dispute",
                                "full_history", "how_to_use"}),
     # the representative reading their mail
-    "triage_message": frozenset({"sender", "subject", "verdict", "scam_score",
+    "triage_message": frozenset({"sender", "subject", "verdict", "interrupt",
+                                 "safety_flags", "scam_score",
                                  "scam_flags", "billing_score", "billing_flags",
                                  "money_mentioned", "deadlines",
                                  "relevant_priorities", "advice"}),
     # the life layer
+    # a person is never overwritten by another of the same name (I-27)
     "add_person": frozenset({"id", "name", "relationship", "notes",
-                             "important_dates", "added", "updated"}),
+                             "important_dates", "visibility", "added", "updated",
+                             "matched_existing", "changed", "possible_duplicate_of"}),
+    "update_person": frozenset({"id", "name", "relationship", "notes",
+                                "important_dates", "visibility", "added", "updated",
+                                "changed"}),
+    # an AI's write is private, and verbatim only when it is his words (I-25, I-26)
     "add_memory": frozenset({"id", "text", "when", "people", "tags", "visibility",
-                             "added", "photos"}),
+                             "added", "photos", "verbatim", "status",
+                             "requested_visibility"}),
     "add_media": frozenset({"id", "path", "caption", "when", "people", "visibility",
-                            "reachable", "added"}),
+                            "reachable", "added", "requested_visibility"}),
+    "set_visibility": frozenset({"changed", "not_changed", "needs_owner"}),
+    # his rules applied, legacy sealed, a page at a time (I-10, I-41)
     "who_am_i": frozenset({"people_who_matter", "moments",
                            "pictures_and_recordings", "what_they_value", "facts",
-                           "depth"}),
+                           "depth", "held_back", "legacy", "more", "how_to_see_more"}),
     "tell_story": frozenset({"theme", "visible_at", "moments", "pictures",
-                             "people", "how_to_tell_it"}),
+                             "people", "how_to_tell_it", "held_back", "legacy", "more",
+                             "how_to_see_more"}),
     "story_gaps": frozenset({"gaps"}),
     "forget_life": FORGET | {"memories_removed", "media_removed",
                              "people_removed", "names_taken_off"},
@@ -1022,6 +1048,14 @@ def engine_for(client: str) -> str:
     return "an unknown host"
 
 
+def in_the_house() -> bool:
+    """Is the far end a model on this very machine? (The terminal names a
+    local engine '… on this machine (local — stays in the house)'.) Only
+    then may the caretaker key be handed the owner's private facts in bulk
+    (I-11); anywhere else they go only when a question names them."""
+    return bool(_ENGINE) and "stays in the house" in _ENGINE
+
+
 def switch_path() -> Path:
     return home.door_switch_path()
 
@@ -1472,6 +1506,61 @@ def _filter(tool: str, out):
     return out, []
 
 
+# No single answer may be bigger than this (I-41): at 5,000 facts and 500
+# memories who_am_i was a million characters, far past what any engine can
+# read in one turn — and a local model quietly cuts off the start, which is
+# where JEFFEREY's own rules are. The tools page their answers; this is the
+# backstop for anything that still grows too long.
+RESULT_BUDGET = 96 * 1024
+
+
+def _size(obj) -> int:
+    return len(json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def fit(out, budget: int = RESULT_BUDGET):
+    """Make a result fit the budget by leaving off the END of its longest
+    lists (most relevant first, so the end matters least), then shortening
+    any very long text. Returns (result, [what was cut]). A result that fits
+    is returned untouched."""
+    if _size(out) <= budget:
+        return out, []
+    cut: dict[str, int] = {}
+    if isinstance(out, list):
+        items = list(out)
+        while items and _size(items) > budget:
+            drop = max(1, len(items) // 4)
+            del items[-drop:]
+            cut["the list"] = cut.get("the list", 0) + drop
+        return items, [f"{n} items of {k}" for k, n in cut.items()]
+    if not isinstance(out, dict):
+        return out, []
+    res = dict(out)
+    for _ in range(200):
+        if _size(res) <= budget:
+            break
+        lists = [(k, v) for k, v in res.items() if isinstance(v, list) and v]
+        if lists:
+            k, v = max(lists, key=lambda kv: _size(kv[1]))
+            drop = max(1, len(v) // 4)
+            res[k] = v[:-drop]
+            cut[k] = cut.get(k, 0) + drop
+            continue
+        texts = [(k, v) for k, v in res.items() if isinstance(v, str) and len(v) > 2000]
+        if not texts:
+            break
+        k, v = max(texts, key=lambda kv: len(kv[1]))
+        res[k] = v[: max(2000, len(v) // 2)] + " …"
+        cut[k] = cut.get(k, 0)
+    res["trimmed"] = {
+        "left_off": {k: n for k, n in cut.items() if n},
+        "why": ("This answer was too long for one turn, so the end of it was left off. "
+                "Ask again with a smaller limit or a later offset, or ask about one "
+                "subject at a time."),
+    }
+    return res, [f"{n} items of {k}" if n else f"the end of {k}" for k, n in cut.items()]
+
+
 def admit(tool: str, asked) -> None:
     """The other direction of the same door: what the engine HANDS IN.
 
@@ -1593,6 +1682,10 @@ def release(tool: str, out, asked=None):
             kept["kept_home"] = kept_home_note(found)
         withheld = list(withheld) + [f"{where} (hidden: looked like {what})"
                                      for where, what in found]
+    kept, cut = fit(kept)
+    if cut:
+        withheld = list(withheld) + [f"{where} (left off: too long for one answer)"
+                                     for where in cut]
     _write_or_refuse(_entry("tool_result", tool=tool, sent=_dumps(kept),
                             asked=_describe(asked, tool), withheld=withheld,
                             refused=None))

@@ -225,6 +225,21 @@ Moving money, gift cards, crypto, phone calls in your voice and the doors are
 never allowed, whatever you type. Anything that repeats (a subscription) he
 always brings to you.
 
+### Who may see what
+
+Whatever an AI writes down is kept private, and marked "not yet confirmed"
+unless it is word for word what you typed here. Your health, money,
+children, the safety of your home and other people's secrets are never sent
+to a plain Claude or ChatGPT. Only you let more people see something:
+
+| Type | It means |
+|---|---|
+| `/pending` | what an AI wrote down, or asked to share, that waits for your OK |
+| `/confirm f-1a2b3c` (or `/confirm all`) | yes, that is right |
+| `/share m-1a2b3c family` | your family's key may read this moment (`private` takes it back) |
+| `/legacy`, `/legacy open executor`, `/legacy seal` | what you meant for after: sealed until you open it, to the keys you name |
+| `/grant mira family.read` | give one family member her own key, so your rules about Mira apply to her |
+
 ---
 
 ## Every button

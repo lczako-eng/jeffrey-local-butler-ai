@@ -29,6 +29,10 @@ In-chat commands:
                   change what JEFFEREY may do — e.g. /permit groceries act 100
                   per week, /permit selling act at least 500, /permit
                   payments recommend. You are asked to confirm first.
+    /pending      what an AI wrote down that waits for your OK
+    /confirm CODE yes, that is right (or /confirm all)
+    /share CODE family|legacy|engines   let more people see something
+    /legacy       what you meant for after: /legacy open executor, /legacy seal
     /keys         every key to your Self-Cloud
     /grant NAME [SCOPES]   give out a key        (you are asked first)
     /scope add|remove NAME SCOPE                 (you are asked first)
@@ -66,9 +70,11 @@ import access
 import egress
 from access import AccessDenied, OwnerOnly
 from egress import EgressRefused
+import provenance
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 4096
+PROMPT_FACTS, PROMPT_PRIORITIES = 30, 15     # the system prompt is a summary (I-41)
 
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
@@ -139,9 +145,12 @@ TOOLS = [
         "description": (
             "THE core learning act. The user overrode a recommendation — learn "
             "WHY. Record which value they were protecting and which they traded "
-            "away in this context. Consistent evidence raises confidence; "
-            "contradictions erode and can flip the hierarchy. Tell the user "
-            "what you learned and the confidence you now hold."
+            "away in this context (a real subject, never 'general'). Evidence for "
+            "and against is counted separately; a learned value turns round only "
+            "when the choices against it outweigh the ones for it. A value he "
+            "STATED is never reversed this way: you get a question_for_owner to "
+            "ask him. The same correction twice in one conversation counts once. "
+            "Tell the user what you learned and the confidence you now hold."
         ),
         "input_schema": {
             "type": "object",
@@ -162,9 +171,11 @@ TOOLS = [
         "name": "set_priority",
         "description": (
             "The user explicitly stated a priority (e.g. context='travel', "
-            "higher='direct flights', lower='saving money'). Store it with the "
-            "given confidence (0-1). Use record_correction instead when "
-            "learning from an override."
+            "higher='direct flights', lower='saving money'). The context must "
+            "name a subject. You may claim at most 0.6 confidence; he confirms "
+            "it higher himself. Reversing something he stated himself only "
+            "works in his own words; otherwise it becomes a question for him. "
+            "Use record_correction instead when learning from an override."
         ),
         "input_schema": {
             "type": "object",
@@ -182,7 +193,9 @@ TOOLS = [
         "description": (
             "Remember a durable FACT about the user (people, dates, situations, "
             "constraints). Facts are stored separately from values. Ask before "
-            "remembering anything sensitive."
+            "remembering anything sensitive: health, money, children, the safety "
+            "of his home and other people's confidences are kept private "
+            "automatically. Use his own words where you can."
         ),
         "input_schema": {
             "type": "object",
@@ -206,13 +219,17 @@ TOOLS = [
         "name": "explain_basis",
         "description": (
             "Before recommending anything, fetch the user's OWN priorities and "
-            "facts relevant to this topic, and ground the recommendation "
+            "facts relevant to this topic (whole words, each with why it "
+            "matched, most relevant first; his private facts only when the "
+            "topic names them — 'my medications'). Ground the recommendation "
             "strictly in what this returns. If it returns nothing relevant, "
             "say you don't yet know their values here, and ask."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"topic": {"type": "string"}},
+            "properties": {"topic": {"type": "string"},
+                           "limit": {"type": "integer", "default": 10},
+                           "offset": {"type": "integer", "default": 0}},
             "required": ["topic"],
         },
     },
@@ -404,9 +421,11 @@ TOOLS = [
         "name": "draft_guidance",
         "description": (
             "Call BEFORE writing anything in the user's name (an email, a "
-            "letter, a complaint, a cancellation). Returns their voice, the "
-            "priorities and facts that apply here, who to sign as, and the "
-            "hard limits. Write the draft from this, then show it to them."
+            "letter, a complaint, a cancellation), with the recipient as it "
+            "will appear. Returns their voice, the priorities and facts that "
+            "apply here, who to sign as, the hard limits, and what his own "
+            "rules keep from this recipient (do_not_mention). Write the draft "
+            "from this, run check_draft, then show it to them."
         ),
         "input_schema": {
             "type": "object",
@@ -415,6 +434,22 @@ TOOLS = [
                 "recipient": {"type": "string"},
             },
             "required": ["purpose"],
+        },
+    },
+    {
+        "name": "check_draft",
+        "description": (
+            "Check a draft BEFORE showing or sending it: his rules for this "
+            "person, his private facts, and his safety (never when he is "
+            "home, alone or away, or how to get in). Fix every problem it lists."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "audience": {"type": "string"},
+            },
+            "required": ["text"],
         },
     },
     {
@@ -599,7 +634,9 @@ TOOLS = [
         "description": (
             "Record someone who matters to the user — family, friends, the "
             "people they'd want remembered. Only when they offer it; never "
-            "interrogate."
+            "interrogate. The same name with a different relationship is a "
+            "separate person (possible_duplicate_of tells you); the same person "
+            "gets new notes added, never replaced. Tell him which happened."
         ),
         "input_schema": {
             "type": "object",
@@ -613,12 +650,47 @@ TOOLS = [
         },
     },
     {
+        "name": "update_person",
+        "description": (
+            "Change one person, by id. Notes and dates are added, dated; a "
+            "changed name or relationship keeps what it was. Only what he told you."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "person_id": {"type": "string"},
+                "name": {"type": "string"},
+                "relationship": {"type": "string"},
+                "notes": {"type": "string"},
+                "important_dates": {"type": "string"},
+            },
+            "required": ["person_id"],
+        },
+    },
+    {
+        "name": "set_visibility",
+        "description": (
+            "Who may see something, by id: a fact ('private', 'engines', "
+            "'family', 'legacy'), or a moment, picture or person ('private', "
+            "'family', 'legacy'). More private: done at once. Less private: "
+            "only he can, typing /share himself — the answer says how."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ids": {"type": "array", "items": {"type": "string"}},
+                "visibility": {"type": "string"},
+            },
+            "required": ["ids", "visibility"],
+        },
+    },
+    {
         "name": "add_memory",
         "description": (
             "Record a snippet of the user's life in their own words — a "
             "moment, a turning point, a lesson, a joke only their family "
-            "gets. visibility: 'private' (you only), 'family', or 'legacy' "
-            "(meant to outlive them). Never invent one."
+            "gets. It is kept PRIVATE whatever visibility you pass; only he "
+            "shares it (/share). Use his exact words; never invent one."
         ),
         "input_schema": {
             "type": "object",
@@ -656,9 +728,12 @@ TOOLS = [
         "description": (
             "What you understand about this person as a human being: who "
             "matters to them, the moments recorded, the pictures, what they "
-            "value. Speak from this — never invent a memory or a feeling."
+            "value. Speak from this — never invent a memory or a feeling. "
+            "The most recent moments first, a page at a time (offset for older)."
         ),
-        "input_schema": {"type": "object", "properties": {}},
+        "input_schema": {"type": "object", "properties": {
+            "limit": {"type": "integer", "default": 50},
+            "offset": {"type": "integer", "default": 0}}},
     },
     {
         "name": "tell_story",
@@ -670,7 +745,9 @@ TOOLS = [
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"theme": {"type": "string"}},
+            "properties": {"theme": {"type": "string"},
+                           "limit": {"type": "integer", "default": 50},
+                           "offset": {"type": "integer", "default": 0}},
         },
     },
     {
@@ -757,8 +834,9 @@ TOOLS = [
         "name": "record_story",
         "description": (
             "Keep what they said about a moment VERBATIM, pinned to those "
-            "photographs, permanently. Returns one gentle follow-up — ask it "
-            "or let it go, never two."
+            "photographs, permanently, privately. If it comes back with "
+            "verbatim false, it is a summary, not his words — tell him so. "
+            "Returns one gentle follow-up — ask it or let it go, never two."
         ),
         "input_schema": {
             "type": "object",
@@ -803,8 +881,8 @@ TOOLS = [
     {
         "name": "record_answer",
         "description": (
-            "Keep what they said, in their own words, under the visibility "
-            "they chose. If they deflected, pass declined=true — their 'no' "
+            "Keep what they said, in their own words, privately (only he "
+            "shares it). If they deflected, pass declined=true — their 'no' "
             "is a complete answer and the question is retired permanently."
         ),
         "input_schema": {
@@ -1023,7 +1101,8 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
         return conscience.forget_fact(args.get("contains", ""), args.get("ids"),
                                       args.get("confirm", ""))
     if name == "explain_basis":
-        return conscience.explain_basis(args["topic"])
+        return conscience.explain_basis(args["topic"], args.get("limit"),
+                                        args.get("offset", 0))
     if name == "priorities_for":
         return conscience.priorities_for(args.get("context") or None)
     if name == "add_goal":
@@ -1066,6 +1145,8 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
             args.get("sender", ""), args.get("subject", ""), args["body"])
     if name == "draft_guidance":
         return rep.draft_guidance(args["purpose"], args.get("recipient", ""))
+    if name == "check_draft":
+        return rep.check_draft(args["text"], args.get("audience", ""))
     if name == "fill_form":
         return rep.fill_form([str(f) for f in args["fields"]])
     if name == "pdf_form_fields":
@@ -1099,6 +1180,12 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "add_person":
         return life.add_person(args["name"], args["relationship"],
                                args.get("notes", ""), args.get("important_dates", ""))
+    if name == "update_person":
+        return life.update_person(args["person_id"], args.get("name", ""),
+                                  args.get("relationship", ""), args.get("notes", ""),
+                                  args.get("important_dates", ""))
+    if name == "set_visibility":
+        return life.set_visibility(args.get("ids") or [], args["visibility"])
     if name == "add_memory":
         return life.add_memory(args["text"], args.get("when", ""), args.get("people", ""),
                                args.get("tags", ""), args.get("visibility", "private"))
@@ -1106,9 +1193,10 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
         return life.add_media(args["path"], args.get("caption", ""), args.get("when", ""),
                               args.get("people", ""), args.get("visibility", "private"))
     if name == "who_am_i":
-        return life.who_am_i(access.ceiling())
+        return life.who_am_i(access.ceiling(), args.get("limit"), args.get("offset", 0))
     if name == "tell_story":
-        return life.tell_story(access.ceiling(), args.get("theme", ""))
+        return life.tell_story(access.ceiling(), args.get("theme", ""), args.get("limit"),
+                               args.get("offset", 0))
     if name == "story_gaps":
         return life.story_gaps()
     if name == "forget_life":
@@ -1169,14 +1257,24 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
 # A quiet one-line trace so the user SEES the conscience working.
 _TRACE = {
     "record_correction": lambda a, r: (
+        "already counted this one — it counts once" if r.get("already_counted") else
         f"learned: {r.get('higher')} > {r.get('lower')} "
-        f"[{a.get('context')}] · confidence {r.get('confidence')}"
+        f"[{a.get('context')}] · confidence {r.get('confidence')} "
+        f"({r.get('for', 0)} for, {r.get('against', 0)} against)"
+        + (" · you said otherwise before — I will ask you" if r.get("question_for_owner")
+           else "")
     ),
     "set_priority": lambda a, r: (
+        f"not changed: you said the opposite yourself — I will ask you"
+        if r.get("changed") is False else
         f"stored: {r.get('higher')} > {r.get('lower')} "
         f"[{a.get('context')}] · confidence {r.get('confidence')}"
+        + (f" (was {r['reversed']['was']} — logged)" if r.get("reversed") else "")
     ),
-    "remember_fact": lambda a, r: f"remembered: {a.get('fact')}",
+    "remember_fact": lambda a, r: (
+        f"remembered{' (private)' if r.get('visibility') == 'private' else ''}"
+        f"{' — not yet confirmed by you (/pending)' if r.get('status') == 'pending' else ''}: "
+        f"{a.get('fact')}"),
     "forget": lambda a, r: _forget_trace(r, "fact(s)"),
     "explain_basis": lambda a, r: f"checking your values on: {a.get('topic')}",
     "priorities_for": lambda a, r: "reading your hierarchy",
@@ -1205,7 +1303,13 @@ _TRACE = {
         f"triaged [{r.get('verdict')}]: {a.get('subject') or a.get('sender') or 'message'}"
         + (f" · scam signals {r.get('scam_score')}" if r.get('scam_score') else "")
     ),
-    "draft_guidance": lambda a, r: f"drafting on your behalf: {a.get('purpose')}",
+    "draft_guidance": lambda a, r: (
+        f"drafting on your behalf: {a.get('purpose')}"
+        + (f" · keeping {', '.join(r['disclosure']['do_not_mention'])} out of it, as you asked"
+           if (r.get("disclosure") or {}).get("do_not_mention") else "")),
+    "check_draft": lambda a, r: (
+        "draft checked: nothing against your rules or your safety" if r.get("ok")
+        else f"draft checked: {len(r.get('problems', []))} thing(s) to fix before you see it"),
     "fill_form": lambda a, r: f"form filled {r.get('coverage')} from your profile",
     "pdf_form_fields": lambda a, r: f"read {r.get('count')} PDF fields",
     "fill_pdf": lambda a, r: (
@@ -1238,9 +1342,21 @@ _TRACE = {
     "dispute_pack": lambda a, r: (
         f"dispute pack: {a.get('merchant')} · ${r.get('amount_in_dispute', 0)}"
     ),
-    "add_person": lambda a, r: f"remembered {a.get('name')} ({a.get('relationship')})",
+    "add_person": lambda a, r: (
+        f"already knew {a.get('name')} ({a.get('relationship')}) — added what was new"
+        if r.get("matched_existing") else
+        f"remembered {a.get('name')} ({a.get('relationship')})"
+        + (" — kept apart from the other "
+           f"{a.get('name')}" if r.get("possible_duplicate_of") else "")),
+    "update_person": lambda a, r: f"updated {r.get('name')}: {', '.join(r.get('changed', []))}",
+    "set_visibility": lambda a, r: (
+        f"made more private: {len(r.get('changed', []))}"
+        + (f" · only you can share {len(r['needs_owner'])} — type /share"
+           if r.get("needs_owner") else "")),
     "add_memory": lambda a, r: (
-        f"kept a moment [{a.get('visibility','private')}]: {str(a.get('text',''))[:52]}…"
+        f"kept a moment [{r.get('visibility', 'private')}]"
+        + ("" if r.get("verbatim") else " — a summary, not your exact words")
+        + f": {str(a.get('text',''))[:52]}…"
     ),
     "add_media": lambda a, r: (
         f"linked {a.get('path')}"
@@ -1269,8 +1385,13 @@ _TRACE = {
         f"opening the album: {r.get('label')} ({r.get('photos')} photos)"
         if r.get("moment_id") else f"album: {r.get('note')}"
     ),
+    # 'his words' only when they were (I-25: a local model's paraphrase was
+    # announced as 'kept his words')
     "record_story": lambda a, r: (
-        f"kept his words, pinned to {r.get('pinned_to_photos')} photos"
+        (f"kept his words, pinned to {r.get('pinned_to_photos')} photos"
+         if (r.get("memory") or {}).get("verbatim") else
+         f"kept a summary in the AI's words — not his exact words — pinned to "
+         f"{r.get('pinned_to_photos')} photos (/pending to check it)")
         if r.get("kept") else f"not kept: {r.get('error')}"
     ),
     "decline_story": lambda a, r: "he'd rather not — never again",
@@ -1284,6 +1405,8 @@ _TRACE = {
     ),
     "record_answer": lambda a, r: (
         f"kept what you said ({r.get('recorded')})"
+        if (r.get("kept_as") or {}).get("verbatim", True) else
+        f"kept a summary of what you said ({r.get('recorded')}) — not your exact words"
     ),
     "interview_progress": lambda a, r: (
         f"knows you: {r.get('answered')} answered, {r.get('locked_deeper')} still locked"
@@ -1331,14 +1454,21 @@ def system_prompt() -> str:
     # Anything in his memories that looks like a secret (an alarm code noted
     # before the scan knew French, a card number typed by hand) is hidden
     # here, field by field; the door hides it again in the text as a backstop.
-    snap, _ = egress.mask(conscience.snapshot())
+    # Only the values he holds most surely and his newest facts — the rest is
+    # one tool call away (I-41: at 5,000 facts the whole store was ~226,000
+    # tokens, past any engine, and a local model cut off the rules at the top).
+    # Private facts go in only for a model on this Mac (I-11); never the
+    # place his memories are kept on his drive.
+    snap, _ = egress.mask(conscience.snapshot(PROMPT_FACTS, 0, PROMPT_PRIORITIES))
     return (
         DIRECTIVES
         + "\n\n## Live conscience (loaded this session — the user owns every byte)\n\n"
-        + "```json\n" + json.dumps(snap, indent=2, ensure_ascii=False) + "\n```\n\n"
-        + "The conscience tools write to this same store. Use them: corrections "
-        + "are the curriculum, and anything worth keeping must be written down — "
-        + "the engine forgets, the conscience does not."
+        + "```json\n" + json.dumps(snap, indent=1, ensure_ascii=False) + "\n```\n\n"
+        + "This is only the start of what he has told JEFFEREY: before you recommend, "
+        + "draft or remember anything, call explain_basis about the subject (and "
+        + "who_am_i for his life story). The conscience tools write to this same "
+        + "store. Use them: corrections are the curriculum, and anything worth "
+        + "keeping must be written down — the engine forgets, the conscience does not."
     )
 
 
@@ -1435,6 +1565,14 @@ def make_client():
 LOCAL_URL = os.environ.get("JEFFEREY_LOCAL_URL", "http://127.0.0.1:11434/v1")
 LOCAL_MODEL = os.environ.get("JEFFEREY_LOCAL_MODEL", "hermes3")
 LOCAL_MAX_ROUNDS = 12        # small models can loop on tools; stop and say so
+# How much a local model reads at once, in tokens (I-41: no context length
+# was ever sent, so Ollama's small default silently cut off the start of the
+# prompt — where JEFFEREY's own rules are). Sent with every request; when a
+# turn would not fit, older tool results are shortened and he is told.
+LOCAL_CTX = int(os.environ.get("JEFFEREY_LOCAL_CTX", "32768") or 32768)
+LOCAL_KEEP_RESULTS = 4       # the newest tool results are always kept whole
+_SHORTENED = json.dumps({"note": "An earlier result, shortened to leave room. Call the "
+                                 "tool again if you need it."})
 
 
 def is_this_machine(url: str) -> bool:
@@ -1471,16 +1609,47 @@ def local_engine_label(model: str, url: str) -> str:
     return f"{model} at {urlparse(url).hostname} (another machine — not this house's box)"
 
 
+def _tokens(obj) -> int:
+    """A rough count: about four characters to a token."""
+    return len(json.dumps(obj, ensure_ascii=False)) // 4
+
+
+def fit_local(system: str, history: list, ctx: int = LOCAL_CTX) -> bool:
+    """Make one local request fit the model's reading window: shorten the
+    oldest tool results (never the newest few, never what he typed). True
+    when it still does not fit, so he can be told."""
+    budget = int(ctx * 0.85)
+
+    def size() -> int:
+        return _tokens(system) + _tokens(history) + _tokens(openai_tools())
+
+    olds = [i for i, m in enumerate(history) if m.get("role") == "tool"][:-LOCAL_KEEP_RESULTS]
+    for i in olds:
+        if size() <= budget:
+            break
+        if len(str(history[i].get("content", ""))) > len(_SHORTENED):
+            history[i]["content"] = _SHORTENED
+    return size() > budget
+
+
 def run_turn_local(history: list, model: str = LOCAL_MODEL, url: str = LOCAL_URL) -> None:
     """One user turn against an owned model. Every tool call goes through the
     same two doors as the rented engine: the access gate in, egress out."""
     endpoint = url.rstrip("/") + "/chat/completions"
+    warned = False
     for _ in range(LOCAL_MAX_ROUNDS):
         system = egress.system_prompt_once(system_prompt())
+        if fit_local(system, history) and not warned:
+            warned = True
+            print(f"{DIM}(this conversation is now longer than the local AI can read at "
+                  f"once; it may forget the start. Type /quit and start again if it "
+                  f"seems confused.){RESET}")
         payload = egress.request({
             "model": model,
             "messages": [{"role": "system", "content": system}] + history,
             "tools": openai_tools(),
+            # Ollama reads this; other servers ignore it
+            "options": {"num_ctx": LOCAL_CTX},
         }, model)
         msg = _post_local(endpoint, payload)["choices"][0]["message"]
         text = (msg.get("content") or "").strip()
@@ -1552,7 +1721,7 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         print(f"\n  ⚠  {e.for_owner()}\n")
         print("  Type /history to see the copies kept, and /restore <number> to "
               "put one back.\n")
-    snap = conscience.snapshot()
+    snap = conscience.owner_view()
     print(f"{BOLD}JEFFEREY{RESET} — Personal AI Shadow™")
     print(f"{DIM}engine: {engine_line} · conscience: {snap['store_path']} (owned)")
     print(
@@ -1560,6 +1729,9 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         f"{len(snap['facts'])} facts · {len(snap['active_goals'])} active goals · "
         f"learned from {snap['corrections_learned_from']} corrections{RESET}"
     )
+    if snap["waiting_for_you"]:
+        print(f"{DIM}{len(snap['waiting_for_you'])} thing(s) an AI wrote down wait for "
+              f"your OK — type /pending to see them{RESET}")
 
     print(f"{DIM}egress: {'SHUT — nothing will leave' if egress.is_shut() else 'open'} · "
           f"log: {egress.log_path()}{RESET}")
@@ -1572,6 +1744,7 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         except EgressRefused as e:
             kept_home_paste(once, e)
             return
+        provenance.owner_typed(once)
         try:
             turn(history)
         except EgressRefused as e:
@@ -1595,7 +1768,7 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
             print(f"{DIM}Jefferey stays. See you next session.{RESET}")
             return
         if user.lower() == "/conscience":
-            print(json.dumps(conscience.snapshot(), indent=2, ensure_ascii=False))
+            print(json.dumps(conscience.owner_view(), indent=2, ensure_ascii=False))
             continue
         if user.lower() in ("/egress", "/left", "/what left the house"):
             print(egress.report(7))
@@ -1612,6 +1785,9 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         if user.lower().split(" ", 1)[0] == "/secrets":
             owner_secrets(user)       # the owner's hands only; never a model tool
             continue
+        if user.lower().split(" ", 1)[0] in _LIFE_COMMANDS:
+            owner_life(user)          # the owner's hands only; never a model tool
+            continue
         try:
             history.append({"role": "user", "content": egress.release_text("you_said", user)})
         except EgressRefused as e:
@@ -1620,6 +1796,9 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
             # — but he still gets an answer about it, from this Mac (I-14).
             kept_home_paste(user, e)
             continue
+        # His own words, this session: what an AI writes down is marked as
+        # his only when it is word for word what he typed here (I-25).
+        provenance.owner_typed(user)
         try:
             turn(history)
         except EgressRefused as e:
@@ -1741,6 +1920,7 @@ def owner_secrets(command: str, answer=input) -> dict | None:
 
 
 _FORGET_COMMANDS = ("/removed", "/approve", "/bringback", "/erase")
+_LIFE_COMMANDS = ("/pending", "/confirm", "/share", "/legacy")
 _OWNER_COMMANDS = ("/permit", "/permissions", "/keys", "/grant", "/scope", "/revoke")
 _LEVEL_WORDS = {"act": "act", "recommend": "recommend", "observe": "observe",
                 "watch": "observe", "off": "recommend", "stop": "recommend",
@@ -1943,6 +2123,106 @@ def owner_command(command: str, answer=input, tty: bool | None = None) -> dict |
     return None
 
 
+def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | None:
+    """/pending, /confirm, /share, /legacy — typed by the OWNER at this
+    terminal. Deliberately not tools: what an AI wrote down becomes his only
+    with his own yes (I-25), letting more people see something is his own
+    act (I-26), and what he meant for after is opened by him alone (I-10)."""
+    verb, _, rest = command.strip().partition(" ")
+    verb, rest = verb.lower(), rest.strip()
+    try:
+        conscience.refresh()
+    except StoreProblem as e:
+        print(f"  {e.for_owner()}")
+        return None
+    try:
+        if verb == "/pending" or (verb == "/confirm" and not rest):
+            items = conscience.pending_items()
+            if not items:
+                print("  Nothing is waiting for you. Everything kept is in your own words "
+                      "or you have confirmed it.")
+                return {"pending": []}
+            print(f"  {len(items)} thing(s) wait for your OK:")
+            for it in items:
+                print(f"    {it['id']}  ({it['kind']}) {it['what'][:110]}")
+                print(f"          — {it['why']}")
+            print("  If one is right, type /confirm and its code (or /confirm all). If one "
+                  "is wrong, ask JEFFEREY to forget it. To let more people see something, "
+                  "type /share and its code, then who (family, legacy, engines).")
+            return {"pending": items}
+        if verb == "/confirm":
+            ids = rest.split()
+            print("  You are confirming " + ("everything listed by /pending" if ids == ["all"]
+                                            else ", ".join(ids)) + " as right.")
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                return None
+            with access.owner_console():
+                res = conscience.confirm(ids)
+            print(f"  Done. Confirmed {len(res['confirmed'])}."
+                  + (f" No such code: {', '.join(res['unknown_ids'])}." if res["unknown_ids"] else ""))
+            return res
+        if verb == "/share":
+            parts = rest.split()
+            if len(parts) < 2:
+                print("  Type it like this:  /share m-1a2b3c family   (or legacy, private, "
+                      "or engines for a fact). /pending shows what an AI asked to share.")
+                return None
+            ids, level = parts[:-1], parts[-1].lower()
+            print(f"  From now on, {', '.join(ids)} will be '{level}'"
+                  + (": only JEFFEREY and you." if level == "private" else
+                     ": the keys you gave your family may read it." if level == "family" else
+                     ": sealed until you open what you meant for after (/legacy)."
+                     if level == "legacy" else
+                     ": any AI you gave a key that reads facts may see it." if level == "engines"
+                     else "."))
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                return None
+            with access.owner_console():
+                res = conscience.set_visibility(ids, level)
+            for c in res.get("changed", []):
+                print(f"  Done: {c['id']} is now {c['to']} (was {c['from']}).")
+            for n in res.get("not_changed", []):
+                print(f"  Not changed: {n['id']} — {n['why']}.")
+            return res
+        if verb == "/legacy":
+            parts = rest.split()
+            st = life.legacy_state()
+            if not parts:
+                print("  What you meant for after is "
+                      + (f"open to: {', '.join(st['to'])} (since {str(st['on'])[:10]})."
+                         if st["released"] else "sealed. Nobody can read it until you open it."))
+                print("  To open it: /legacy open executor   (or the names of the keys).  "
+                      "To seal it again: /legacy seal")
+                return st
+            if parts[0].lower() == "seal":
+                print("  Seal what you meant for after, so no key can read it.")
+                if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                    return None
+                with access.owner_console():
+                    res = life.seal_legacy()
+                print("  Done. It is sealed.")
+                return res
+            if parts[0].lower() in ("open", "release") and len(parts) > 1:
+                names = [x.lower() for x in parts[1:]]
+                print(f"  Open what you meant for after to: {', '.join(names)}. They will be "
+                      f"able to read every moment you marked 'legacy'.")
+                if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                    return None
+                with access.owner_console():
+                    res = life.release_legacy(names)
+                print(f"  Done. It is open to: {', '.join(res['to'])}.")
+                return res
+            print("  Type /legacy, /legacy open executor, or /legacy seal.")
+            return None
+    except (ValueError, OwnerOnly) as e:
+        print(f"  Not done: {e}")
+        return None
+    except StoreProblem as e:
+        print(f"  {e.for_owner()}")
+        return None
+    return None
+
+
 def owner_forgetting(command: str, answer=input) -> dict | None:
     """/removed, /approve CODE, /bringback N, /erase WORDS — typed by the
     OWNER at this terminal. Deliberately not tools: big removals, putting
@@ -2045,6 +2325,8 @@ def selftest() -> None:
         # A key may narrow only ITSELF (I-09): these two name another key and
         # must be refused. (They used to be expected to succeed.)
         must_refuse = {"selfcloud_remove_scope", "selfcloud_revoke"}
+        # an id nobody has: refused, in plain words (and nothing changed)
+        no_such = {"update_person"}
         for tool in TOOLS:
             name = tool["name"]
             sample = {
@@ -2084,6 +2366,7 @@ def selftest() -> None:
                     "body": "Your account balance is $42.00, due June 3.",
                 },
                 "draft_guidance": {"purpose": "cancel a subscription"},
+                "check_draft": {"text": "Please cancel my subscription.", "audience": "GoodLife"},
                 "fill_form": {"fields": ["First name", "Email"]},
                 "pdf_form_fields": {"pdf_path": "/nonexistent.pdf"},
                 "fill_pdf": {"pdf_path": "/nonexistent.pdf", "values": {"a": "b"}},
@@ -2098,6 +2381,8 @@ def selftest() -> None:
                 "expected_charges": {},
                 "dispute_pack": {"merchant": "Netflix"},
                 "add_person": {"name": "Karen", "relationship": "wife"},
+                "update_person": {"person_id": "nobody-has-this-id", "notes": "x"},
+                "set_visibility": {"ids": ["nobody-has-this-id"], "visibility": "private"},
                 "add_memory": {"text": "A day worth keeping."},
                 "add_media": {"path": "~/SelfCloud/photo.jpg"},
                 "who_am_i": {},
@@ -2131,6 +2416,10 @@ def selftest() -> None:
             if name in must_refuse:
                 assert out.get("refused") and "owner's decision" in out["reason"], (name, out)
                 print(f"  ✓ {name} (another key: refused, as it must be)")
+                continue
+            if name in no_such:
+                assert out.get("refused") and "id" in out["reason"], (name, out)
+                print(f"  ✓ {name} (no such id: refused, plainly)")
                 continue
             # ('refused' is True on a refusal; what_left_the_house uses the
             #  same word for a count of refusals)
@@ -2274,16 +2563,26 @@ def selftest() -> None:
         print("    it without restarting, writes after it without a conflict, and")
         print("    keeps its own sections through the reload")
 
-        # 2. Reinforcement: same correction again raises confidence.
+        # 2. Reinforcement: the same correction in a LATER conversation turn
+        #    raises confidence. (Since October 2026, I-48, the same
+        #    correction twice in one turn counts once — an AI in a loop used
+        #    to count one override twelve times.)
+        import provenance
         before = conscience.priorities_for("travel")[0]["confidence"]
+        provenance.new_turn()
         p = conscience.record_correction(
             "travel", "1-stop", "direct", "direct flights", "saving money")
         assert p["confidence"] > before, "reinforce failed"
-        print(f"  ✓ reinforcement: {before} → {p['confidence']}")
+        again = conscience.record_correction(
+            "travel", "1-stop", "direct", "direct flights", "saving money")
+        assert again.get("already_counted") and again["for"] == p["for"], again
+        print(f"  ✓ reinforcement: {before} → {p['confidence']} (once per turn)")
 
-        # 3. Contradictions erode and eventually flip the hierarchy.
+        # 3. Contradictions erode and eventually flip a LEARNED value — when
+        #    the choices against it outweigh the ones for it, counted apart.
         flipped = False
         for _ in range(8):
+            provenance.new_turn()
             p = conscience.record_correction(
                 "travel", "direct", "1-stop", "saving money", "direct flights")
             if p["higher"] == "saving money":
@@ -2430,11 +2729,21 @@ def selftest() -> None:
                          when="2025-07", people="Karen", tags="origin", visibility="legacy")
         _life.add_memory("Something told in confidence.", visibility="private")
         _life.add_memory("The orb made her laugh until she cried.", visibility="family")
-        assert len(_life.tell_story("legacy")["moments"]) == 1, "legacy leaked!"
-        assert len(_life.tell_story("family")["moments"]) == 2, "family saw private!"
+        # (An AI that writes these gets them stored private — I-26; this
+        # store is written by the owner's own hands, as /share would.)
+        _lc.data["memories"][0]["visibility"] = "legacy"
+        _lc.data["memories"][2]["visibility"] = "family"
+        # Legacy is sealed until the owner opens it, and is no longer part of
+        # the family's view (I-10: this used to assert legacy=1, family=2).
+        assert len(_life.tell_story("legacy")["moments"]) == 0, "legacy open before release!"
+        assert len(_life.tell_story("family")["moments"]) == 1, "family saw private or legacy!"
         assert len(_life.tell_story("private")["moments"]) == 3
-        media = _life.add_media("~/SelfCloud/photos/kitchen.jpg", caption="Where it started",
-                                visibility="legacy")
+        with access.owner_console():
+            _life.release_legacy(["jefferey"])
+        assert len(_life.tell_story("legacy")["moments"]) == 1, "release did not open it"
+        with access.owner_console():
+            media = _life.add_media("~/SelfCloud/photos/kitchen.jpg",
+                                    caption="Where it started", visibility="legacy")
         assert media["path"].endswith("kitchen.jpg") and "copy" in media["note"]
         assert _life.who_am_i("private")["depth"]["people"] == 1
         # A life with nothing in it should notice, and ask.
@@ -2514,18 +2823,25 @@ def selftest() -> None:
         _c = Conscience(Path(td) / "door.json")
         _cloud = SelfCloud(_c)
         _life2 = Life(_c)
-        _life2.add_memory("a private thing", visibility="private")
-        _life2.add_memory("a family thing", visibility="family")
-        _life2.add_memory("for after", visibility="legacy")
+        with access.owner_console():     # the owner's own hands choose who sees
+            _life2.add_memory("a private thing", visibility="private")
+            _life2.add_memory("a family thing", visibility="family")
+            _life2.add_memory("for after", visibility="legacy")
 
-        # the ceiling comes from the KEY, and each key sees only its level
+        # the ceiling comes from the KEY, and each key sees only its level;
+        # what is for after stays sealed until the owner opens it (I-10 —
+        # this used to expect family 2 and executor 1 while he was alive)
         seen = {}
         for who, expect in (("jefferey", "private"), ("family", "family"),
                             ("executor", "legacy")):
             g = access.bind(_cloud, who, announce=False)
             assert g.ceiling() == expect, f"{who} ceiling was {g.ceiling()}"
             seen[who] = len(_life2.who_am_i(g.ceiling())["moments"])
-        assert seen == {"jefferey": 3, "family": 2, "executor": 1}, seen
+        assert seen == {"jefferey": 3, "family": 1, "executor": 0}, seen
+        with access.owner_console():
+            _life2.release_legacy(["executor"])
+        g = access.bind(_cloud, "executor", announce=False)
+        assert len(_life2.who_am_i(g.ceiling())["moments"]) == 1, "release ignored"
 
         # a plain Claude session has NO key to the life layer at all — this is
         # the hole the old code left wide open
@@ -2650,9 +2966,11 @@ def selftest() -> None:
         _acloud, _alife = SelfCloud(_a), Life(_a)
         _a.remember_fact("a private fact")
         _a.set_priority("travel", "direct", "cheap")
-        _alife.add_person("Karen", "wife")
-        _alife.add_memory("private thing", visibility="private")
-        _alife.add_memory("for after", visibility="legacy")
+        with access.owner_console():
+            _alife.add_person("Karen", "wife")
+            _alife.add_memory("private thing", visibility="private")
+            _alife.add_memory("for after", visibility="legacy")
+            _alife.release_legacy(["jefferey"])
 
         # HIGH: the ceiling must filter facts, people and values — not just
         # moments. An executor key holds legacy.read ALONE.
@@ -2660,8 +2978,14 @@ def selftest() -> None:
         assert [m["text"] for m in ex["moments"]] == ["for after"], ex["moments"]
         assert ex["facts"] == [] and ex["what_they_value"] == [], ex
         assert ex["people_who_matter"] == [], ex["people_who_matter"]
+        # The family sees only people he marked family — none yet — and never
+        # his notes (I-10: this used to assert the family saw everyone).
         fam = _alife.who_am_i("family")
-        assert fam["facts"] == [] and fam["people_who_matter"], fam
+        assert fam["facts"] == [] and fam["people_who_matter"] == [], fam
+        with access.owner_console():
+            _a.set_visibility([_a.data["people"][0]["id"]], "family")
+        fam = _alife.who_am_i("family")
+        assert fam["people_who_matter"] and "notes" not in fam["people_who_matter"][0], fam
         mine = _alife.who_am_i("private")
         assert mine["facts"] and mine["what_they_value"] and mine["people_who_matter"]
 

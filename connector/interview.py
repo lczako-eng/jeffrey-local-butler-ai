@@ -30,8 +30,11 @@ somebody what they want said at their funeral in week one.
   Jefferey moves on without a second attempt.
 - Woven into conversation, not announced. The question is a thing a friend
   would say, not a field to complete.
-- Everything the person says goes into THEIR store, under the visibility
-  they choose, erasable forever after.
+- Everything the person says goes into THEIR store, private, erasable
+  forever after. An AI never decides who else may read an answer (I-26: an
+  engine marked "Early Alzheimer's diagnosis — don't tell the kids yet" as
+  'family' and the family app read it at once). If he wants it shared, he
+  shares it himself (/share).
 """
 
 from __future__ import annotations
@@ -201,8 +204,9 @@ class Interview:
 
     def record_answer(self, question_id: str, answer: str = "",
                       declined: bool = False, visibility: str = "private") -> dict:
-        """Keep what they said — in their store, under their visibility — and
-        retire the question either way."""
+        """Keep what they said — in their store, private unless the owner
+        himself shares it (the life layer enforces that) — and retire the
+        question either way."""
         q = BY_ID.get(question_id)
         if not q:
             return {"error": f"unknown question '{question_id}'",
@@ -222,18 +226,21 @@ class Interview:
                 answer.strip(), people="", tags=f"{q['domain']},interview",
                 visibility=visibility if visibility in ("private", "family", "legacy")
                 else "private")
-        return {
+        out = {
             "recorded": "answered",
             "question": q["q"],
             "kept_as": stored,
             "next": (
-                "Thank them in one line — no gushing. If their answer named a "
+                "Thank them in one line — no gushing. If it was kept privately "
+                "although another visibility was asked, tell them plainly and how "
+                "to share it themselves (kept_as.note). If their answer named a "
                 "person, offer to remember them (add_person). If it revealed a "
                 "value ranking, set_priority with modest confidence and say what "
                 "you took from it, so they can correct you. Then let it go: one "
                 "question, one moment."
             ),
         }
+        return out
 
     # ----------------------------------------------------------- overview
     def progress(self) -> dict:

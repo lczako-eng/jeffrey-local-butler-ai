@@ -282,11 +282,13 @@ def get_directives() -> dict:
 
 @door(app.get("/conscience", operation_id="get_conscience"))
 @gate("facts.read")
-def get_conscience() -> dict:
-    """Read the full conscience: the user's priority hierarchy (with
-    confidence scores), remembered facts, active goals, and how many
-    corrections Jefferey has learned from. The user owns every byte."""
-    return conscience.snapshot()
+def get_conscience(limit: int = 100, offset: int = 0) -> dict:
+    """Read the conscience: the priority hierarchy (with confidence and the
+    evidence for and against), remembered facts, the most recent page
+    first (offset for older ones), active goals. Private facts are counted, not
+    sent; anything marked unconfirmed was written by an AI and not yet
+    confirmed by him. The user owns every byte."""
+    return conscience.snapshot(limit, offset)
 
 
 # ---------------------------------------------------------------- learning
@@ -358,13 +360,13 @@ def forget(contains: str = "", ids: str = "", confirm: str = "") -> dict:
 # ---------------------------------------------------------------- representing
 @door(app.get("/basis", operation_id="explain_basis"))
 @gate("priorities.read")
-def explain_basis(topic: str) -> dict:
+def explain_basis(topic: str, limit: int = 10, offset: int = 0) -> dict:
     """Before recommending anything, fetch the user's OWN priorities and
-    facts relevant to this topic. Ground the recommendation and its
-    explanation strictly in what this returns — never hidden incentives.
-    If it returns nothing relevant, say you don't yet know their values
-    here, and ask."""
-    return conscience.explain_basis(topic)
+    facts relevant to this topic (whole words, each with why it matched,
+    most relevant first). Ground the recommendation and its explanation
+    strictly in what this returns — never hidden incentives. If it returns
+    nothing relevant, say you don't yet know their values here, and ask."""
+    return conscience.explain_basis(topic, limit, offset)
 
 
 @door(app.get("/priorities", operation_id="priorities_for"))
@@ -550,10 +552,26 @@ class DraftIn(BaseModel):
 @door(app.post("/draft-guidance", operation_id="draft_guidance"))
 @gate("priorities.read")
 def draft_guidance(d: DraftIn) -> dict:
-    """Call BEFORE writing anything in the user's name. Returns their voice,
-    the priorities and facts that apply, who to sign as, and the hard limits.
+    """Call BEFORE writing anything in the user's name, with the recipient as
+    it will appear. Returns their voice, the priorities and facts that
+    apply, who to sign as, the hard limits, and what his own rules keep from
+    this recipient (do_not_mention). Run check_draft before showing it.
     Sending requires authorize_action on 'correspondence'."""
     return rep.draft_guidance(d.purpose, d.recipient)
+
+
+class DraftCheckIn(BaseModel):
+    text: str
+    audience: str = ""
+
+
+@door(app.post("/draft-check", operation_id="check_draft"))
+@gate("priorities.read")
+def check_draft(d: DraftCheckIn) -> dict:
+    """Check a draft BEFORE showing or sending it: his rules for this person,
+    his private facts, and his safety (never when he is home, alone or away,
+    or how to get in). Fix every problem it lists."""
+    return rep.check_draft(d.text, d.audience)
 
 
 class FormIn(BaseModel):
@@ -694,8 +712,27 @@ class PersonIn(BaseModel):
 @door(app.post("/life/people", operation_id="add_person"))
 @gate("life.write")
 def add_person(p: PersonIn) -> dict:
-    """Record someone who matters to the user. Only when they offer it."""
+    """Record someone who matters to the user. Only when they offer it. The
+    same name with a different relationship is a separate person; the same
+    person gets new notes added, never replaced."""
     return life.add_person(p.name, p.relationship, p.notes, p.important_dates)
+
+
+class PersonUpdateIn(BaseModel):
+    person_id: str
+    name: str = ""
+    relationship: str = ""
+    notes: str = ""
+    important_dates: str = ""
+
+
+@door(app.post("/life/people/update", operation_id="update_person"))
+@gate("life.write")
+def update_person(p: PersonUpdateIn) -> dict:
+    """Change one person, by id. Notes and dates are added, dated; a changed
+    name or relationship keeps what it was."""
+    return life.update_person(p.person_id, p.name, p.relationship, p.notes,
+                              p.important_dates)
 
 
 class MemoryIn(BaseModel):
@@ -710,7 +747,8 @@ class MemoryIn(BaseModel):
 @gate("life.write")
 def add_memory(m: MemoryIn) -> dict:
     """Record a snippet of the user's life in their own words. Never invent
-    one; only record what they actually said."""
+    one; only record what they actually said. Kept private whatever
+    visibility is sent: only he shares it."""
     try:
         return life.add_memory(m.text, m.when, m.people, m.tags, m.visibility)
     except ValueError as e:
@@ -737,19 +775,20 @@ def add_media(m: MediaIn) -> dict:
 
 
 @door(app.get("/life", operation_id="who_am_i"))
-def who_am_i() -> dict:
-    """What Jefferey understands about this person as a human being. How much
-    of it you see is decided by the key your token carries — there is no
-    parameter to widen it."""
-    return life.who_am_i(access.ceiling())
+def who_am_i(limit: int = 50, offset: int = 0) -> dict:
+    """What Jefferey understands about this person as a human being, the
+    most recent moments first, a page at a time. How much of it you see is decided by
+    the key your token carries and by his own rules — there is no parameter
+    to widen it."""
+    return life.who_am_i(access.ceiling(), limit, offset)
 
 
 @door(app.get("/life/story", operation_id="tell_story"))
-def tell_story(theme: str = "") -> dict:
+def tell_story(theme: str = "", limit: int = 50, offset: int = 0) -> dict:
     """Gather what's needed to tell a piece of their story. Which moments are
     in reach is decided by the key your token carries — private, family or
     legacy. You cannot ask for a wider audience."""
-    return life.tell_story(access.ceiling(), theme)
+    return life.tell_story(access.ceiling(), theme, limit, offset)
 
 
 @door(app.get("/life/gaps", operation_id="story_gaps"))
@@ -769,6 +808,19 @@ def forget_life(contains: str = "", ids: str = "", confirm: str = "") -> dict:
     Anything big can only be approved by the owner himself — the answer says
     how. `ids` is a comma-separated list."""
     return life.forget_life(contains, ids, confirm)
+
+
+class VisibilityIn(BaseModel):
+    ids: list[str]
+    visibility: str = Field(description="private | engines (facts only) | family | legacy")
+
+
+@door(app.post("/life/visibility", operation_id="set_visibility"))
+@gate("life.write")
+def set_visibility(v: VisibilityIn) -> dict:
+    """Who may see something, by id. More private: done at once. Less
+    private: only the owner, typing /share himself — the answer says how."""
+    return life.set_visibility(v.ids, v.visibility)
 
 
 # ---------------------------------------------------------------- the album
@@ -877,7 +929,7 @@ class AnswerIn(BaseModel):
 @door(app.post("/interview/answer", operation_id="record_answer"))
 @gate("life.write")
 def record_answer(a: AnswerIn) -> dict:
-    """Keep what they said under the visibility they chose. If they
+    """Keep what they said, privately (only he shares it). If they
     deflected, declined=True retires the question permanently."""
     return interview.record_answer(a.question_id, a.answer, a.declined, a.visibility)
 

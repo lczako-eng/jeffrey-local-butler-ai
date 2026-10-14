@@ -20,9 +20,22 @@ Design rules — these are the sensitive ones, so they are strict:
   user's own Self-Cloud drive — a caption and a reference, never a copy,
   never an upload. If the drive is switched off, the pictures simply aren't
   there, which is exactly the point.
-- **Private by default.** Every entry has a visibility: `private` (Jefferey
-  only, ever), `family` (may be shared with named people), or `legacy`
-  (intended to outlive the user and be told to those they name).
+- **Private by default — people too.** Every moment, picture and person has
+  a visibility: `private` (Jefferey only, ever), `family` (may be shared with
+  the family's keys), or `legacy` (meant to outlive him, and sealed until he
+  releases it to the keys he names). Only the OWNER makes anything less
+  private: an AI that writes a memory stores it private, whatever it asks
+  for, and the owner shares it himself (/share). Anyone may make something
+  more private (set_visibility).
+- **His rules are enforced here, not suggested (I-10).** A family or
+  executor key never sees what one of his disclosure rules keeps from it,
+  nor his private notes about anyone; it is told how many things were held
+  back, never what.
+- **Who said it is kept (I-25).** A moment records where it came from, and
+  is marked verbatim only when it is word for word what he typed.
+- **Two people can share a name (I-27).** A second Laszlo is a second
+  person, never an overwrite of the first; notes are added to, never
+  replaced.
 - **Erasable, always — and never by accident.** Forgetting is never argued
   with, and never done on a guess: the first call shows exactly what would
   go, the second removes it, anything big waits for the owner's own hands,
@@ -37,12 +50,28 @@ import time
 from pathlib import Path
 
 import forgetting
+import grounding
+import provenance
 
 VISIBILITY = ("private", "family", "legacy")
+PAGE, MOST = 50, 200          # moments and pictures per answer (I-41)
 
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _today() -> str:
+    return time.strftime("%Y-%m-%d")
+
+
+def _key(s) -> str:
+    return " ".join(grounding.words(s))
+
+
+def _access():
+    import access
+    return access
 
 
 class Life:
@@ -55,40 +84,147 @@ class Life:
         self.c.data.setdefault("media", [])
 
     # --------------------------------------------------------------- people
+    @staticmethod
+    def _person_out(p: dict) -> dict:
+        return {k: v for k, v in p.items() if k != "source"}
+
     def add_person(self, name: str, relationship: str, notes: str = "",
                    important_dates: str = "") -> dict:
         """Someone who matters. Jefferey should know their name before he
-        needs it — not learn it from an obituary."""
+        needs it — not learn it from an obituary.
+
+        Two people may share a name (a father and a son, both Laszlo): the
+        same name with a different relationship is a NEW person, reported as
+        a possible duplicate, and neither is changed. The same name and
+        relationship is the same person: new notes and dates are ADDED,
+        dated, and nothing is replaced. The answer always says which."""
+        nm = " ".join(str(name or "").split())
+        rel = " ".join(str(relationship or "").split())
+        notes = str(notes or "").strip()
+        dates = str(important_dates or "").strip()
+        if not nm:
+            return {"refused": True, "tool": "add_person",
+                    "reason": "A person needs a name.",
+                    "tell_the_user": "Nothing was stored. Ask him for the name."}
         # He asked to forget someone by this name; saying it again on purpose
         # takes it off that list. The engine is told, so it can check.
-        again = forgetting.unforget(self.c.data, name)
-        existing = next(
-            (p for p in self.c.data["people"] if p["name"].lower() == name.strip().lower()),
-            None)
-        if existing:
-            existing.update(relationship=relationship or existing["relationship"],
-                            notes=notes or existing.get("notes", ""),
-                            important_dates=important_dates or existing.get("important_dates", ""),
-                            updated=_now())
-            self.c._save()
-            return existing
+        again = forgetting.unforget(self.c.data, nm)
+        people = self.c.data["people"]
+        same_name = [p for p in people if isinstance(p, dict) and _key(p.get("name")) == _key(nm)]
+        same = [p for p in same_name
+                if not rel or _key(p.get("relationship")) == _key(rel)]
+        if len(same) > 1 and not rel:
+            return {"matched_existing": False, "changed": [],
+                    "possible_duplicate_of": [self._who(p) for p in same],
+                    "note": (f"There is more than one {nm}. Nothing was changed. Ask him "
+                             f"which one he means, then use update_person with that id.")}
+        if same:
+            p = same[0]
+            changed = self._add_to(p, notes, dates)
+            if changed:
+                p["updated"] = _now()
+                self.c._save()
+            return {**self._person_out(p), "matched_existing": True,
+                    "changed": changed or ["nothing — this was already known"],
+                    "note": ("This is someone already known, so what was new was added "
+                             "to them; nothing was replaced.")}
         entry = {
-            "name": name.strip(), "relationship": relationship.strip(),
-            "notes": notes.strip(), "important_dates": important_dates.strip(),
+            "name": nm, "relationship": rel, "notes": notes, "important_dates": dates,
+            "visibility": "private", "source": provenance.source(text=nm),
             "added": _now(), "updated": _now(),
         }
-        self.c.data["people"].append(entry)
+        people.append(entry)
         self.c._save()
+        out = {**self._person_out(entry), "matched_existing": False}
+        if same_name:
+            out["possible_duplicate_of"] = [self._who(p) for p in same_name]
+            out["note"] = (
+                f"There is already {self._names(same_name)}. This was kept as a separate "
+                f"person, and nobody was changed. If they are in fact the same person, "
+                f"ask him, and use update_person with the right id.")
         if again:
-            return {**entry, "note": (
-                "He once asked JEFFEREY to forget someone by this name. Make sure "
-                "this is what he wants now; if not, forget_life undoes it.")}
-        return entry
+            out["note"] = (out.get("note", "") + " He once asked JEFFEREY to forget someone "
+                           "by this name. Make sure this is what he wants now; if not, "
+                           "forget_life undoes it.").strip()
+        return out
+
+    @staticmethod
+    def _who(p: dict) -> dict:
+        return {"id": p.get("id"), "name": p.get("name"),
+                "relationship": p.get("relationship")}
+
+    @staticmethod
+    def _names(ps: list[dict]) -> str:
+        return " and ".join(f"a {p.get('name')} ({p.get('relationship') or 'no relationship given'})"
+                            for p in ps)
+
+    @staticmethod
+    def _add_to(p: dict, notes: str, dates: str) -> list[str]:
+        """Add new notes and dates to a person — dated, never replacing."""
+        changed = []
+        old = str(p.get("notes") or "")
+        if notes and _key(notes) not in _key(old):
+            p["notes"] = (old + "\n" if old else "") + (f"{_today()}: {notes}" if old else notes)
+            changed.append("notes (added to; nothing replaced)")
+        oldd = str(p.get("important_dates") or "")
+        if dates and _key(dates) not in _key(oldd):
+            p["important_dates"] = (oldd + "; " if oldd else "") + dates
+            changed.append("important dates (added to; nothing replaced)")
+        return changed
+
+    def update_person(self, person_id: str, name: str = "", relationship: str = "",
+                      notes: str = "", important_dates: str = "") -> dict:
+        """Change one person, by their id. New notes and dates are added,
+        dated; a new name or relationship is recorded with what it was, so
+        nothing is lost."""
+        pid = str(person_id or "").strip()
+        p = next((x for x in self.c.data["people"]
+                  if isinstance(x, dict) and x.get("id") == pid), None)
+        if p is None:
+            return {"refused": True, "tool": "update_person",
+                    "reason": f"Nobody is recorded with the id '{pid}'.",
+                    "tell_the_user": "Nothing was changed. Use an id from who_am_i."}
+        changed = self._add_to(p, str(notes or "").strip(), str(important_dates or "").strip())
+        for field, new in (("name", name), ("relationship", relationship)):
+            new = " ".join(str(new or "").split())
+            if new and _key(new) != _key(p.get(field)):
+                was = p.get(field) or ""
+                p[field] = new
+                line = f"{_today()}: {field} was '{was}', now '{new}'"
+                p["notes"] = (str(p.get("notes") or "") + "\n" + line).strip()
+                changed.append(f"{field} ('{was}' → '{new}', kept in the notes)")
+        if changed:
+            p["updated"] = _now()
+            self.c._save()
+        return {**self._person_out(p), "changed": changed or ["nothing — this was already known"]}
 
     def people(self) -> list[dict]:
         return list(self.c.data.get("people", []))
 
     # -------------------------------------------------------------- moments
+    @staticmethod
+    def _kept_privately(entry: dict, asked: str) -> dict:
+        """What the engine is told about a write: who may see it, whose words
+        these are."""
+        out = {k: v for k, v in entry.items() if k != "source"}
+        notes = []
+        if asked != entry["visibility"]:
+            out["requested_visibility"] = asked
+            notes.append(
+                f"Kept private. An AI does not decide who else sees his memories: if he "
+                f"wants it '{asked}', he types /share {entry.get('id')} {asked} himself in "
+                f"'Talk to JEFFEREY on this Mac'.")
+        if "verbatim" in entry and not entry["verbatim"]:
+            notes.append("It was kept as written here, which is not word for word what he "
+                         "said: tell him plainly it is a summary, not his own words, and "
+                         "that he can confirm it with /pending.")
+        if notes:
+            out["note"] = " ".join(notes)
+        return out
+
+    def _engine_wrote(self) -> bool:
+        return not _access().owners_hands()
+
     def add_memory(self, text: str, when: str = "", people: str = "",
                    tags: str = "", visibility: str = "private",
                    photos: list[str] | None = None) -> dict:
@@ -97,43 +233,71 @@ class Life:
 
         `photos` is a list of content hashes from the photo index — the
         pictures this story was told about. References, never copies.
-        """
-        if visibility not in VISIBILITY:
+
+        Written by an AI, it is stored private whatever visibility was asked
+        (I-26), and marked verbatim only when it is word for word what the
+        owner typed at his terminal this session (I-25)."""
+        asked = str(visibility or "private").strip().lower()
+        if asked not in VISIBILITY:
             raise ValueError(f"visibility must be one of {VISIBILITY}")
+        body = str(text or "").strip()
+        if not body:
+            raise ValueError("There is nothing to keep: the moment is empty.")
+        src = provenance.source(text=body)
+        vis = "private" if (asked != "private" and self._engine_wrote()) else asked
         entry = {
-            "text": text.strip(), "when": when.strip(),
-            "people": [p.strip() for p in people.split(",") if p.strip()],
-            "tags": [t.strip().lower() for t in tags.split(",") if t.strip()],
-            "visibility": visibility, "added": _now(),
+            "text": body, "when": str(when or "").strip(),
+            "people": [p.strip() for p in str(people or "").split(",") if p.strip()],
+            "tags": [t.strip().lower() for t in str(tags or "").split(",") if t.strip()],
+            "visibility": vis, "added": _now(), "source": src,
+            # his own words: typed by him here, or through his own tools on
+            # this Mac with no AI in between
+            "verbatim": src["stated_by"] != provenance.ENGINE,
+            "status": provenance.status_for(src),
         }
         if photos:
             entry["photos"] = [str(s) for s in photos]
+        if asked != vis:
+            entry["requested_visibility"] = asked
         self.c.data["memories"].append(entry)
         self.c._save()
-        return entry
+        return self._kept_privately(entry, asked)
 
     def add_media(self, path: str, caption: str = "", when: str = "",
                   people: str = "", visibility: str = "private") -> dict:
         """Reference a photo or recording **where it already lives** — on the
         user's Self-Cloud drive. Jefferey stores the path and the caption. He
         never copies the file, never uploads it, and if the drive is off he
-        simply reports that it isn't reachable."""
-        if visibility not in VISIBILITY:
+        simply reports that it isn't reachable. Written by an AI, it is
+        private whatever was asked (I-26)."""
+        asked = str(visibility or "private").strip().lower()
+        if asked not in VISIBILITY:
             raise ValueError(f"visibility must be one of {VISIBILITY}")
         p = Path(path).expanduser()
+        vis = "private" if (asked != "private" and self._engine_wrote()) else asked
         entry = {
-            "path": str(p), "caption": caption.strip(), "when": when.strip(),
-            "people": [x.strip() for x in people.split(",") if x.strip()],
-            "visibility": visibility, "reachable": p.exists(), "added": _now(),
+            "path": str(p), "caption": str(caption or "").strip(),
+            "when": str(when or "").strip(),
+            "people": [x.strip() for x in str(people or "").split(",") if x.strip()],
+            "visibility": vis, "reachable": p.exists(), "added": _now(),
+            "source": provenance.source(),
         }
+        if asked != vis:
+            entry["requested_visibility"] = asked
         self.c.data["media"].append(entry)
         self.c._save()
-        return {
-            **entry,
-            "note": ("The file stays where it is — Jefferey holds a reference, not a "
-                     "copy. If your Self-Cloud is switched off, this simply reads as "
-                     "unreachable until you switch it back on."),
-        }
+        out = self._kept_privately(entry, asked)
+        out["note"] = ((out.get("note", "") + " ") if out.get("note") else "") + (
+            "The file stays where it is — Jefferey holds a reference, not a "
+            "copy. If your Self-Cloud is switched off, this simply reads as "
+            "unreachable until you switch it back on.")
+        return out
+
+    def set_visibility(self, ids, visibility: str) -> dict:
+        """Who may see a moment, a picture, a person or a fact. More private:
+        any key that may write. Less private: the owner's own hands only
+        (conscience.set_visibility)."""
+        return self.c.set_visibility(ids, visibility)
 
     def forget_life(self, contains: str = "", ids=None, confirm: str = "") -> dict:
         """Forget a person (by exact name or id, with the moments and
@@ -146,79 +310,292 @@ class Life:
         about again. See forgetting.py."""
         return forgetting.forget_life(self.c, contains, ids, confirm)
 
-    # ------------------------------------------------------------ the story
-    def who_am_i(self, ceiling: str) -> dict:
+    # ------------------------------------------------- what is for after
+    def legacy_state(self) -> dict:
+        d = self.c.data.get("legacy_release")
+        d = d if isinstance(d, dict) else {}
+        return {"released": bool(d.get("released")),
+                "to": [str(x) for x in d.get("to") or []],
+                "on": d.get("on"), "by": d.get("by")}
+
+    def release_legacy(self, to) -> dict:
+        """What he meant for after is opened — to the keys he names
+        ('executor', 'family', 'anna'), and only by his own hands (I-10: it
+        used to be readable by the family and executor keys while he was
+        alive)."""
+        _access().require_owners_hands("open what he meant for after")
+        names = [str(x).strip().lower() for x in (to if isinstance(to, (list, tuple))
+                                                  else str(to or "").replace(",", " ").split())
+                 if str(x).strip()]
+        if not names:
+            return {"released": False, "reason": "Name who may read it (for example: executor)."}
+        self.c.data["legacy_release"] = {"released": True, "to": sorted(set(names)),
+                                         "on": _now(), "by": _access().who()}
+        self.c._note("legacy", "What you meant for after was opened to: "
+                     + ", ".join(sorted(set(names))) + ".")
+        self.c._save()
+        return self.legacy_state()
+
+    def seal_legacy(self) -> dict:
+        """Close it again. His own hands."""
+        _access().require_owners_hands("seal what he meant for after")
+        self.c.data["legacy_release"] = {"released": False, "to": [], "on": _now(),
+                                         "by": _access().who()}
+        self.c._note("legacy", "What you meant for after is sealed again.")
+        self.c._save()
+        return self.legacy_state()
+
+    def _legacy_open_to(self, client: str, ceiling: str) -> bool:
+        st = self.legacy_state()
+        if not st["released"]:
+            return False
+        to = set(st["to"])
+        return bool({"all", "everyone", client} & to) or (ceiling == "family" and "family" in to) \
+            or (ceiling == "legacy" and "executor" in to and client == "executor")
+
+    # ------------------------------------------------------------ the view
+    def _view(self, ceiling: str) -> dict:
+        """Who is reading, and what their key and his rules let them see."""
+        rd = provenance.reader()
+        client = rd["client"]
+        if ceiling in ("private", "self"):
+            levels = set(VISIBILITY)
+        elif ceiling == "family":
+            levels = {"family"} | ({"legacy"} if self._legacy_open_to(client, "family") else set())
+        else:                                        # 'legacy' and anything unknown
+            levels = {"legacy"} if self._legacy_open_to(client, "legacy") else set()
+        aud: set = set()
+        if not rd["owner"]:
+            broad, _ = grounding.audience_aliases(client, self.c.data.get("people") or [])
+            aud = set(rd["audiences"]) | set(broad)
+            if ceiling == "family":
+                aud.add("family")
+            if ceiling == "legacy":
+                aud.add("executor")
+        return {"rd": rd, "levels": levels, "audiences": aud, "ceiling": ceiling,
+                "full": ceiling in ("private", "self")}
+
+    def _rule(self, v: dict, text: str, tags) -> bool:
+        if not v["audiences"]:
+            return False
+        import rules
+        tags = list(tags) + grounding.sensitivity(text)
+        return rules.held_back(self.c.data, v["audiences"], text, tags) is not None
+
+    def _moments(self, v: dict) -> tuple[list[dict], int]:
+        out, held = [], 0
+        for m in self.c.data.get("memories") or []:
+            if not isinstance(m, dict) or m.get("visibility", "private") not in v["levels"]:
+                continue
+            if self._rule(v, m.get("text", ""), list(m.get("tags") or []) + list(m.get("people") or [])):
+                held += 1
+                continue
+            out.append(self._moment_out(m))
+        return out, held
+
+    @staticmethod
+    def _moment_out(m: dict) -> dict:
+        o = {k: x for k, x in m.items()
+             if k not in ("source", "requested_visibility", "visibility_changed", "status")}
+        if provenance.pending(m):
+            o["unconfirmed"] = True
+        if "verbatim" in m and not m["verbatim"]:
+            o["told_by"] = "an AI's words, not his own"
+        return o
+
+    def _pictures(self, v: dict) -> tuple[list[dict], int, bool]:
+        if not v["rd"]["media"]:
+            return [], 0, False
+        out, held = [], 0
+        for m in self.c.data.get("media") or []:
+            if not isinstance(m, dict) or m.get("visibility", "private") not in v["levels"]:
+                continue
+            if self._rule(v, m.get("caption", ""), list(m.get("people") or [])):
+                held += 1
+                continue
+            out.append({k: x for k, x in m.items()
+                        if k not in ("source", "requested_visibility", "visibility_changed")})
+        return out, held, True
+
+    def _people(self, v: dict) -> tuple[list[dict], int]:
+        """Everyone, with his notes, for his own caretaker; for the family,
+        only those he marked family — a name and a relationship, never his
+        notes; for what is meant for after, nobody (I-10)."""
+        out, held = [], 0
+        if v["ceiling"] not in ("private", "self", "family"):
+            return out, held
+        for p in self.c.data.get("people") or []:
+            if not isinstance(p, dict):
+                continue
+            who = f"{p.get('name', '')} {p.get('relationship', '')}"
+            tags = [p.get("name", ""), p.get("relationship", "")]
+            if v["full"]:
+                if self._rule(v, who, tags):
+                    held += 1
+                    continue
+                o = self._person_out(p)
+                if (p.get("notes") or p.get("important_dates")) and self._rule(
+                        v, f"{p.get('notes', '')} {p.get('important_dates', '')}", tags):
+                    o.pop("notes", None)
+                    o.pop("important_dates", None)
+                    o["notes_held_back"] = True
+                    held += 1
+                out.append(o)
+            elif p.get("visibility") == "family":
+                if self._rule(v, who, tags):
+                    held += 1
+                    continue
+                out.append({"id": p.get("id"), "name": p.get("name"),
+                            "relationship": p.get("relationship")})
+        return out, held
+
+    def _facts(self, v: dict) -> tuple[list[dict], int]:
+        if v["full"]:
+            seen, held = self.c.visible_facts(v["rd"], bulk=True)
+            return [self.c._fact_view(f) for f in seen], len(held)
+        out, held = [], 0
+        for f in self.c.data.get("facts") or []:
+            if not isinstance(f, dict) or f.get("visibility") not in v["levels"]:
+                continue
+            if self._rule(v, f.get("fact", ""), self.c._fact_tags(f)):
+                held += 1
+                continue
+            out.append(self.c._fact_view(f))
+        return out, held
+
+    @staticmethod
+    def _paged(items: list, limit, offset, newest: bool = False) -> tuple[list, int, int]:
+        """One page. `newest`: offset 0 is the most recent page (offset
+        reaches further back); each page keeps the order things were told."""
+        try:
+            lim = int(limit) if limit is not None else PAGE
+        except (TypeError, ValueError):
+            lim = PAGE
+        try:
+            off = int(offset or 0)
+        except (TypeError, ValueError):
+            off = 0
+        lim, off = max(1, min(MOST, lim)), max(0, off)
+        if newest:
+            end = max(0, len(items) - off)
+            page = items[max(0, end - lim):end]
+        else:
+            page = items[off:off + lim]
+        return page, max(0, len(items) - off - lim), off + lim
+
+    def _sealed_note(self, v: dict) -> str | None:
+        if v["full"] or "legacy" in v["levels"]:
+            return None
+        return ("What he meant for after is sealed until he opens it himself, to the "
+                "people he names. Do not guess at it.")
+
+    def who_am_i(self, ceiling: str, limit=None, offset=0) -> dict:
         """What Jefferey understands about this person as a human being —
         not as a set of preferences.
 
         `ceiling` has no default on purpose: it comes from the bound client's
         key (`access.ceiling()`), never from a caller's choice. An unknown
-        value falls to `legacy` — the narrowest, not the widest.
-        """
-        allowed = {"private": VISIBILITY, "family": ("family", "legacy"),
-                   "legacy": ("legacy",)}.get(ceiling, ("legacy",))
-        mems = [m for m in self.c.data["memories"] if m["visibility"] in allowed]
-        media = [m for m in self.c.data["media"] if m["visibility"] in allowed]
-        prios = sorted(self.c.data.get("priorities", []),
-                       key=lambda p: -p.get("confidence", 0))[:8]
-        # The ceiling governs EVERYTHING here, not only the moments. An
-        # `executor` key holds legacy.read alone: it must see what the owner
-        # meant to outlive them, and not the facts, the people or the values.
-        full = ceiling == "private"
-        family = ceiling in ("private", "family")
-        return {
-            "people_who_matter": self.c.data.get("people", []) if family else [],
-            "moments": mems,
-            "pictures_and_recordings": media,
+        value falls to `legacy` — the narrowest, not the widest. His own
+        disclosure rules apply on top, to every reader but himself; what
+        they hold back is counted, never shown. The most recent moments first, a page
+        at a time (I-41)."""
+        v = self._view(ceiling)
+        mems, h1 = self._moments(v)
+        pics, h2, media_ok = self._pictures(v)
+        people, h3 = self._people(v)
+        facts, h4 = self._facts(v)
+        prios = sorted((p for p in self.c.data.get("priorities", []) if isinstance(p, dict)),
+                       key=lambda p: -float(p.get("confidence") or 0))[:8]
+        mems_page, more_m, next_m = self._paged(mems, limit, offset, newest=True)
+        pics_page, more_p, _ = self._paged(pics, limit, offset, newest=True)
+        facts_page, more_f, _ = self._paged(facts, limit, offset, newest=True)
+        out = {
+            "people_who_matter": people,
+            "moments": mems_page,
+            "pictures_and_recordings": pics_page,
             "what_they_value": [
-                f"{p['higher']} over {p['lower']} ({p['context']}, "
-                f"{int(p['confidence'] * 100)}% confident)" for p in prios
-            ] if full else [],
-            "facts": self.c.data.get("facts", []) if full else [],
+                f"{p.get('higher')} over {p.get('lower')} ({p.get('context')}, "
+                f"{int(float(p.get('confidence') or 0) * 100)}% confident)" for p in prios
+            ] if v["full"] else [],
+            "facts": facts_page,
+            # counted within what this key may see (privacy#4)
             "depth": {
-                "people": len(self.c.data.get("people", [])),
-                "moments": len(self.c.data.get("memories", [])),
-                "media": len(self.c.data.get("media", [])),
-                "values_learned": len(self.c.data.get("priorities", [])),
+                "people": len(people),
+                "moments": len(mems),
+                "media": len(pics),
+                "values_learned": len(self.c.data.get("priorities", [])) if v["full"] else 0,
             },
             "rule": (
                 "This is a person, not a profile. Speak about them the way a "
                 "close friend would — specifically, warmly, and only from what "
                 "is actually here. Never invent a memory, a relationship, or a "
-                "feeling they did not record."
+                "feeling they did not record. A moment marked as told in an AI's "
+                "words is not his own wording."
             ),
         }
+        self._finish(out, v, h1 + h2 + h3 + h4, media_ok,
+                     more=more_m + more_p + more_f, next_offset=next_m)
+        return out
 
-    def tell_story(self, ceiling: str, theme: str = "") -> dict:
+    def _finish(self, out: dict, v: dict, held: int, media_ok: bool, more: int,
+                next_offset: int) -> None:
+        notes = []
+        if held:
+            out["held_back"] = {"count": held, "why": (
+                "Some things are kept from this connection by his own rules, or are "
+                "private. Do not guess at them, and do not ask him to read them to you.")}
+        if not media_ok:
+            notes.append("This key may not see his pictures and recordings.")
+        sealed = self._sealed_note(v)
+        if sealed:
+            out["legacy"] = sealed
+        if more:
+            out["more"] = more
+            out["how_to_see_more"] = f"Call again with offset={next_offset}."
+        if notes:
+            out["note"] = " ".join(notes)
+
+    def tell_story(self, ceiling: str, theme: str = "", limit=None, offset=0) -> dict:
         """Gather what's relevant to tell a piece of this person's story —
         for them now, or for the people they name, later.
 
         `ceiling` comes from the bound client's key, never from an argument
-        the model picks. Unknown values fall to `legacy`.
-        """
-        allowed = {"private": VISIBILITY, "self": VISIBILITY,
-                   "family": ("family", "legacy"),
-                   "legacy": ("legacy",)}.get(ceiling, ("legacy",))
-        t = theme.lower().strip()
-        mems = [m for m in self.c.data["memories"] if m["visibility"] in allowed]
-        media = [m for m in self.c.data["media"] if m["visibility"] in allowed]
+        the model picks. Unknown values fall to `legacy`. A theme is matched
+        by whole words ('art' is not 'heart'); a theme nothing matches says
+        so instead of returning everything."""
+        v = self._view(ceiling)
+        mems, h1 = self._moments(v)
+        pics, h2, media_ok = self._pictures(v)
+        people, h3 = self._people(v)
+        t = str(theme or "").strip()
+        nothing = None
         if t:
-            def hit(m):
-                return (t in m.get("text", "").lower()
-                        or t in " ".join(m.get("tags", []))
-                        or any(t in p.lower() for p in m.get("people", [])))
-            mems = [m for m in mems if hit(m)] or mems
-            media = [m for m in media
-                     if t in m.get("caption", "").lower()
-                     or any(t in p.lower() for p in m.get("people", []))] or media
-        mems = sorted(mems, key=lambda m: m.get("when", ""))
-        return {
-            "theme": theme or "their life",
+            tw = grounding.expand(grounding.content(t))
+            tkey = _key(t)
+
+            def hit(text, tags, names):
+                if tkey and any(_key(n) == tkey for n in names):
+                    return True
+                have = grounding.content(text) | {grounding.stem(x) for g in tags
+                                                  for x in grounding.words(g)}
+                have |= {grounding.stem(x) for n in names for x in grounding.words(n)}
+                return bool(tw & have)
+
+            mems = [m for m in mems if hit(m.get("text", ""), m.get("tags", []),
+                                           m.get("people", []))]
+            pics = [m for m in pics if hit(m.get("caption", ""), [], m.get("people", []))]
+            if not mems and not pics:
+                nothing = (f"Nothing recorded yet matches '{t}'. Say so honestly, and "
+                           "ask him if he would like to tell it.")
+        mems = sorted(mems, key=lambda m: str(m.get("when", "")))
+        mems_page, more_m, next_m = self._paged(mems, limit, offset)
+        pics_page, more_p, _ = self._paged(pics, limit, offset)
+        out = {
+            "theme": t or "their life",
             "visible_at": ceiling,
-            "moments": mems,
-            "pictures": media,
-            "people": (self.c.data.get("people", [])
-                       if ceiling in ("private", "self", "family") else []),
+            "moments": mems_page,
+            "pictures": pics_page,
+            "people": people,
             "how_to_tell_it": (
                 "Tell it in their voice, in order, using only what is here. Name "
                 "the people by name. Where a picture belongs, say which one and "
@@ -226,6 +603,11 @@ class Life:
                 "more while they can — that is the whole reason this exists."
             ),
         }
+        self._finish(out, v, h1 + h2 + h3, media_ok, more=more_m + more_p,
+                     next_offset=next_m)
+        if nothing:
+            out["note"] = (out.get("note", "") + " " + nothing).strip()
+        return out
 
     def story_gaps(self) -> dict:
         """What's missing — so Jefferey can gently ask for it while there's
