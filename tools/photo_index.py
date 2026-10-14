@@ -38,6 +38,19 @@ Usage
     python tools/photo_index.py search  "kids at the lake"  --index ...
     python tools/photo_index.py verify  --index ...
     python tools/photo_index.py stats   --index ...
+    python tools/photo_index.py forget  <photo file, folder, or id>
+
+Only `build` (and `watch` with a folder) ever makes a new index. Every other
+command, and every reader (the wall, recall, the album), opens an existing
+one or says plainly that there isn't one — it never quietly starts an empty
+index in the home folder.
+
+PATHS SURVIVE A RENAMED DRIVE
+    Each photo is also stored relative to the folder that holds the index's
+    `.selfcloud` directory (the drive itself, for an index on the drive). If
+    the drive is renamed from 'Self Cloud' to 'Self-Cloud', the photos are
+    found again without re-reading anything. A rebuild also follows a known
+    photo to its new place.
 
 Install (once, with a network; after that it never needs one)
     pip install open_clip_torch torch pillow numpy
@@ -54,6 +67,7 @@ import os
 import datetime as dt
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
@@ -62,9 +76,66 @@ import home  # noqa: E402
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp",
                   ".bmp", ".tif", ".tiff", ".gif"}
 
+# Folders that look like folders but are really one application's private
+# storage. A Photos library holds every picture two to six times (originals,
+# previews, thumbnails, face crops, shared-album copies), so reading it as a
+# folder fills the wall with duplicates. The owner exports originals instead.
+BUNDLE_SUFFIXES = (".photoslibrary", ".photolibrary", ".aplibrary",
+                   ".migratedphotolibrary", ".lrdata", ".app", ".bundle")
+
 # Small, open, and good enough. ~150 MB of weights, 512-dim embeddings.
 DEFAULT_MODEL = "ViT-B-32"
 DEFAULT_PRETRAINED = "laion2b_s34b_b79k"
+
+# How long a reader waits for a writer (the watcher, the album) to finish
+# before giving up. A family screen should wait, not fail.
+DB_TIMEOUT = 30
+
+
+class NoIndex(FileNotFoundError):
+    """There is no photo index where one was expected. Said plainly, and
+    never answered by quietly creating an empty one."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        super().__init__(
+            f"No photographs have been read yet at {root}. If they were read "
+            f"onto the Self-Cloud drive, plug the drive in. Otherwise "
+            f"double-click 'Show me my life' to read them.")
+
+
+def connect(db_path: Path) -> sqlite3.Connection:
+    """One connection for one thread. SQLite connections may not cross
+    threads, and the wall, the MCP server and the HTTP server all answer from
+    several threads at once — sharing one silently broke all three."""
+    con = sqlite3.connect(db_path, timeout=DB_TIMEOUT)
+    # Take the write lock when a write starts, not halfway through it: two
+    # threads that both upgrade a read lock deadlock instead of waiting.
+    con.isolation_level = "IMMEDIATE"
+    return con
+
+
+def anchor_of(index_root: Path) -> Path:
+    """The folder photo paths are stored relative to: the one holding the
+    index's `.selfcloud` directory (the drive's top, for an index on the
+    drive), else the disk the index is on."""
+    p = Path(os.path.abspath(Path(index_root).expanduser()))
+    parts = p.parts
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] == ".selfcloud":
+            return Path(*parts[:i]) if i else Path(p.anchor)
+    q = p
+    while not os.path.ismount(q) and q.parent != q:
+        q = q.parent
+    return q
+
+
+def _rel(path: Path | str, anchor: Path) -> str:
+    """`path` relative to `anchor`, or '' when it lives somewhere else."""
+    try:
+        return Path(os.path.abspath(path)).relative_to(anchor).as_posix()
+    except ValueError:
+        return ""
 
 
 # --------------------------------------------------------------- the index
@@ -74,15 +145,24 @@ class PhotoIndex:
     Keyed by SHA-256, so it shares its identity model with the dedup work
     that already ran: the same photo found on three drives is one row, and
     moving or renaming a file never orphans its vector.
+
+    `create=False` opens an index that must already exist and raises NoIndex
+    otherwise. Every reader uses it; only building makes a new index.
     """
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, create: bool = True):
         self.root = Path(root).expanduser()
-        self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "index.sqlite"
         self.manifest_path = self.root / "manifest.json"
         self.model_dir = self.root / "models"
-        self.db = sqlite3.connect(self.db_path)
+        if not create and not self.db_path.is_file():
+            raise NoIndex(self.root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.anchor = anchor_of(self.root)
+        # Where the index was when it was last built, read before anything
+        # rewrites the manifest — so a renamed drive can be followed.
+        self.old_anchor = self._old_anchor()
+        self._local = threading.local()
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS photos (
                 sha256 TEXT PRIMARY KEY, path TEXT, bytes INTEGER,
@@ -98,6 +178,8 @@ class PhotoIndex:
             CREATE TABLE IF NOT EXISTS scans (
                 at TEXT, source TEXT, added INTEGER, missing INTEGER,
                 returned INTEGER, failed INTEGER, seconds REAL);
+            CREATE TABLE IF NOT EXISTS forgotten (
+                sha256 TEXT PRIMARY KEY, at TEXT);
             CREATE INDEX IF NOT EXISTS photos_path ON photos(path);
             CREATE INDEX IF NOT EXISTS photos_taken ON photos(taken_at);
             CREATE INDEX IF NOT EXISTS photos_place ON photos(place);
@@ -106,12 +188,97 @@ class PhotoIndex:
         # rather than rebuilt — the embeddings in it are still perfectly good.
         for col, typ in (("taken_at", "TEXT"), ("lat", "REAL"), ("lon", "REAL"),
                          ("place", "TEXT"), ("country", "TEXT"),
-                         ("missing_since", "TEXT")):
+                         ("missing_since", "TEXT"), ("rel", "TEXT")):
             try:
                 self.db.execute(f"ALTER TABLE photos ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
                 pass                                  # already there
         self.db.commit()
+        self._backfill_rel()
+
+    # -- one connection per thread ----------------------------------------
+    @property
+    def db(self) -> sqlite3.Connection:
+        con = getattr(self._local, "con", None)
+        if con is None:
+            con = connect(self.db_path)
+            self._local.con = con
+        return con
+
+    def close(self) -> None:
+        con = getattr(self._local, "con", None)
+        if con is not None:
+            con.close()
+            self._local.con = None
+
+    # -- where a photo is now ----------------------------------------------
+    def _old_anchor(self) -> Path | None:
+        """Where the index lived when it was last built — read from its own
+        manifest, so an index made before paths were stored relatively can
+        still follow a renamed drive."""
+        try:
+            m = self.manifest()
+        except (OSError, ValueError):
+            return None
+        if m.get("anchor"):
+            return Path(m["anchor"])
+        if m.get("weights_dir"):
+            return anchor_of(Path(m["weights_dir"]).parent)
+        return None
+
+    def _backfill_rel(self) -> None:
+        """Rows from before the `rel` column: work out each photo's place
+        relative to the drive once, and keep it. Nothing is dropped."""
+        rows = list(self.db.execute(
+            "SELECT sha256, path FROM photos WHERE rel IS NULL"))
+        if not rows:
+            return
+        old = self.old_anchor
+        try:
+            for sha, path in rows:
+                rel = _rel(path, self.anchor) if path else ""
+                if not rel and path and old and old != self.anchor:
+                    rel = _rel(path, old)          # the drive was renamed
+                self.db.execute("UPDATE photos SET rel=? WHERE sha256=?", (rel, sha))
+            self.db.commit()
+        except sqlite3.OperationalError:           # a read-only disk: work it
+            self.db.rollback()                     # out at read time instead
+
+    def locate(self, path: str | None, rel: str | None = None) -> Path | None:
+        """The file as it can be reached now, or None. Tries the place
+        relative to the drive first (it follows a rename), then the stored
+        path."""
+        if rel:
+            p = self.anchor / rel
+            if p.is_file():
+                return p
+        if path and Path(path).is_file():
+            return Path(path)
+        old = self.old_anchor if path else None
+        if old and old != self.anchor:
+            r = _rel(path, old)
+            if r and (self.anchor / r).is_file():
+                return self.anchor / r
+        return None
+
+    def where(self, sha: str) -> Path | None:
+        """Where this photo can be reached now, or None — None also when it
+        is marked missing or was forgotten."""
+        row = self.db.execute(
+            "SELECT path, rel, missing_since FROM photos WHERE sha256=?",
+            (sha,)).fetchone()
+        if not row or row[2] is not None:
+            return None
+        return self.locate(row[0], row[1])
+
+    def thumb_path(self, sha: str) -> Path:
+        return self.root / "thumbs" / f"{sha}.jpg"
+
+    def drop_thumb(self, sha: str) -> None:
+        try:
+            self.thumb_path(sha).unlink()
+        except OSError:
+            pass
 
     # -- the manifest: what produced these vectors ------------------------
     def manifest(self) -> dict:
@@ -135,6 +302,7 @@ class PhotoIndex:
             "model": model, "pretrained": pretrained, "dim": dim,
             "normalized": True, "metric": "cosine",
             "weights_dir": str(self.model_dir),
+            "anchor": str(self.anchor),
             "created": m.get("created") or time.strftime("%Y-%m-%dT%H:%M:%S"),
             "updated": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "note": ("The embedding model is part of this index, not a "
@@ -149,20 +317,42 @@ class PhotoIndex:
     def have(self) -> set[str]:
         return {r[0] for r in self.db.execute("SELECT sha256 FROM vectors")}
 
+    def forgotten(self) -> set[str]:
+        return {r[0] for r in self.db.execute("SELECT sha256 FROM forgotten")}
+
     def add(self, sha: str, path: Path, vec, facts: dict | None = None) -> None:
         st, f = path.stat(), facts or {}
+        path = Path(os.path.abspath(path))
         # Columns named explicitly: the table grows over time, and a
         # positional INSERT silently rots the moment one is added.
         self.db.execute(
             "INSERT OR REPLACE INTO photos (sha256, path, bytes, mtime, "
-            "seen_at, taken_at, lat, lon, place, country, missing_since) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,NULL)",
+            "seen_at, taken_at, lat, lon, place, country, missing_since, rel) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,NULL,?)",
             (sha, str(path), st.st_size, st.st_mtime,
              time.strftime("%Y-%m-%dT%H:%M:%S"),
              f.get("taken_at"), f.get("lat"), f.get("lon"),
-             f.get("place"), f.get("country")))
+             f.get("place"), f.get("country"), _rel(path, self.anchor)))
         self.db.execute("INSERT OR REPLACE INTO vectors VALUES (?,?,?)",
                         (sha, len(vec), vec.astype("float16").tobytes()))
+
+    def moved(self, sha: str, path: Path) -> None:
+        """A photo already known turned up at a new place (a renamed drive, a
+        moved folder, a duplicate kept instead of the original). Follow it;
+        never re-read it."""
+        path = Path(os.path.abspath(path))
+        self.db.execute(
+            "UPDATE photos SET path=?, rel=?, missing_since=NULL WHERE sha256=?",
+            (str(path), _rel(path, self.anchor), sha))
+
+    def forget(self, sha: str) -> None:
+        """Out of the index for good: the row, its vector, its thumbnail —
+        and it stays out, even if the file is still in the folder."""
+        self.db.execute("DELETE FROM photos WHERE sha256=?", (sha,))
+        self.db.execute("DELETE FROM vectors WHERE sha256=?", (sha,))
+        self.db.execute("INSERT OR REPLACE INTO forgotten VALUES (?,?)",
+                        (sha, time.strftime("%Y-%m-%dT%H:%M:%S")))
+        self.drop_thumb(sha)
 
     def fail(self, path: Path, reason: str) -> None:
         self.db.execute("INSERT OR REPLACE INTO failures VALUES (?,?,?)",
@@ -181,9 +371,15 @@ class PhotoIndex:
         return mat, [r[0] for r in rows]
 
     def paths_for(self, shas: list[str]) -> dict[str, str]:
+        """Where each photo can be reached now (following a renamed drive),
+        else the path it was last seen at."""
         q = ",".join("?" * len(shas))
-        return dict(self.db.execute(
-            f"SELECT sha256, path FROM photos WHERE sha256 IN ({q})", shas))
+        out = {}
+        for sha, path, rel in self.db.execute(
+                f"SELECT sha256, path, rel FROM photos WHERE sha256 IN ({q})", shas):
+            found = self.locate(path, rel)
+            out[sha] = str(found) if found else path
+        return out
 
 
 # --------------------------------------------------------------- the model
@@ -269,25 +465,52 @@ def sha256(path: Path, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-def walk(root: Path):
+def is_bundle(p: Path) -> bool:
+    return p.name.lower().endswith(BUNDLE_SUFFIXES)
+
+
+def walk(root: Path, skipped: list | None = None):
     """Only files that really live under the folder the owner named.
 
     A symlink passes `is_file()` and `Image.open()` follows it, so without
     this the guard constrains where we LOOKED, not what we OPENED — one link
     in a photo folder and the index quietly reaches anywhere on the disk.
+
+    Never descends into an application's private package (a Photos library
+    holds every picture several times over) or into hidden folders (the
+    drive's own `.selfcloud` holds the wall's thumbnails, which are not new
+    photographs). Packages it stepped over are added to `skipped`, so the
+    caller can explain how to export the originals instead.
     """
-    base = Path(root).expanduser().resolve()
-    for p in sorted(Path(root).expanduser().rglob("*")):
-        if p.is_symlink():
-            continue
-        if not (p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES):
-            continue
-        try:
-            if not p.resolve().is_relative_to(base):
+    start = Path(root).expanduser()
+    base = start.resolve()
+    if is_bundle(start):
+        if skipped is not None:
+            skipped.append(start)
+        return
+    for dirpath, dirnames, filenames in os.walk(start):
+        keep = []
+        for d in sorted(dirnames):
+            if d.startswith("."):
                 continue
-        except OSError:
-            continue
-        yield p
+            if is_bundle(Path(d)):
+                if skipped is not None:
+                    skipped.append(Path(dirpath) / d)
+                continue
+            keep.append(d)
+        dirnames[:] = keep                   # os.walk honours the pruning
+        for name in sorted(filenames):
+            if name.startswith("._"):        # macOS resource-fork shadows
+                continue
+            p = Path(dirpath) / name
+            if p.suffix.lower() not in IMAGE_SUFFIXES or p.is_symlink():
+                continue
+            try:
+                if not (p.is_file() and p.resolve().is_relative_to(base)):
+                    continue
+            except OSError:
+                continue
+            yield p
 
 
 def open_image(path: Path):
@@ -403,6 +626,67 @@ def name_places(rows: list[dict]) -> None:
 
 
 # --------------------------------------------------------------- commands
+def reconcile(idx: PhotoIndex, source: Path, seen: dict[str, Path],
+              judge_absence: bool = True) -> tuple[int, int, int]:
+    """After a pass over one folder: follow photos that moved, mark the ones
+    that are gone (only after a complete pass), and welcome back the ones
+    that returned.
+
+    `seen` maps each photo found under `source` in this pass to where it was
+    found. Returns (moved, gone, back). Gone is a dated state, never a
+    deletion — but the wall's cached copy of a gone photo is removed, so a
+    picture deleted on purpose stops being shown.
+    """
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    src = os.path.abspath(Path(source).expanduser())
+    prefix = src.rstrip(os.sep) + os.sep
+    moved = gone = back = 0
+    rows = {sha: (path, rel, miss) for sha, path, rel, miss in idx.db.execute(
+        "SELECT sha256, path, rel, missing_since FROM photos")}
+    def under(p: str) -> bool:
+        return bool(p) and (p == src or p.startswith(prefix))
+
+    for sha, found in seen.items():
+        if sha not in rows:
+            continue
+        path, rel, miss = rows[sha]
+        here = os.path.abspath(found)
+        if path != here and not (path and Path(path).is_file()):
+            idx.moved(sha, Path(here))           # follow it to its new place
+            moved += 1
+            if miss is not None:
+                back += 1
+            rows[sha] = (here, _rel(here, idx.anchor), None)
+        elif miss is not None:
+            idx.db.execute("UPDATE photos SET missing_since=NULL WHERE sha256=?", (sha,))
+            back += 1
+    for sha, (path, rel, miss) in rows.items():
+        if not judge_absence:
+            break
+        if sha in seen or miss is not None or not path:
+            continue
+        # Only what was last seen under THIS folder — compared as a prefix,
+        # never with LIKE, where '_' and '%' in a folder name match anything.
+        now_at = os.path.abspath(idx.anchor / rel) if rel else path
+        if not (under(path) or under(now_at)):
+            continue
+        if idx.locate(path, rel) is not None:
+            continue                             # still there, just not read this time
+        idx.db.execute("UPDATE photos SET missing_since=? WHERE sha256=?", (now, sha))
+        idx.drop_thumb(sha)
+        gone += 1
+    idx.db.commit()
+    return moved, gone, back
+
+
+def remember_source(idx: PhotoIndex, source: Path) -> None:
+    idx.db.execute(
+        "INSERT OR IGNORE INTO sources (path, added_at) VALUES (?,?)",
+        (os.path.abspath(Path(source).expanduser()),
+         time.strftime("%Y-%m-%dT%H:%M:%S")))
+    idx.db.commit()
+
+
 def cmd_build(a) -> int:
     idx = PhotoIndex(a.index)
     emb = Embedder(idx, a.model, a.pretrained, offline=a.offline)
@@ -412,9 +696,17 @@ def cmd_build(a) -> int:
     print(f"  index    {idx.db_path}")
 
     known = idx.have()
-    files = list(walk(a.source))
+    forgotten = idx.forgotten()
+    bundles: list = []
+    files = list(walk(a.source, bundles))
     print(f"  found    {len(files)} images under {a.source}")
+    for b in bundles:
+        print(f"  skipped  {b} — an app's own library, not a folder of photos")
+    if Path(a.source).expanduser().is_dir():
+        remember_source(idx, Path(a.source))
 
+    seen: dict[str, Path] = {}
+    complete = True
     batch_imgs, batch_meta, done, skipped, failed = [], [], 0, 0, 0
     t0 = time.time()
 
@@ -434,9 +726,13 @@ def cmd_build(a) -> int:
 
     for n, path in enumerate(files, 1):
         if a.limit and done + skipped >= a.limit:
+            complete = False                 # a trial run saw only part of it
             break
         try:
             sha = sha256(path)
+            if sha in forgotten:             # the owner told it to forget this
+                continue
+            seen.setdefault(sha, path)
             if sha in known:
                 skipped += 1
                 continue
@@ -454,19 +750,37 @@ def cmd_build(a) -> int:
                   f"({rate:.1f}/s)", end="", flush=True)
     flush()
     idx.db.commit()
+    moved = gone = back = 0
+    if Path(a.source).expanduser().is_dir():
+        # A trial run (--limit) saw only part of the folder: follow what
+        # moved, but judge nothing absent from a pass that did not finish.
+        moved, gone, back = reconcile(idx, Path(a.source), seen,
+                                      judge_absence=complete)
     secs = time.time() - t0
     print(f"\r  embedded {done}  already had {skipped}  failed {failed}  "
           f"in {secs:.1f}s".ljust(72)
           + (f"  ({done / secs:.1f}/s)" if done and secs else ""))
+    if moved:
+        print(f"  followed {moved} photo(s) to a new place (a renamed drive or moved folder)")
+    if gone:
+        print(f"  {gone} photo(s) are no longer in this folder — they will not be shown")
     print(f"\n  Done. Search it with no network at all:\n"
           f"    python {Path(__file__).name} search \"kids at the lake\" "
           f"--index {a.index}")
     return 0
 
 
+def open_index(path) -> PhotoIndex:
+    """Open an index that must already exist; say so plainly if it doesn't."""
+    try:
+        return PhotoIndex(path, create=False)
+    except NoIndex as e:
+        raise SystemExit(f"\n  {e}\n")
+
+
 def cmd_search(a) -> int:
     import numpy as np
-    idx = PhotoIndex(a.index)
+    idx = open_index(a.index)
     man = idx.manifest()
     if not man:
         raise SystemExit("No index here yet. Run `build` first.")
@@ -488,7 +802,7 @@ def cmd_search(a) -> int:
 
 def cmd_verify(a) -> int:
     """Prove the independence claim: unplug the internet, it still works."""
-    idx = PhotoIndex(a.index)
+    idx = open_index(a.index)
     man = idx.manifest()
     if not man:
         raise SystemExit("No index here yet. Run `build` first.")
@@ -524,13 +838,9 @@ def cmd_watch(a) -> int:
         dated state and the knowledge is kept. When the drive comes back,
         the photo comes back with everything already known about it.
     """
-    idx = PhotoIndex(a.index)
+    idx = PhotoIndex(a.index) if a.source else open_index(a.index)
     if a.source:
-        idx.db.execute(
-            "INSERT OR IGNORE INTO sources (path, added_at) VALUES (?,?)",
-            (str(Path(a.source).expanduser().resolve()),
-             time.strftime("%Y-%m-%dT%H:%M:%S")))
-        idx.db.commit()
+        remember_source(idx, Path(a.source))
     sources = [r[0] for r in idx.db.execute("SELECT path FROM sources")]
     if not sources:
         raise SystemExit(
@@ -587,14 +897,15 @@ def scan_once(idx: PhotoIndex, source: Path, emb, batch_size: int = 16):
     """One pass over one folder. Returns (new, gone, returned, failed, secs)."""
     t0 = time.time()
     known = idx.have()
-    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    forgotten = idx.forgotten()
 
     if not source.exists():
         # The whole folder is unreachable — an unplugged drive, not a
         # hundred deletions. Say so and change nothing.
         return 0, 0, 0, 0, time.time() - t0
 
-    on_disk, new, failed = set(), 0, 0
+    on_disk: dict[str, Path] = {}
+    new, failed = 0, 0
     imgs, meta = [], []
 
     def flush():
@@ -612,7 +923,9 @@ def scan_once(idx: PhotoIndex, source: Path, emb, batch_size: int = 16):
     for path in walk(source):
         try:
             sha = sha256(path)
-            on_disk.add(sha)
+            if sha in forgotten:
+                continue
+            on_disk.setdefault(sha, path)
             if sha in known:
                 continue
             imgs.append(open_image(path))
@@ -625,29 +938,59 @@ def scan_once(idx: PhotoIndex, source: Path, emb, batch_size: int = 16):
         if len(imgs) >= batch_size:
             flush()
     flush()
+    idx.db.commit()
 
     # Anything under this source that we did not see is marked missing —
-    # dated, reversible, and never deleted.
-    prefix = str(source) + os.sep
-    gone = back = 0
-    for sha, p, miss in list(idx.db.execute(
-            "SELECT sha256, path, missing_since FROM photos WHERE path LIKE ?",
-            (prefix + "%",))):
-        here = sha in on_disk
-        if not here and miss is None:
-            idx.db.execute("UPDATE photos SET missing_since=? WHERE sha256=?",
-                           (now, sha))
-            gone += 1
-        elif here and miss is not None:
-            idx.db.execute("UPDATE photos SET missing_since=NULL WHERE sha256=?",
-                           (sha,))
-            back += 1
-    idx.db.commit()
+    # dated, reversible, and never deleted. A known photo seen at a new
+    # place is followed there.
+    _moved, gone, back = reconcile(idx, source, on_disk)
     return new, gone, back, failed, time.time() - t0
 
 
+def cmd_forget(a) -> int:
+    """'Forget this photo.' Removes it from the index — its row, what the
+    model saw in it, and the wall's copy — and keeps it out from then on.
+    The original file is never touched: deleting that is the owner's call."""
+    idx = open_index(a.index)
+    what = a.what.strip()
+    shas: list[str] = []
+    p = Path(what).expanduser()
+    if p.exists():
+        target = os.path.abspath(p)
+        files = [p] if p.is_file() else list(walk(p))
+        for f in files:
+            try:
+                shas.append(sha256(f))
+            except OSError:
+                pass
+        # and anything the index last saw there, even if the file is gone
+        prefix = target.rstrip(os.sep) + os.sep
+        for sha, path in idx.db.execute("SELECT sha256, path FROM photos"):
+            if path and (path == target or path.startswith(prefix)):
+                shas.append(sha)
+    elif len(what) >= 12 and all(c in "0123456789abcdef" for c in what.lower()):
+        shas = [r[0] for r in idx.db.execute(
+            "SELECT sha256 FROM photos WHERE substr(sha256, 1, ?) = ?",
+            (len(what), what.lower()))]
+    else:
+        for sha, path in idx.db.execute("SELECT sha256, path FROM photos"):
+            if path and (path == what or Path(path).name == what):
+                shas.append(sha)
+    shas = sorted(set(shas))
+    if not shas:
+        print(f"\n  Nothing in the index matches {what!r}. Nothing was changed.\n")
+        return 1
+    for sha in shas:
+        idx.forget(sha)
+    idx.db.commit()
+    print(f"\n  Forgotten: {len(shas)} photo(s). They are out of the index and off "
+          f"the wall,\n  and they stay out even if the files are still in the "
+          f"folder.\n  The original files were not touched.\n")
+    return 0
+
+
 def cmd_stats(a) -> int:
-    idx = PhotoIndex(a.index)
+    idx = open_index(a.index)
     n, = next(idx.db.execute("SELECT COUNT(*) FROM vectors"))
     b, = next(idx.db.execute("SELECT COALESCE(SUM(bytes),0) FROM photos"))
     f, = next(idx.db.execute("SELECT COUNT(*) FROM failures"))
@@ -880,6 +1223,11 @@ def main() -> int:
     w.add_argument("--model", default=DEFAULT_MODEL)
     w.add_argument("--pretrained", default=DEFAULT_PRETRAINED)
     w.set_defaults(fn=cmd_watch)
+
+    fg = sub.add_parser("forget", help="take a photo (or a folder of them) out of "
+                                       "the index and off the wall, for good")
+    fg.add_argument("what", help="the photo file, a folder, or its id")
+    fg.set_defaults(fn=cmd_forget)
 
     t = sub.add_parser("selftest", help="prove the pipeline, no download needed")
     t.set_defaults(fn=cmd_selftest)
