@@ -380,6 +380,16 @@ def is_owner_console() -> bool:
     return _owner_hands.get()
 
 
+def owner_present() -> bool:
+    """True only while a command the owner typed and confirmed at his own
+    keyboard is running (owner_console). What makes JEFFEREY quieter — a
+    charge added to the agreed list, a statement name taken as a known
+    company — waits for this (guardian.py). Unlike owners_hands(), a process
+    with no engine bound does not count: nothing irreversible happens
+    because something other than the owner asked."""
+    return is_owner_console()
+
+
 def who() -> str:
     """Who is acting, for the record: the owner with his own hands, the key
     bound to this call, or — with no engine bound to this process at all — a

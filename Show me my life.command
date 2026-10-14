@@ -1,8 +1,9 @@
 #!/bin/bash
 # Double-click this.
 #
-# It puts your photographs on the screen — this Mac, your phone, your TV.
-# Everything happens on this machine. Nothing is uploaded anywhere.
+# It puts your photographs on the screen — this Mac, and your phone or TV
+# only if you say yes when it asks. Everything happens on this machine.
+# Nothing is uploaded anywhere.
 #
 # Safe to run as many times as you like. It picks up where it left off.
 cd "$(dirname "$0")" || exit 1

@@ -228,18 +228,26 @@ def run(index, recall: Recall, embedder=None, top: int = 24) -> list[dict]:
         where.append(f"({ors})")
         for p in recall.places:
             args += [f"%{p}%", f"%{p}%"]
-    sql = "SELECT sha256, path, taken_at, place, country FROM photos"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+    # A photo marked missing (deleted, or moved out of the folder) is never
+    # offered — on the wall it would be a deleted picture coming back.
+    where.append("missing_since IS NULL")
+    sql = "SELECT sha256, path, taken_at, place, country, rel FROM photos"
+    sql += " WHERE " + " AND ".join(where)
     rows = list(index.db.execute(sql, args))
     if not rows:
         return []
+    locate = getattr(index, "locate", None)
+
+    def path_now(r) -> str:
+        """Where it is now — following a renamed drive — else where it was."""
+        found = locate(r[1], r[5]) if locate else None
+        return str(found) if found else r[1]
 
     # No words left over — it was a pure time/place question. Answer it
     # chronologically and never load the model at all.
     if not recall.semantic or embedder is None:
         rows.sort(key=lambda r: r[2] or "")
-        return [{"sha256": r[0], "path": r[1], "taken_at": r[2],
+        return [{"sha256": r[0], "path": path_now(r), "taken_at": r[2],
                  "place": r[3], "country": r[4], "score": None} for r in rows[:top]]
 
     keep = {r[0]: r for r in rows}
@@ -255,30 +263,44 @@ def run(index, recall: Recall, embedder=None, top: int = 24) -> list[dict]:
     out = []
     for j in order:
         r = keep[shas[mask[j]]]
-        out.append({"sha256": r[0], "path": r[1], "taken_at": r[2],
+        out.append({"sha256": r[0], "path": path_now(r), "taken_at": r[2],
                     "place": r[3], "country": r[4], "score": float(scores[j])})
     return out
 
 
 # --------------------------------------------------------------------- cli
-def main() -> int:
-    from photo_index import Embedder, PhotoIndex
+def main(argv: list[str] | None = None) -> int:
+    sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
+    import home
+    from photo_index import Embedder, NoIndex, PhotoIndex
 
     ap = argparse.ArgumentParser(description="Ask your own photos a question.")
     ap.add_argument("question", nargs="?", default="")
-    ap.add_argument("--index", default="~/.selfcloud/photo-index")
+    # The same index every other tool uses: on the Self-Cloud drive when one
+    # is plugged in. A hard-coded home-folder path here searched an empty
+    # index while the real one sat on the drive.
+    ap.add_argument("--index", default=None,
+                    help="the photo index (default: on the Self-Cloud drive "
+                         "when it is plugged in)")
     ap.add_argument("--top", type=int, default=24)
     ap.add_argument("--explain", action="store_true",
                     help="show how the sentence was taken apart, then stop")
     ap.add_argument("--selftest", action="store_true")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     if a.selftest:
         return selftest()
     if not a.question:
         ap.error("ask something, e.g. \"vacation ten years ago in Cuba\"")
 
-    idx = PhotoIndex(a.index)
+    where = Path(a.index).expanduser() if a.index else home.index_path()
+    try:
+        # A question never creates an index — not in the home folder, not
+        # anywhere. No index means saying so.
+        idx = PhotoIndex(where, create=False)
+    except NoIndex as e:
+        print(f"\n  {e}\n")
+        return 1
     known = {r[0] for r in idx.db.execute(
         "SELECT DISTINCT place FROM photos WHERE place IS NOT NULL")}
     known |= {r[0] for r in idx.db.execute(

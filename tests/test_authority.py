@@ -412,6 +412,11 @@ class AuthorizeActionIsAGate(AuthorityTest):
         self.assertTrue(all(x["by"] == "jefferey" and x["surface"] == "mcp" for x in logged))
 
     def test_the_terminal_checks_arguments_like_mcp_and_http_do(self):
+        # Integration (October 2026): this used to assert that the terminal
+        # refuses "100" sent as text. MCP and HTTP read "100" as 100 (pydantic),
+        # so the three surfaces disagreed and a small local model's '5' or
+        # 'false' failed only on the terminal. Now the terminal reads text the
+        # same way; what is not a real number is still refused everywhere.
         r = self.py("""
             import jefferey_chat as jc, access
             with access.owner_console():
@@ -419,11 +424,13 @@ class AuthorizeActionIsAGate(AuthorityTest):
             d = jc.dispatch_tool
             out({k: d("authorize_action", {"category": "groceries", "description": "TV",
                                            "amount": v})
-                 for k, v in [("text", "100"), ("nan", float("nan")), ("bool", True)]})
+                 for k, v in [("text", "40"), ("nan", float("nan")), ("bool", True),
+                              ("words", "forty dollars")]})
         """)
+        self.assertTrue(r.pop("text")["allowed"])
         for k, v in r.items():
-            self.assertTrue(v.get("refused"), (k, v))
-            self.assertNotIn("allowed", v)
+            self.assertTrue(v.get("refused") or v.get("allowed") is False, (k, v))
+            self.assertNotEqual(v.get("allowed"), True, (k, v))
 
 
 # ======================================================================= I-09

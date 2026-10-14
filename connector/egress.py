@@ -209,22 +209,31 @@ RELEASE: dict[str, frozenset[str]] = {
                              "added", "ts", "authorization_id", "approved", "by",
                              "surface", "source"}),
     # money
+    # From an AI an addition to the agreed list waits for the owner: 'status'
+    # says so and 'proposal' names it (I-47). The matcher says which entry a
+    # statement line is, or asks "did you mean …" (I-36); a charge seen again
+    # is 'already_on_file', never a new one (I-37); refunds come off (I-39).
     "expect_charge": frozenset({"key", "merchant", "amount", "cadence",
                                 "authorized_recurring", "active",
-                                "cancelled_on", "updated"}),
-    "mark_cancelled": frozenset({"merchant", "marked_cancelled", "cancelled_on"}),
+                                "cancelled_on", "updated", "status", "proposal"}),
+    "mark_cancelled": frozenset({"merchant", "marked_cancelled", "cancelled_on",
+                                 "matched_to", "possible_match"}),
     "check_charge": frozenset({"merchant", "amount", "date", "cadence", "verdict",
                                "severity", "what_happened", "recoverable",
-                               "authorized_on_file", "action"}),
+                               "authorized_on_file", "action", "matched_to",
+                               "possible_match", "already_on_file", "kept"}),
     "review_statement": frozenset({"checked", "flagged", "quiet",
                                    "recoverable_total", "annualized_estimate",
-                                   "summary"}),
+                                   "summary", "attention", "new_merchants", "refunds",
+                                   "already_on_file", "recorded", "errors"}),
     "expected_charges": frozenset({"key", "merchant", "amount", "cadence",
                                    "authorized_recurring", "active",
-                                   "cancelled_on", "updated"}),
+                                   "cancelled_on", "updated", "status", "proposal",
+                                   "cancelled_on_said", "amount_known"}),
     "dispute_pack": frozenset({"merchant", "what_was_authorized",
                                "charges_in_dispute", "amount_in_dispute",
-                               "full_history", "how_to_use"}),
+                               "full_history", "how_to_use", "refunds_received",
+                               "chargeback_deadline_estimate"}),
     # the representative reading their mail
     # what it touches and who sent it, in plain words (I-13)
     "triage_message": frozenset({"sender", "subject", "verdict", "interrupt",

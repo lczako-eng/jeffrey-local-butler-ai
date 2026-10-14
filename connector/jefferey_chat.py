@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import os
 import sys
 from pathlib import Path
@@ -1013,18 +1014,55 @@ TOOLS = [
 _TOOL_NAMES = {t["name"]: t for t in TOOLS}
 _JSON_TYPES = {"string": (str,), "integer": (int,), "number": (int, float),
                "boolean": (bool,), "array": (list,), "object": (dict,)}
+_SAID_AS = {"string": "some text", "integer": "a whole number", "number": "a number",
+            "boolean": "true or false", "array": "a list",
+            "object": "a group of named values"}
+# How MCP and HTTP (pydantic, lax mode) read a yes/no sent as text — the
+# terminal reads it the same way, so 'false' from a small local model means
+# false on every surface (I-38), and '5' is 5 (a refusal there was the only
+# surface to disagree).
+_TEXT_TRUE = frozenset({"true", "t", "yes", "y", "on", "1"})
+_TEXT_FALSE = frozenset({"false", "f", "no", "n", "off", "0"})
+_WHOLE = re.compile(r"[+-]?\d+")
+
+
+def _lax(want: str, val):
+    """`val` read as `want` the way the other surfaces read it, or `val`
+    unchanged when it cannot be."""
+    if want == "boolean":
+        if isinstance(val, str):
+            s = val.strip().lower()
+            if s in _TEXT_TRUE:
+                return True
+            if s in _TEXT_FALSE:
+                return False
+        elif isinstance(val, int) and not isinstance(val, bool) and val in (0, 1):
+            return bool(val)
+    elif want in ("integer", "number") and isinstance(val, str):
+        s = val.strip()
+        if _WHOLE.fullmatch(s):
+            return int(s)
+        if want == "number":
+            try:
+                f = float(s)
+            except ValueError:
+                return val
+            return f if math.isfinite(f) else val
+    return val
 
 
 def _check_args(name: str, args: dict) -> str | None:
     """The arguments against the tool's own schema, the way MCP and HTTP
     check theirs (I-06: a local model's JSON passed NaN, and a cap typed as
-    text, straight through). A plain sentence, or None when they are fine."""
+    text, straight through). Text that plainly means a number or a yes/no is
+    read as one, as the other surfaces do (written back into `args`). A
+    plain sentence, or None when they are fine."""
     schema = _TOOL_NAMES[name]["input_schema"]
     props = schema.get("properties", {})
     for req in schema.get("required", []):
         if args.get(req) is None:
             return f"'{req}' is needed for {name}."
-    for key, val in args.items():
+    for key, val in list(args.items()):
         spec = props.get(key)
         if spec is None or val is None:
             continue
@@ -1032,12 +1070,13 @@ def _check_args(name: str, args: dict) -> str | None:
         ok = _JSON_TYPES.get(want)
         if ok is None:
             continue
+        val = args[key] = _lax(want, val)
         if isinstance(val, bool) and want != "boolean":
-            return f"'{key}' should be {want}, not true or false."
+            return f"'{key}' should be {_SAID_AS[want]}, not true or false."
         if want == "integer" and isinstance(val, float) and val.is_integer():
             continue
         if not isinstance(val, ok):
-            return f"'{key}' should be {'a ' + want if want != 'array' else 'a list'}."
+            return f"'{key}' should be {_SAID_AS.get(want, want)}."
         if want == "number" and isinstance(val, float) and not math.isfinite(val):
             return f"'{key}' is not a real number."
         if "enum" in spec and val not in spec["enum"]:
@@ -2723,8 +2762,16 @@ def selftest() -> None:
         finally:
             keyring.set_keyring(_prev)
 
-        # 11. The Guardian: money that leaves without asking.
-        guard.expect_charge("GoDaddy", 21.99, "yearly", authorized_recurring=False)
+        # 11. The Guardian: money that leaves without asking. Adding to the
+        # list of agreed payments makes JEFFEREY quieter, so only the owner's
+        # own hands do it (I-47); from the engine it waits for him.
+        asked = dispatch_tool("expect_charge", {"merchant": "GoDaddy", "amount": 21.99,
+                                                "cadence": "yearly",
+                                                "authorized_recurring": "false"})
+        assert asked.get("status") == "waiting_for_owner", asked
+        assert asked.get("authorized_recurring") is False, asked   # 'false' is false
+        with access.owner_console():
+            assert guard.confirm_change(asked["proposal"])["status"] == "confirmed"
         guard.mark_cancelled("Adobe Creative Cloud", on="2026-08-15")
         stmt = guard.review_statement([
             {"merchant": "GODADDY.COM 480-505-8855", "amount": 89.97, "date": "2026-09-02"},
@@ -2736,7 +2783,17 @@ def selftest() -> None:
         assert stmt["recoverable_total"] > 100, stmt
         pack = guard.dispute_pack("GoDaddy")
         assert pack["amount_in_dispute"] == 89.97, pack
-        print(f"  ✓ guardian: 3 verdicts, ${stmt['recoverable_total']:.2f} at stake, dispute pack built")
+        # An AUTHORIZED subscription whose price rose: only the rise is owed,
+        # and the letter never says 'not authorized' (I-39).
+        with access.owner_console():
+            guard.expect_charge("Netflix", 16.49, "monthly")
+        for day in ("2026-09-03", "2026-10-03"):
+            guard.check_charge("NETFLIX.COM", 18.99, day)
+        rise = guard.dispute_pack("Netflix")
+        assert rise["amount_in_dispute"] == 5.00, rise
+        assert "not authorized" not in json.dumps(rise).lower(), rise
+        print(f"  ✓ guardian: 3 verdicts, ${stmt['recoverable_total']:.2f} at stake, dispute pack "
+              f"built; an AI's addition waits for the owner; a price rise claims only the rise")
 
         # 12. The life layer: who they are, and who may hear it.
         # Isolated store — the dispatch pass above already seeded the shared one.
