@@ -44,9 +44,16 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+try:
+    import fcntl  # POSIX only
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 
 import home
 
@@ -62,6 +69,24 @@ ANY = "*any*"        # keys are the owner's own field names (get_profile) —
 COMMON = frozenset({"error", "note", "rule", "reason", "refused", "tool",
                     "tell_the_user"})
 
+# What every tool that removes or closes something returns (forgetting.py):
+# step one shows what would go and a one-time code; step two says what went,
+# until when it can be put back, and what copies still exist.
+FORGET = frozenset({"step", "would_remove", "would_change", "count", "kinds",
+                    "confirm", "needs_owner", "expires", "how_to_finish",
+                    "also_mentioned", "unknown_ids", "removed_items",
+                    "changed_items", "kept_until", "put_back", "still_held"})
+
+# What an engine asks to forget names the very thing being forgotten — even
+# when nothing matches ("forget the affair with Maria"). The log keeps a
+# sha256 fingerprint of these arguments, never the words.
+FINGERPRINT_ARGS: dict[str, tuple[str, ...]] = {
+    "forget": ("contains",), "forget_life": ("contains",),
+    "close_goal": ("contains",), "resolve_opportunity": ("contains",),
+    "conscience_exclude": ("contains",), "remove_rule": ("rule_id_or_text",),
+    "forget_profile_field": ("field",),
+}
+
 RELEASE: dict[str, frozenset[str]] = {
     # identity
     "get_directives": frozenset({TEXT, "directives"}),
@@ -72,22 +97,22 @@ RELEASE: dict[str, frozenset[str]] = {
     "get_conscience": frozenset({"owner", "priorities", "facts", "active_goals",
                                  "corrections_learned_from", "notices"}),
     # values and how they are learned
-    "record_correction": frozenset({"context", "higher", "lower", "confidence",
-                                    "evidence", "updated"}),
-    "set_priority": frozenset({"context", "higher", "lower", "confidence",
+    "record_correction": frozenset({"id", "context", "higher", "lower",
+                                    "confidence", "evidence", "updated"}),
+    "set_priority": frozenset({"id", "context", "higher", "lower", "confidence",
                                "evidence", "updated"}),
     "explain_basis": frozenset({"topic", "priorities", "facts"}),
-    "priorities_for": frozenset({"context", "higher", "lower", "confidence",
+    "priorities_for": frozenset({"id", "context", "higher", "lower", "confidence",
                                  "evidence", "updated"}),
     "draft_guidance": frozenset({"purpose", "recipient", "write_as",
                                  "their_priorities_here", "their_facts_here",
                                  "voice", "rules"}),
     # facts, profile, rules, the daily brief
-    "remember_fact": frozenset({"fact", "category", "added"}),
-    "forget": frozenset({"removed_facts"}),
+    "remember_fact": frozenset({"id", "fact", "category", "added"}),
+    "forget": FORGET | {"removed_facts"},
     "get_profile": frozenset({ANY}),
     "set_profile_field": frozenset({"stored", "field", "value"}),
-    "forget_profile_field": frozenset({"removed"}),
+    "forget_profile_field": FORGET | {"removed"},
     "fill_form": frozenset({"filled", "needs_you", "coverage", "vault_available"}),
     # fill_pdf: the filled copy's location, never the values written into it
     "fill_pdf": frozenset({"written", "fields_set", "filled_from_vault",
@@ -96,11 +121,11 @@ RELEASE: dict[str, frozenset[str]] = {
     "pdf_form_fields": frozenset({"path", "fields", "count"}),
     "action_log": frozenset({"category", "description", "amount", "outcome",
                              "added", "ts"}),
-    "conscience_include": frozenset({"ref", "added"}),
-    "conscience_exclude": frozenset({"excluded"}),
+    "conscience_include": frozenset({"id", "ref", "added"}),
+    "conscience_exclude": FORGET | {"excluded"},
     "set_rule": frozenset({"id", "kind", "tags", "audience", "allow",
                            "instruction", "added"}),
-    "remove_rule": frozenset({"removed"}),
+    "remove_rule": FORGET | {"removed"},
     "list_rules": frozenset({"id", "kind", "tags", "audience", "allow",
                              "instruction", "added"}),
     "daily_brief": frozenset({"orb", "active_goals", "opportunities",
@@ -108,13 +133,13 @@ RELEASE: dict[str, frozenset[str]] = {
                               "corrections_learned_from", "notices"}),
     "orb_state": frozenset({"mood"}),
     # goals and the opportunity engine
-    "add_goal": frozenset({"goal", "added", "active"}),
-    "close_goal": frozenset({"closed"}),
-    "log_observation": frozenset({"note", "category", "added", "ts"}),
-    "record_opportunity": frozenset({"what", "value_estimate", "aligns_with",
+    "add_goal": frozenset({"id", "goal", "added", "active"}),
+    "close_goal": FORGET | {"closed"},
+    "log_observation": frozenset({"id", "note", "category", "added", "ts"}),
+    "record_opportunity": frozenset({"id", "what", "value_estimate", "aligns_with",
                                      "advances_goal", "reduces_risk", "urgency",
                                      "score", "status", "resolved", "added", "ts"}),
-    "resolve_opportunity": frozenset({"resolved"}),
+    "resolve_opportunity": FORGET | {"resolved"},
     # acting on their behalf
     "set_permission": frozenset({"category", "level", "cap", "updated"}),
     "authorize_action": frozenset({"allowed", "level", "cap", "updated"}),
@@ -143,11 +168,11 @@ RELEASE: dict[str, frozenset[str]] = {
                                  "money_mentioned", "deadlines",
                                  "relevant_priorities", "advice"}),
     # the life layer
-    "add_person": frozenset({"name", "relationship", "notes", "important_dates",
-                             "added", "updated"}),
-    "add_memory": frozenset({"text", "when", "people", "tags", "visibility",
+    "add_person": frozenset({"id", "name", "relationship", "notes",
+                             "important_dates", "added", "updated"}),
+    "add_memory": frozenset({"id", "text", "when", "people", "tags", "visibility",
                              "added", "photos"}),
-    "add_media": frozenset({"path", "caption", "when", "people", "visibility",
+    "add_media": frozenset({"id", "path", "caption", "when", "people", "visibility",
                             "reachable", "added"}),
     "who_am_i": frozenset({"people_who_matter", "moments",
                            "pictures_and_recordings", "what_they_value", "facts",
@@ -155,8 +180,8 @@ RELEASE: dict[str, frozenset[str]] = {
     "tell_story": frozenset({"theme", "visible_at", "moments", "pictures",
                              "people", "how_to_tell_it"}),
     "story_gaps": frozenset({"gaps"}),
-    "forget_life": frozenset({"memories_removed", "media_removed",
-                              "people_removed"}),
+    "forget_life": FORGET | {"memories_removed", "media_removed",
+                             "people_removed", "names_taken_off"},
     # the interview
     "next_question": frozenset({"question", "id", "depth", "domain",
                                 "what_it_teaches_you", "trust", "how_to_ask"}),
@@ -285,6 +310,11 @@ def bind(surface: str, engine: str | None = None) -> None:
     global _SURFACE, _ENGINE
     _SURFACE = surface
     _ENGINE = engine or os.environ.get("JEFFEREY_ENGINE")
+    if surface != "test":
+        try:
+            let_go()             # the owner's retention, if he has set one
+        except OSError:
+            pass
 
 
 def _client() -> str:
@@ -356,10 +386,14 @@ def _plain(asked):
     return asked
 
 
-def _describe(asked) -> str:
+def fingerprint(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _describe(asked, tool: str | None = None) -> str:
     """The arguments, for the log's 'why' — capped, and never a secret's
     home: if what the engine sent looks like a secret, the log says so and
-    keeps the value out."""
+    keeps the value out. What it asked to forget is kept as a fingerprint."""
     if asked is None:
         return ""
     asked = _plain(asked)
@@ -367,6 +401,11 @@ def _describe(asked) -> str:
     if hit:
         return (f"[not written down: '{hit[0]}' in what the engine sent "
                 f"contained what looks like {hit[1]}]")
+    if tool in FINGERPRINT_ARGS and isinstance(asked, dict):
+        asked = dict(asked)
+        for k in FINGERPRINT_ARGS[tool]:
+            if isinstance(asked.get(k), str) and asked[k]:
+                asked[k] = f"[not written down; {fingerprint(asked[k])}]"
     try:
         s = _dumps(asked)
     except Exception:
@@ -379,6 +418,35 @@ def log_path() -> Path:
     return home.egress_path()
 
 
+class _Locked:
+    """The log's own lock, so the owner's erasure (which rewrites the file)
+    never loses a line another engine appends at the same moment."""
+
+    def __init__(self, p: Path):
+        self.path, self.fd = p.with_name(p.name + ".lock"), None
+
+    def __enter__(self):
+        if fcntl is None:
+            return self
+        try:
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT
+                              | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except OSError:
+            self.fd = None
+            return self
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self.fd)
+                self.fd = None
+        return False
+
+
 def _write(entry: dict) -> None:
     """Append one line, fsynced, before anything leaves. A log that cannot be
     written is a door that cannot be opened."""
@@ -386,12 +454,193 @@ def _write(entry: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     line = (_dumps(entry) + "\n").encode()
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(p, flags, 0o600)
+    with _Locked(p):
+        fd = os.open(p, flags, 0o600)
+        try:
+            os.write(fd, line)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+# ------------------------------------------------------------- erasure
+# The one exception to "append-only": the OWNER erasing words for good
+# (forgetting.erase, from his own console — never an engine). Each entry that
+# held them stays in the log as a dated tombstone: when, to whom, which tool,
+# how many bytes and the sha256 of what was sent. Only the words go.
+def _strings(obj):
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _strings(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _strings(v)
+
+
+def _text_hits(s, match) -> bool:
+    if not isinstance(s, str) or not s:
+        return False
     try:
-        os.write(fd, line)
-        os.fsync(fd)
+        obj = json.loads(s)
+    except ValueError:
+        return bool(match(s))
+    return any(match(x) for x in _strings(obj))
+
+
+def _hits(e: dict, match) -> tuple[bool, bool]:
+    return _text_hits(e.get("sent"), match), _text_hits(e.get("asked"), match)
+
+
+def matching(match) -> dict:
+    """How many entries hold what `match` finds, and where they went.
+    Reads only."""
+    out = {"entries": 0, "engines": Counter(), "first": None, "last": None}
+    for e in entries():
+        hs, ha = _hits(e, match)
+        if hs or ha:
+            out["entries"] += 1
+            out["engines"][e.get("engine") or "?"] += 1
+            t = e.get("t")
+            if t:
+                out["first"] = min(out["first"] or t, t)
+                out["last"] = max(out["last"] or t, t)
+    return out
+
+
+def _rewrite(change) -> dict:
+    """Rewrite the log under its lock, atomically: `change(entry)` returns
+    True if it changed the entry in place. A torn line `change` is asked
+    about as {"torn": text}; True drops it. Returns how many."""
+    p = log_path()
+    out = {"entries": 0, "torn_lines_dropped": 0}
+    if not p.exists():
+        return out
+    with _Locked(p):
+        lines = []
+        for line in p.read_bytes().splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                if change({"torn": line.decode("utf-8", "replace")}):
+                    out["torn_lines_dropped"] += 1
+                    continue
+                lines.append(line)
+                continue
+            if isinstance(e, dict) and change(e):
+                out["entries"] += 1
+                line = _dumps(e).encode("utf-8")
+            lines.append(line)
+        if not (out["entries"] or out["torn_lines_dropped"]):
+            return out
+        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=f".{p.name}.", suffix=".tmp")
+        try:
+            try:
+                view = memoryview(b"\n".join(lines) + (b"\n" if lines else b""))
+                while view:
+                    view = view[os.write(fd, view):]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp, p)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        try:
+            dfd = os.open(p.parent, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+    return out
+
+
+def _tombstone(e: dict, sent: bool, asked: bool, words: str, mark: str, when: str) -> None:
+    if sent and e.get("sent") is not None:
+        e["sent"] = f"[{words} — the sha256 of what was sent is kept]"
+    if asked and e.get("asked"):
+        e["asked_sha256"] = hashlib.sha256(str(e["asked"]).encode("utf-8")).hexdigest()
+        e["asked"] = f"[{words}]"
+    e[mark] = when
+
+
+def redact(match, when: str) -> dict:
+    """OWNER ONLY. Every entry whose 'sent' or 'asked' holds what `match`
+    finds becomes a tombstone; a torn line that holds it is dropped."""
+    def change(e):
+        if "torn" in e:
+            return bool(match(e["torn"]))
+        hs, ha = _hits(e, match)
+        if hs or ha:
+            _tombstone(e, hs, ha, f"erased by the owner on {when}", "erased", when)
+            return True
+        return False
+    return _rewrite(change)
+
+
+# How long the word-for-word record is kept: the owner's choice, and off
+# until he makes it (`python connector/egress.py keep 90`). Older entries
+# keep their date, destination, tool, size and fingerprint; their words go.
+def _keep_path() -> Path:
+    p = log_path()
+    return p.with_name(p.name + ".keep")
+
+
+def keep_days() -> int | None:
+    raw = os.environ.get("JEFFEREY_EGRESS_KEEP_DAYS")
+    if raw is None:
+        try:
+            raw = _keep_path().read_text().strip()
+        except OSError:
+            return None
+    try:
+        n = int(str(raw).strip())
+    except ValueError:
+        return None
+    return n if n > 0 else None
+
+
+def set_keep(days: int | None) -> None:
+    p = _keep_path()
+    if not days:
+        p.unlink(missing_ok=True)
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+                 0o600)
+    try:
+        os.write(fd, f"{int(days)}\n".encode())
     finally:
         os.close(fd)
+
+
+def let_go(days: int | None = None) -> dict:
+    """Keep the words of each send for `days` (the owner's setting) and no
+    longer. Each older entry stays as a dated line with its fingerprint."""
+    days = days if days is not None else keep_days()
+    if not days:
+        return {"entries": 0, "torn_lines_dropped": 0}
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    today = datetime.now().strftime("%d %B %Y").lstrip("0")
+
+    def change(e):
+        if "torn" in e or e.get("let_go") or e.get("erased"):
+            return False
+        if str(e.get("t", "")) >= cutoff:
+            return False
+        if e.get("sent") is None and not e.get("asked"):
+            return False
+        _tombstone(e, True, True, f"let go after {days} days, on {today}", "let_go", today)
+        return True
+    return _rewrite(change)
 
 
 def _entry(kind: str, *, tool: str | None, sent: str | None, asked: str,
@@ -417,7 +666,7 @@ def _entry(kind: str, *, tool: str | None, sent: str | None, asked: str,
 
 
 def _refuse(kind: str, tool: str | None, asked, reason: str) -> EgressRefused:
-    _write(_entry(kind, tool=tool, sent=None, asked=_describe(asked),
+    _write(_entry(kind, tool=tool, sent=None, asked=_describe(asked, tool),
                   withheld=[], refused=reason))
     return EgressRefused(
         f"withheld by the egress door: {reason}. Nothing from this result left "
@@ -470,7 +719,7 @@ def admit(tool: str, asked) -> None:
     hit = _scan(_plain(asked))
     if hit:
         field, what = hit
-        _write(_entry("tool_call", tool=tool, sent=None, asked=_describe(asked),
+        _write(_entry("tool_call", tool=tool, sent=None, asked=_describe(asked, tool),
                       withheld=[], refused=f"the engine handed in what looks like "
                                           f"{what} in '{field}'; not taken"))
         raise EgressRefused(
@@ -506,7 +755,7 @@ def release(tool: str, out, asked=None):
         raise _refuse("tool_result", tool, asked,
                       f"'{field}' contains what looks like {what}")
     _write(_entry("tool_result", tool=tool, sent=_dumps(kept),
-                  asked=_describe(asked), withheld=withheld, refused=None))
+                  asked=_describe(asked, tool), withheld=withheld, refused=None))
     return kept
 
 
@@ -922,7 +1171,10 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description="What left the house — JEFFEREY's egress log, in plain words.")
     ap.add_argument("what", nargs="?", default="report",
-                    choices=["report", "shut", "open", "status", "selftest"])
+                    choices=["report", "shut", "open", "status", "selftest", "keep"])
+    ap.add_argument("days_to_keep", nargs="?", default=None,
+                    help="with 'keep': how many days to keep each send word for "
+                         "word, or 'always'")
     ap.add_argument("--all", action="store_true", help="all time, not the last 7 days")
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--full", action="store_true", help="every send, word for word")
@@ -936,6 +1188,27 @@ def main(argv: list[str]) -> int:
     if a.what == "open":
         was = open_()
         print("  The door is open." + ("" if was else "  (it already was)"))
+        return 0
+    if a.what == "keep":
+        v = (a.days_to_keep or "").strip().lower()
+        if v in ("always", "forever", "off", "0"):
+            set_keep(None)
+            print("  Every send is kept word for word, for as long as the log exists.")
+            return 0
+        try:
+            n = int(v)
+            assert n > 0
+        except (ValueError, AssertionError):
+            now = keep_days()
+            print("  Each send is kept word for word "
+                  + (f"for {now} days." if now else "for as long as the log exists.")
+                  + "\n  To change it: keep <number of days>, or keep always.")
+            return 0 if not v else 1
+        set_keep(n)
+        r = let_go(n)
+        print(f"  Each send is now kept word for word for {n} days. After that only "
+              f"its date, where it went and its fingerprint stay.\n"
+              f"  {r['entries']} older send(s) were let go just now.")
         return 0
     if a.what == "status":
         print(f"  door: {'SHUT' if is_shut() else 'open'} · log: {log_path()}")

@@ -54,6 +54,15 @@ from conscience import (Conscience, ConscienceConflict,         # noqa: E402
                         ConscienceCorrupt, ConscienceNeedsFixing,
                         ConscienceSaveFailed)
 from selfcloud import SelfCloud                                 # noqa: E402
+import forgetting                                               # noqa: E402
+
+
+def forget_now(c, contains="", ids=None) -> dict:
+    """Forget in the two steps every removal takes since I-01, approved as the
+    owner at his own console (so a test may remove many things at once)."""
+    shown = c.forget_fact(contains, ids)
+    assert shown.get("step") == "preview", shown
+    return forgetting.approve(c, shown["confirm"])
 
 
 def tearDownModule():
@@ -175,7 +184,8 @@ class ReadsDoNotWrite(StoreTest):
             for i in range(14):
                 mcp_call(m, "remember_fact", {"fact": f"ordinary fact {i}"})
             mcp_call(m, "remember_fact", {"fact": "Served in Kandahar in 2011"})
-            gone = mcp_call(m, "forget", {"contains": "Kandahar"})
+            shown = mcp_call(m, "forget", {"contains": "Kandahar"})
+            gone = mcp_call(m, "forget", {"confirm": shown["confirm"]})
             for _ in range(20):
                 mcp_call(m, "get_conscience")
                 mcp_call(m, "explain_basis", {"topic": "weather"})
@@ -276,9 +286,9 @@ class ReadsDoNotWrite(StoreTest):
         c = Conscience(self.store)
         c.remember_fact("one")
         raw, n = self.store.read_bytes(), len(self.snapshot_files())
-        self.assertEqual(c.forget_fact("zzz-nothing"), 0)
-        self.assertEqual(c.close_goal("zzz-nothing"), 0)
-        self.assertEqual(c.resolve_opportunity("zzz-nothing"), 0)
+        self.assertEqual(c.forget_fact("zzz-nothing")["count"], 0)
+        self.assertEqual(c.close_goal("zzz-nothing")["count"], 0)
+        self.assertEqual(c.resolve_opportunity("zzz-nothing")["count"], 0)
         SelfCloud(c).remove_scope("nobody", "facts.read")
         self.assertEqual(self.store.read_bytes(), raw)
         self.assertEqual(len(self.snapshot_files()), n)
@@ -330,7 +340,7 @@ class ReadsDoNotWrite(StoreTest):
                 mock.patch.object(cmod, "HISTORY_RECENT_MAX", 10):
             c = Conscience(self.store)
             c.remember_fact("Adam is allergic to penicillin")
-            self.assertEqual(c.forget_fact("penicillin"), 1)
+            self.assertEqual(forget_now(c, "penicillin")["removed_facts"], 1)
             for i in range(60):
                 c.remember_fact(f"chatter {i}")
             self.assertEqual(sum("penicillin" in p.read_text()
@@ -560,7 +570,7 @@ class Restore(StoreTest):
         c = Conscience(self.store)
         for i in range(30):
             c.remember_fact(f"fact {i}")
-        c.forget_fact("")
+        forget_now(c, ids=[f["id"] for f in c.data["facts"]])   # all 30
         old = [p for p in self.snapshot_files() if p.name.endswith("-000012.json")][0]
         shutil.copy(old, self.store)
         c2 = Conscience(self.store)
@@ -598,7 +608,7 @@ class Restore(StoreTest):
         c = Conscience(self.store)
         for i in range(5):
             c.remember_fact(f"fact {i}")
-        c.forget_fact("fact")
+        forget_now(c, "fact")
         rows = c.history(None)
         target = next(r for r in rows if r["facts"] == 5 and not r["pinned"])
         p = subprocess.run([PY, str(CONNECTOR / "conscience.py"), "restore",
@@ -618,7 +628,8 @@ class Restore(StoreTest):
         r = self.py("""
             import jefferey_chat as jc
             jc.dispatch_tool("remember_fact", {"fact": "Mira is my niece"})
-            jc.dispatch_tool("forget", {"contains": "Mira"})
+            shown = jc.dispatch_tool("forget", {"contains": "Mira"})
+            jc.dispatch_tool("forget", {"confirm": shown["confirm"]})
             n = [h for h in jc.conscience.history(None) if h["pinned"] == "before forget"][0]
             res = jc.owner_restore(f"/restore {n['number']}", answer=lambda _: "yes")
             no = jc.owner_restore("/restore 1", answer=lambda _: "no")
@@ -854,7 +865,7 @@ class Modes(StoreTest):
             SelfCloud(c).check_access("someone", "facts.read")
             c.remember_fact("private")
             c.remember_fact("more")
-            c.forget_fact("more")
+            forget_now(c, "more")
         finally:
             os.umask(old)
         self.assertEqual(self.mode(store.parent), 0o700)

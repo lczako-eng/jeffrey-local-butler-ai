@@ -20,6 +20,10 @@ In-chat commands:
     /conscience   show everything Jefferey knows (you own every byte)
     /history      the copies of your memories that are kept
     /restore N    put copy N back (you are asked first; it can be undone)
+    /removed      what was removed (and can be put back), and what waits for you
+    /approve CODE remove what an AI asked for, when it needs your own OK
+    /bringback N  put removed thing N back
+    /erase WORDS  erase these words everywhere, for good (you are asked first)
     /quit         leave (the conscience stays)
 """
 
@@ -80,6 +84,36 @@ egress.bind("chat", engine=f"Anthropic ({MODEL})")
 # --------------------------------------------------------------------- tools
 # The same conscience surface the MCP connector exposes, as client-side
 # tools. The engine reasons; every durable byte lands in the user's store.
+
+_TWO_STEPS = (
+    "Two steps, never a guess: without 'confirm' nothing is removed — you get "
+    "exactly what would go (with ids) and a one-time code. Read that list to "
+    "the owner; only if he says yes, call again with confirm=<code>. Anything "
+    "big (more than three things, or more than one kind) can only be approved "
+    "by the owner himself — the result says how.")
+
+
+def _forget_schema(match: str, ids: bool = True, required: list | None = None,
+                   **extra) -> dict:
+    """The input of every tool that removes or closes something."""
+    props = {match: {"type": "string"}}
+    props.update(extra)
+    if ids:
+        props["ids"] = {"type": "array", "items": {"type": "string"}}
+    props["confirm"] = {"type": "string",
+                        "description": "the one-time code from the first call"}
+    return {"type": "object", "properties": props, "required": required or []}
+
+
+def _forget_trace(r: dict, what: str, done: str = "forgot") -> str:
+    step = r.get("step")
+    if step == "preview":
+        return (f"asking first: {r.get('count')} {what} would go"
+                + (" — needs your own OK" if r.get("needs_owner") else ""))
+    if step == "done":
+        return f"{done} {r.get('count')} {what} (can be put back: /removed)"
+    return f"nothing changed: {r.get('note') or r.get('reason') or 'nothing matched'}"
+
 
 TOOLS = [
     {
@@ -144,15 +178,11 @@ TOOLS = [
     {
         "name": "forget",
         "description": (
-            "Delete every remembered fact containing this text. The user's "
-            "right to erase is absolute — never argue, always confirm what "
-            "was removed."
+            "Forget remembered facts — by id (from the conscience), or by whole "
+            "words in them (at least three letters). " + _TWO_STEPS
+            + " Never argue with a forget; tell them exactly what went."
         ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"contains": {"type": "string"}},
-            "required": ["contains"],
-        },
+        "input_schema": _forget_schema("contains"),
     },
     {
         "name": "explain_basis",
@@ -194,12 +224,8 @@ TOOLS = [
     },
     {
         "name": "close_goal",
-        "description": "Mark active goals containing this text as done/retired.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"contains": {"type": "string"}},
-            "required": ["contains"],
-        },
+        "description": "Mark active goals done/retired — by id or whole words. " + _TWO_STEPS,
+        "input_schema": _forget_schema("contains"),
     },
     {
         "name": "set_permission",
@@ -303,15 +329,10 @@ TOOLS = [
     },
     {
         "name": "resolve_opportunity",
-        "description": "Close pending opportunities containing this text (acted on, declined, or expired).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "contains": {"type": "string"},
-                "outcome": {"type": "string", "default": "done"},
-            },
-            "required": ["contains"],
-        },
+        "description": ("Close pending opportunities (acted on, declined, or expired) "
+                        "— by id or whole words. " + _TWO_STEPS),
+        "input_schema": _forget_schema("contains", outcome={"type": "string",
+                                                            "default": "done"}),
     },
     {
         "name": "daily_brief",
@@ -797,9 +818,9 @@ TOOLS = [
     },
     {
         "name": "conscience_exclude",
-        "description": "Take something back out of the conscience; it stays on Self-Cloud.",
-        "input_schema": {"type": "object", "properties": {"contains": {"type": "string"}},
-                         "required": ["contains"]},
+        "description": ("Take something back out of the conscience — by id or whole "
+                        "words; it stays on Self-Cloud. " + _TWO_STEPS),
+        "input_schema": _forget_schema("contains"),
     },
     {
         "name": "set_rule",
@@ -824,9 +845,9 @@ TOOLS = [
     },
     {
         "name": "remove_rule",
-        "description": "Delete a rule by id or text. Never argued with.",
-        "input_schema": {"type": "object", "properties": {"rule_id_or_text": {"type": "string"}},
-                         "required": ["rule_id_or_text"]},
+        "description": ("Delete a rule by its id (from list_rules), or by whole words "
+                        "of it. " + _TWO_STEPS + " Never argued with."),
+        "input_schema": _forget_schema("rule_id_or_text", ids=False),
     },
     {
         "name": "list_rules",
@@ -857,21 +878,19 @@ TOOLS = [
     },
     {
         "name": "forget_life",
-        "description": "Erase anything in the life layer matching this text. Never argued with.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"contains": {"type": "string"}},
-            "required": ["contains"],
-        },
+        "description": (
+            "Forget from the life layer: a person by their EXACT name or id (with "
+            "the moments and pictures about them alone; their name comes off ones "
+            "shared with others), or moments and pictures by id or by whole words "
+            "in what was said about them. " + _TWO_STEPS + " A forgotten person is "
+            "never asked about again. Never argued with."
+        ),
+        "input_schema": _forget_schema("contains"),
     },
     {
         "name": "forget_profile_field",
-        "description": "Delete one profile detail. The right to erase is absolute.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"field": {"type": "string"}},
-            "required": ["field"],
-        },
+        "description": "Delete one profile detail, by its exact name. " + _TWO_STEPS,
+        "input_schema": _forget_schema("field", ids=False, required=["field"]),
     },
     {
         "name": "what_left_the_house",
@@ -926,7 +945,8 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "remember_fact":
         return conscience.remember_fact(args["fact"], args.get("category", "general"))
     if name == "forget":
-        return {"removed_facts": conscience.forget_fact(args["contains"])}
+        return conscience.forget_fact(args.get("contains", ""), args.get("ids"),
+                                      args.get("confirm", ""))
     if name == "explain_basis":
         return conscience.explain_basis(args["topic"])
     if name == "priorities_for":
@@ -934,7 +954,8 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "add_goal":
         return conscience.add_goal(args["goal"])
     if name == "close_goal":
-        return {"closed": conscience.close_goal(args["contains"])}
+        return conscience.close_goal(args.get("contains", ""), args.get("ids"),
+                                     args.get("confirm", ""))
     if name == "set_permission":
         return conscience.set_permission(
             args["category"], args["level"], args.get("cap"))
@@ -954,8 +975,9 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
             args.get("advances_goal", ""), args.get("reduces_risk", False),
             args.get("urgency", 0.5))
     if name == "resolve_opportunity":
-        return {"resolved": conscience.resolve_opportunity(
-            args["contains"], args.get("outcome", "done"))}
+        return conscience.resolve_opportunity(
+            args.get("contains", ""), args.get("outcome", "done"), args.get("ids"),
+            args.get("confirm", ""))
     if name == "daily_brief":
         return conscience.daily_brief()
     if name == "orb_state":
@@ -980,7 +1002,7 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "get_profile":
         return rep.get_profile()
     if name == "forget_profile_field":
-        return rep.forget_profile_field(args["field"])
+        return rep.forget_profile_field(args.get("field", ""), args.get("confirm", ""))
     if name == "expect_charge":
         return guard.expect_charge(
             args["merchant"], args["amount"], args.get("cadence", "monthly"),
@@ -1011,7 +1033,8 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "story_gaps":
         return life.story_gaps()
     if name == "forget_life":
-        return life.forget_life(args["contains"])
+        return life.forget_life(args.get("contains", ""), args.get("ids"),
+                                args.get("confirm", ""))
     if name == "selfcloud_status":
         return cloud.status()
     if name == "selfcloud_grants":
@@ -1049,12 +1072,13 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "conscience_include":
         return rules.include(args["ref"], args.get("note", ""))
     if name == "conscience_exclude":
-        return rules.exclude(args["contains"])
+        return rules.exclude(args.get("contains", ""), args.get("ids"),
+                             args.get("confirm", ""))
     if name == "set_rule":
         return rules.set_rule(args["kind"], args["tags"], args["instruction"],
                               args.get("audience", "me"), args.get("allow", True))
     if name == "remove_rule":
-        return rules.remove_rule(args["rule_id_or_text"])
+        return rules.remove_rule(args.get("rule_id_or_text", ""), args.get("confirm", ""))
     if name == "list_rules":
         return rules.rules(args.get("kind", ""))
     if name == "check_disclosure":
@@ -1077,11 +1101,11 @@ _TRACE = {
         f"[{a.get('context')}] · confidence {r.get('confidence')}"
     ),
     "remember_fact": lambda a, r: f"remembered: {a.get('fact')}",
-    "forget": lambda a, r: f"forgot {r.get('removed_facts')} fact(s) matching '{a.get('contains')}'",
+    "forget": lambda a, r: _forget_trace(r, "fact(s)"),
     "explain_basis": lambda a, r: f"checking your values on: {a.get('topic')}",
     "priorities_for": lambda a, r: "reading your hierarchy",
     "add_goal": lambda a, r: f"goal registered: {a.get('goal')}",
-    "close_goal": lambda a, r: f"closed {r.get('closed')} goal(s)",
+    "close_goal": lambda a, r: _forget_trace(r, "goal(s)", "closed"),
     "set_permission": lambda a, r: (
         f"authority: {a.get('category')} → {a.get('level')}"
         + (f" (cap {a.get('cap')})" if a.get('cap') is not None else "")
@@ -1096,7 +1120,7 @@ _TRACE = {
     "record_opportunity": lambda a, r: (
         f"opportunity [{r.get('status')} @ {r.get('score')}]: {a.get('what')}"
     ),
-    "resolve_opportunity": lambda a, r: f"resolved {r.get('resolved')} opportunity(ies)",
+    "resolve_opportunity": lambda a, r: _forget_trace(r, "opportunity(ies)", "resolved"),
     "daily_brief": lambda a, r: "assembling your brief",
     "orb_state": lambda a, r: f"orb: {r.get('mood')} — {r.get('reason')}",
     "triage_message": lambda a, r: (
@@ -1118,7 +1142,7 @@ _TRACE = {
         + (f" (in {r.get('store')})" if r.get("store") else "")
     ),
     "get_profile": lambda a, r: "reading your profile",
-    "forget_profile_field": lambda a, r: f"forgot profile field: {r.get('removed')}",
+    "forget_profile_field": lambda a, r: _forget_trace(r, "profile detail(s)"),
     "expect_charge": lambda a, r: (
         f"registered: {a.get('merchant')} ${a.get('amount')} {a.get('cadence','monthly')}"
     ),
@@ -1190,18 +1214,15 @@ _TRACE = {
         f"knows you: {r.get('answered')} answered, {r.get('locked_deeper')} still locked"
     ),
     "conscience_include": lambda a, r: f"let into the conscience: {a.get('ref')}",
-    "conscience_exclude": lambda a, r: f"took {r.get('excluded')} item(s) out of the conscience",
+    "conscience_exclude": lambda a, r: _forget_trace(r, "item(s) of the conscience", "took out"),
     "set_rule": lambda a, r: f"rule kept [{a.get('kind')}/{a.get('tags')}]: \"{a.get('instruction')}\"",
-    "remove_rule": lambda a, r: f"removed {r.get('removed')} rule(s)",
+    "remove_rule": lambda a, r: _forget_trace(r, "rule(s)", "removed"),
     "list_rules": lambda a, r: f"reading your {len(r) if isinstance(r, list) else 0} rule(s)",
     "check_disclosure": lambda a, r: (
         f"{'may' if r.get('allowed') else 'may NOT'} speak of {a.get('tags')} to {a.get('audience')} — {r.get('reason')}"
     ),
     "guidance_for": lambda a, r: f"checking your instructions on {a.get('tags')}",
-    "forget_life": lambda a, r: (
-        f"forgot {r.get('memories_removed',0)} moment(s), "
-        f"{r.get('media_removed',0)} picture(s), {r.get('people_removed',0)} person/people"
-    ),
+    "forget_life": lambda a, r: _forget_trace(r, "thing(s) from your life story"),
     "what_left_the_house": lambda a, r: (
         f"{r.get('sends', 0)} send(s) left the house since {r.get('since')}, "
         f"{r.get('refused', 0)} refused at the door · door {r.get('door')}"
@@ -1463,6 +1484,7 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         return
 
     print(f"{DIM}/conscience shows the store · /egress shows what left the house · "
+          f"/removed shows what was forgotten · "
           f"/quit leaves (he keeps what he learned){RESET}\n")
     while True:
         try:
@@ -1484,6 +1506,9 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         if user.lower() in ("/history", "/copies") or user.lower().startswith("/restore"):
             owner_restore(user)       # the owner's hands only; never a model tool
             continue
+        if user.lower().split(" ", 1)[0] in _FORGET_COMMANDS:
+            owner_forgetting(user)    # the owner's hands only; never a model tool
+            continue
         try:
             history.append({"role": "user", "content": egress.release_text("you_said", user)})
         except EgressRefused as e:
@@ -1503,6 +1528,40 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
             if history and history[-1]["role"] == "user" and isinstance(history[-1]["content"], str):
                 history.pop()
         print()
+
+
+_FORGET_COMMANDS = ("/removed", "/approve", "/bringback", "/erase")
+
+
+def owner_forgetting(command: str, answer=input) -> dict | None:
+    """/removed, /approve CODE, /bringback N, /erase WORDS — typed by the
+    OWNER at this terminal. Deliberately not tools: big removals, putting
+    things back and erasing for good are his own hands' work, never an AI's."""
+    import forgetting as fg
+    verb, _, rest = command.strip().partition(" ")
+    verb, rest = verb.lower(), rest.strip()
+    try:
+        conscience.refresh()
+        if verb == "/removed" or not rest:
+            fg._print_waiting(conscience)
+            print()
+            fg._print_removed(conscience)
+            if verb != "/removed":
+                print(f"  Then type {verb} followed by "
+                      + ("the code." if verb == "/approve" else
+                         "the number." if verb == "/bringback" else "the words."))
+            return None
+        if verb == "/approve":
+            res = fg.approve(conscience, rest)
+        elif verb == "/bringback":
+            res = fg.bring_back(conscience, rest)
+        else:
+            return fg.console_erase(conscience, rest, answer)
+    except StoreProblem as e:
+        print(f"  {e.for_owner()}")
+        return None
+    fg._say(res)
+    return res
 
 
 def owner_restore(command: str, answer=input) -> dict | None:
@@ -1810,10 +1869,19 @@ def selftest() -> None:
         assert flipped, "hierarchy never flipped"
         print(f"  ✓ contradiction → flip: now {p['higher']} > {p['lower']} @ {p['confidence']}")
 
-        # 4. Facts and the absolute right to forget.
+        # 4. Facts and the right to forget — in two steps since the October
+        #    2026 stress test (I-01): the first call only shows what would go
+        #    and gives a code; the second, with the code, removes it. (This
+        #    used to assert that one call removed it at once.)
         assert conscience.explain_basis("recital")["facts"], "fact not stored"
-        assert conscience.forget_fact("recital") == 1, "forget failed"
-        print("  ✓ remember / forget")
+        shown = conscience.forget_fact("recital")
+        assert shown["step"] == "preview" and shown["count"] == 1, shown
+        assert conscience.explain_basis("recital")["facts"], "a preview removed it!"
+        gone = conscience.forget_fact(confirm=shown["confirm"])
+        assert gone["removed_facts"] == 1, gone
+        assert not conscience.explain_basis("recital")["facts"], "forget failed"
+        assert conscience.forget_fact("")["refused"], "an empty forget was not refused"
+        print("  ✓ remember / forget (shown first, then removed; empty refused)")
 
         # 5. Operational AI: the gate holds.
         denied = conscience.authorize_action("travel", "book flight", 300)
@@ -1835,8 +1903,11 @@ def selftest() -> None:
             reduces_risk=True, urgency=1.0)
         assert hot["status"] == "interrupt", hot
         assert conscience.orb_state()["mood"] == "protective", conscience.orb_state()
-        conscience.resolve_opportunity("suspicious")
-        conscience.resolve_opportunity("coupon")
+        for _what in ("suspicious", "coupon"):       # two steps (I-01)
+            _r = conscience.resolve_opportunity(_what)
+            conscience.resolve_opportunity(confirm=_r["confirm"])
+        assert not [o for o in conscience.pending_opportunities()
+                    if "suspicious" in o["what"] or "coupon" in o["what"]]
         brief = conscience.daily_brief()
         assert "orb" in brief and "opportunities" in brief
         print(f"  ✓ opportunity engine: hold {low['score']} / interrupt {hot['score']} "
@@ -1938,7 +2009,9 @@ def selftest() -> None:
         # A life with nothing in it should notice, and ask.
         _empty = _Life(Conscience(Path(td) / "empty.json"))
         assert _empty.story_gaps()["gaps"], "an empty story should prompt questions"
-        gone = _life.forget_life("confidence")
+        shown = _life.forget_life("confidence")        # two steps (I-01)
+        assert shown["step"] == "preview" and shown["memories_removed"] == 0, shown
+        gone = _life.forget_life(confirm=shown["confirm"])
         assert gone["memories_removed"] == 1, gone
         print("  ✓ life layer: people, moments, visibility walls, Self-Cloud refs, erase")
 
@@ -1992,7 +2065,9 @@ def selftest() -> None:
         assert _R.check_disclosure("me", "health")["allowed"], "owner blocked from own conscience"
         assert _R.guidance_for("father", "me")["react_this_way"] == ["Don't fix it. Listen."]
         _R.include("/library/x/"); assert len(_R.included()) == 1
-        assert _R.remove_rule("retired")["removed"] == 1
+        _shown = _R.remove_rule("retired")             # two steps (I-01)
+        assert _shown["removed"] == 0 and _shown["count"] == 1, _shown
+        assert _R.remove_rule(confirm=_shown["confirm"])["removed"] == 1
         print("  ✓ rules: precedence, scoped representation, silence=no, intake gate, erase")
 
         # 16. The system prompt carries directives + live store.

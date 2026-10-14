@@ -361,6 +361,8 @@ def main() -> int:
     say(f"  {DIM}Plain text. Readable, editable, deletable, yours. Old versions are")
     say(f"   kept beside it in conscience.history/ in case anything goes wrong —")
     say(f"   double-click 'Restore my memories.command' to put one back.{OFF}")
+    say(f"  {DIM}He never forgets on a guess: he shows what would go first, and")
+    say(f"   anything big waits for you — 'Forget or bring back.command'.{OFF}")
     say()
     say(f"  {DIM}Check on him any time:   python3 tools/install.py --check{OFF}")
     say(f"  {DIM}Unhook him (keeps data): python3 tools/install.py --uninstall{OFF}")

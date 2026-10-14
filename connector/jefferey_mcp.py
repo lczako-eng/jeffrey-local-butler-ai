@@ -177,11 +177,15 @@ def remember_fact(fact: str, category: str = "general") -> dict:
 
 @door(mcp.tool())
 @gate("facts.write")
-def forget(contains: str) -> dict:
-    """Delete every remembered fact containing this text. The user's right
-    to erase is absolute — never argue, always confirm what was removed."""
-    removed = conscience.forget_fact(contains)
-    return {"removed_facts": removed}
+def forget(contains: str = "", ids: list[str] | None = None, confirm: str = "") -> dict:
+    """Forget remembered facts — by id (from get_conscience), or by whole
+    words in them (at least three letters; 'mom' never matches 'moments').
+    Two steps, never a guess: without `confirm` nothing is removed — you get
+    exactly what would go (with ids) and a one-time code. Read that list to
+    the owner; only if he says yes, call again with confirm=<code>. Anything
+    big (more than three things, or more than one kind) can only be approved
+    by the owner himself — the result says how. Never argue with a forget; tell him exactly what went."""
+    return conscience.forget_fact(contains, ids, confirm)
 
 
 # ---------------------------------------------------------------- representing
@@ -217,9 +221,14 @@ def add_goal(goal: str) -> dict:
 
 @door(mcp.tool())
 @gate("goals.write")
-def close_goal(contains: str) -> dict:
-    """Mark active goals containing this text as done/retired."""
-    return {"closed": conscience.close_goal(contains)}
+def close_goal(contains: str = "", ids: list[str] | None = None, confirm: str = "") -> dict:
+    """Mark active goals done/retired — by id, or by whole words in them.
+    Two steps, never a guess: without `confirm` nothing is removed — you get
+    exactly what would go (with ids) and a one-time code. Read that list to
+    the owner; only if he says yes, call again with confirm=<code>. Anything
+    big (more than three things, or more than one kind) can only be approved
+    by the owner himself — the result says how."""
+    return conscience.close_goal(contains, ids, confirm)
 
 
 # ---------------------------------------------------------------- operational AI
@@ -290,10 +299,15 @@ def record_opportunity(
 
 @door(mcp.tool())
 @gate("goals.write")
-def resolve_opportunity(contains: str, outcome: str = "done") -> dict:
-    """Close pending opportunities containing this text (acted on, declined,
-    or expired)."""
-    return {"resolved": conscience.resolve_opportunity(contains, outcome)}
+def resolve_opportunity(contains: str = "", outcome: str = "done",
+                        ids: list[str] | None = None, confirm: str = "") -> dict:
+    """Close pending opportunities (acted on, declined, or expired) — by id,
+    or by whole words in them. Two steps, never a guess: without `confirm` nothing is removed — you get
+    exactly what would go (with ids) and a one-time code. Read that list to
+    the owner; only if he says yes, call again with confirm=<code>. Anything
+    big (more than three things, or more than one kind) can only be approved
+    by the owner himself — the result says how."""
+    return conscience.resolve_opportunity(contains, outcome, ids, confirm)
 
 
 @door(mcp.tool())
@@ -396,9 +410,13 @@ def get_profile() -> dict:
 
 @door(mcp.tool())
 @gate("facts.write")
-def forget_profile_field(field: str) -> dict:
-    """Delete one profile detail. The right to erase is absolute."""
-    return rep.forget_profile_field(field)
+def forget_profile_field(field: str, confirm: str = "") -> dict:
+    """Delete one profile detail, by its exact name. Two steps, never a guess: without `confirm` nothing is removed — you get
+    exactly what would go (with ids) and a one-time code. Read that list to
+    the owner; only if he says yes, call again with confirm=<code>. Anything
+    big (more than three things, or more than one kind) can only be approved
+    by the owner himself — the result says how."""
+    return rep.forget_profile_field(field, confirm)
 
 
 # ---------------------------------------------------------------- guardian
@@ -526,10 +544,18 @@ def story_gaps() -> dict:
 
 @door(mcp.tool())
 @gate("life.write")
-def forget_life(contains: str) -> dict:
-    """Erase anything in the life layer matching this text — people, moments,
-    media references. Never argued with."""
-    return life.forget_life(contains)
+def forget_life(contains: str = "", ids: list[str] | None = None,
+                confirm: str = "") -> dict:
+    """Forget from the life layer: a person by their EXACT name or id (with
+    the moments and pictures about them alone; their name comes off ones
+    shared with others), or moments and pictures by id (from who_am_i) or by
+    whole words in what was said about them. Two steps, never a guess: without `confirm` nothing is removed — you get
+    exactly what would go (with ids) and a one-time code. Read that list to
+    the owner; only if he says yes, call again with confirm=<code>. Anything
+    big (more than three things, or more than one kind) can only be approved
+    by the owner himself — the result says how. A forgotten person is
+    never asked about again. Never argued with."""
+    return life.forget_life(contains, ids, confirm)
 
 
 # ---------------------------------------------------------------- the album
@@ -680,10 +706,16 @@ def conscience_include(ref: str, note: str = "") -> dict:
 
 @door(mcp.tool())
 @gate("facts.write")
-def conscience_exclude(contains: str) -> dict:
-    """Take something back out of the conscience. It stays on Self-Cloud;
-    Jefferey simply no longer holds it as part of who they are."""
-    return rules.exclude(contains)
+def conscience_exclude(contains: str = "", ids: list[str] | None = None,
+                       confirm: str = "") -> dict:
+    """Take something back out of the conscience — by id or whole words. It
+    stays on Self-Cloud; Jefferey simply no longer holds it as part of who
+    they are. Two steps, never a guess: without `confirm` nothing is removed — you get
+    exactly what would go (with ids) and a one-time code. Read that list to
+    the owner; only if he says yes, call again with confirm=<code>. Anything
+    big (more than three things, or more than one kind) can only be approved
+    by the owner himself — the result says how."""
+    return rules.exclude(contains, ids, confirm)
 
 
 @door(mcp.tool())
@@ -701,9 +733,14 @@ def set_rule(kind: str, tags: str, instruction: str, audience: str = "me",
 
 @door(mcp.tool())
 @gate("facts.write")
-def remove_rule(rule_id_or_text: str) -> dict:
-    """Delete a rule by id or by text it contains. Never argued with."""
-    return rules.remove_rule(rule_id_or_text)
+def remove_rule(rule_id_or_text: str = "", confirm: str = "") -> dict:
+    """Delete a rule by its id (from list_rules), or by whole words of it.
+    Two steps, never a guess: without `confirm` nothing is removed — you get
+    exactly what would go (with ids) and a one-time code. Read that list to
+    the owner; only if he says yes, call again with confirm=<code>. Anything
+    big (more than three things, or more than one kind) can only be approved
+    by the owner himself — the result says how. Never argued with."""
+    return rules.remove_rule(rule_id_or_text, confirm)
 
 
 @door(mcp.tool())

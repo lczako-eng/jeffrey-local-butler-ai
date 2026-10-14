@@ -141,7 +141,10 @@ After your first conversation, double-click **`What left the house.command`**.
 Every byte JEFFEREY has ever handed to a rented engine passed through one
 door and was written down first — to whom, when, which tool, and word for
 word. This button reads it back to you in plain words. From the same window
-you can **shut the door** (nothing leaves until you open it) and open it again.
+you can **shut the door** (nothing leaves until you open it) and open it again,
+and — if you would rather it did not keep every word forever — choose `k` to
+keep each send word for word only for so many days (after that, only its date,
+where it went and a fingerprint stay).
 
 The door also refuses. If Claude ever tells you *"the door kept that in the
 house"*, something looked like a secret — a card number, your SIN, a
@@ -153,6 +156,19 @@ secret to an AI.** Secrets go in the vault, from your own terminal:
 ```
 
 and JEFFEREY uses them by *name* (`vault:sin`) on forms, never by value.
+
+### Forgetting, and bringing back
+
+Ask any AI to forget something and JEFFEREY first shows it exactly what would
+go; nothing goes until you say yes. A small thing (up to three, of one kind)
+goes on your word in the chat. Anything bigger — or forgetting a person, with
+their moments — needs your own hands: the AI tells you a short code;
+double-click **`Forget or bring back.command`** and type `ok` and the number
+(or the code). The same window lists everything removed in the last three
+months — `back` and the number puts it back — and can **erase** words
+everywhere, for good: from your memories, the copies, and the record of what
+was sent. Erasing cannot be undone. What an AI company already received, it
+may still hold; the receipt says where it went.
 
 ---
 
@@ -187,6 +203,7 @@ any model name Ollama has.
 | `Record my voice.command` | enrol your voice onto the drive | no |
 | `What left the house.command` | the egress log, in plain words; shut / open the door | no |
 | `Restore my memories.command` | see the copies of your memories JEFFEREY keeps, and put one back | no |
+| `Forget or bring back.command` | OK a big forget an AI asked for, put back something removed, or erase words for good | no |
 | `Talk to JEFFEREY on this Mac.command` | JEFFEREY riding Hermes on your own Mac, same conscience | one-time download; then no |
 | on the drive: `Self-Cloud/Start Self-Cloud.command` | the same as *Show me my life*, bound to that drive, on any Mac | no |
 
@@ -205,6 +222,8 @@ The drive always wins when it is plugged in; unplugged means gone.
 - The self-test fails → nothing was connected. Run
   `~/.jefferey/venv/bin/python ~/JEFFEREY/connector/jefferey_chat.py --selftest`
   in Terminal and send the last twenty lines to whoever is helping you.
+- Something was forgotten by mistake → double-click **`Forget or bring
+  back.command`**, type `back` and its number.
 - JEFFEREY says your memories *cannot be read*, or that they were *put back
   to an earlier copy* → double-click **`Restore my memories.command`**. It
   lists the copies he keeps (every one from the last day, one an hour for a

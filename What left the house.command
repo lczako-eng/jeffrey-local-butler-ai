@@ -27,6 +27,7 @@ echo "  [return]  see every send, word for word"
 echo "  [a]       everything since the beginning"
 echo "  [s]       SHUT the door — nothing leaves until you open it"
 echo "  [o]       open the door"
+echo "  [k]       keep each send word for word only for a number of days"
 echo "  [q]       close this window"
 echo
 read -r -p "  > " CHOICE
@@ -34,6 +35,9 @@ case "$CHOICE" in
     a|A) "$PY" connector/egress.py report --all --full | less -R ;;
     s|S) "$PY" connector/egress.py shut ;;
     o|O) "$PY" connector/egress.py open ;;
+    k|K) "$PY" connector/egress.py keep
+         read -r -p "  How many days? (or 'always') " DAYS
+         "$PY" connector/egress.py keep "$DAYS" ;;
     q|Q) exit 0 ;;
     *)   "$PY" connector/egress.py report --days 7 --full | less -R ;;
 esac

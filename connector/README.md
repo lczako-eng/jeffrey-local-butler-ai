@@ -218,7 +218,8 @@ starting now instead of too late).
   suggested.
 - `story_gaps` — what's missing, so he can gently ask for one thing at a
   time while there's still time to ask.
-- `forget_life` — absolute, never argued with.
+- `forget_life` — never argued with, never on a guess: two steps (shown, then
+  removed with a one-time code), like every removal — see `forgetting.py`.
 
 See [`docs/SELF_CLOUD.md`](../docs/SELF_CLOUD.md) for how this comes home to
 hardware you physically own.

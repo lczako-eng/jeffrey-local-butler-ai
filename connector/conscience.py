@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import copy
 import functools
 import hashlib
 import json
@@ -444,6 +445,16 @@ class Conscience:
     _CORE = ("owner", "_rev") + _SHAPE
     # A section that used to live in the store and now lives beside it.
     _LEGACY_ACCESS = "selfcloud_access_log"
+    # Every item in these sections carries a stable id, so a thing can be
+    # named exactly ("forget f-3a9c1e") instead of by a few letters of its
+    # text — a few letters once took a whole life with them. Files written
+    # before ids existed get them in memory as they are read, worked out from
+    # each item's own content (so every surface works out the same id), and
+    # keep them from the next real save on. Reading never writes.
+    ID_PREFIX = {"facts": "f", "priorities": "pr", "goals": "g",
+                 "corrections": "c", "observations": "ob", "opportunities": "op",
+                 "memories": "m", "media": "md", "people": "p", "rules": "r",
+                 "conscience_included": "in"}
 
     def __init__(self, path: Path | str = DEFAULT_STORE):
         self._init_fields(path)
@@ -724,13 +735,51 @@ class Conscience:
         the next call into that module fails on a missing key."""
         sections = {k: type(v)() for k, v in self.data.items()
                     if isinstance(v, (list, dict))}
-        new = dict(obj)
+        # A copy all the way down: ids are added below, and the parsed file
+        # the caller holds must stay exactly what is on disk.
+        new = copy.deepcopy(obj)
         self._absorb_legacy(new)
         self.data.clear()
         self.data.update(new)
         for k, v in sections.items():
             self.data.setdefault(k, v)
+        self._ensure_ids()
         self._rev_seen = self._rev_of(new)
+
+    def _ensure_ids(self) -> None:
+        """Give every item in ID_PREFIX's sections a stable, unique id (see
+        there). An id already present is kept; a missing or repeated one is
+        worked out from the item's content, so two processes reading the same
+        file agree on it. Changes memory only; the next save keeps them."""
+        for section, prefix in self.ID_PREFIX.items():
+            items = self.data.get(section)
+            if not isinstance(items, list) or not items:
+                continue
+            used: set[str] = set()
+            need = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                i = it.get("id")
+                if isinstance(i, str) and i.strip() and i not in used:
+                    used.add(i)
+                else:
+                    need.append(it)
+            seen: Counter = Counter()
+            for it in need:
+                body = json.dumps({k: v for k, v in it.items() if k != "id"},
+                                  sort_keys=True, ensure_ascii=False, default=str)
+                base = _sha(f"{section}\0{body}".encode("utf-8"))
+                n = seen[base]
+                seen[base] += 1
+                while True:
+                    h = base if n == 0 else _sha(f"{base}\0{n}".encode())
+                    cand = f"{prefix}-{h[:6]}"
+                    if cand not in used:
+                        break
+                    n += 1
+                used.add(cand)
+                it["id"] = cand
 
     def _adopt(self, raw: bytes, obj: dict, st: os.stat_result | None = None) -> None:
         self._replace_data(obj)
@@ -1048,6 +1097,7 @@ class Conscience:
         it in memory too, and say why in plain words."""
         if self._unavailable is not None:
             raise self._unavailable
+        self._ensure_ids()          # whatever was just added gets its id now
         if self._canon(self.data) == self._clean:
             return                  # nothing changed: no write, no copy, no rev
         try:
@@ -1334,17 +1384,13 @@ class Conscience:
         self._save()
         return entry
 
-    def forget_fact(self, contains: str) -> int:
-        keep = [f for f in self.data["facts"]
-                if contains.lower() not in f["fact"].lower()]
-        removed = len(self.data["facts"]) - len(keep)
-        if removed:
-            # Pinned first, so a mistaken or injected forget can be undone
-            # with 'Restore my memories' — however much is said afterwards.
-            self.pin_snapshot("before forget")
-            self.data["facts"] = keep
-            self._save()
-        return removed
+    def forget_fact(self, contains: str = "", ids=None, confirm: str = "") -> dict:
+        """Two steps, never a wildcard (forgetting.py): without `confirm`,
+        returns the facts that would go — matched by id, or by whole words —
+        and a one-time code; with the code, removes exactly those, pins a
+        copy first, keeps them in the removed list and logs it."""
+        import forgetting
+        return forgetting.forget_facts(self, contains, ids, confirm)
 
     # ------------------------------------------------------------ priorities
     def _find_priority(self, context: str, a: str, b: str) -> dict | None:
@@ -1429,14 +1475,11 @@ class Conscience:
         self._save()
         return entry
 
-    def close_goal(self, contains: str) -> int:
-        n = 0
-        for g in self.data["goals"]:
-            if g["active"] and contains.lower() in g["goal"].lower():
-                g["active"] = False
-                n += 1
-        self._save()
-        return n
+    def close_goal(self, contains: str = "", ids=None, confirm: str = "") -> dict:
+        """Two steps, like every change that takes something away
+        (forgetting.py)."""
+        import forgetting
+        return forgetting.close_goals(self, contains, ids, confirm)
 
     # ------------------------------------------------------------ operational AI
     # The Act tier, enforced in code. Jefferey can never widen his own
@@ -1560,15 +1603,12 @@ class Conscience:
             key=lambda o: -o["score"],
         )
 
-    def resolve_opportunity(self, contains: str, outcome: str = "done") -> int:
-        n = 0
-        for o in self.data["opportunities"]:
-            if not o["resolved"] and contains.lower() in o["what"].lower():
-                o["resolved"] = True
-                o["outcome"] = outcome
-                n += 1
-        self._save()
-        return n
+    def resolve_opportunity(self, contains: str = "", outcome: str = "done",
+                            ids=None, confirm: str = "") -> dict:
+        """Two steps, like every change that takes something away
+        (forgetting.py)."""
+        import forgetting
+        return forgetting.resolve_opportunities(self, contains, outcome, ids, confirm)
 
     def orb_state(self) -> dict:
         """The predictive cycle: the orb's mood is the engine's real state,

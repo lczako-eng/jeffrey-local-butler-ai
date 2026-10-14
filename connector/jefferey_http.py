@@ -250,10 +250,14 @@ def remember_fact(f: FactIn) -> dict:
 
 @door(app.delete("/facts", operation_id="forget"))
 @gate("facts.write")
-def forget(contains: str) -> dict:
-    """Delete every remembered fact containing this text. The user's right
-    to erase is absolute — never argue, always confirm what was removed."""
-    return {"removed_facts": conscience.forget_fact(contains)}
+def forget(contains: str = "", ids: str = "", confirm: str = "") -> dict:
+    """Forget remembered facts — by id, or by whole words in them (at least
+    three letters). Two steps, never a guess: without `confirm` nothing is removed — the
+    answer lists exactly what would go (with ids) and a one-time code. Read
+    it to the owner; only if he says yes, call again with confirm=<code>.
+    Anything big can only be approved by the owner himself — the answer says
+    how. `ids` is a comma-separated list. Never argue with a forget."""
+    return conscience.forget_fact(contains, ids, confirm)
 
 
 # ---------------------------------------------------------------- representing
@@ -292,9 +296,13 @@ def add_goal(g: GoalIn) -> dict:
 
 @door(app.delete("/goals", operation_id="close_goal"))
 @gate("goals.write")
-def close_goal(contains: str) -> dict:
-    """Mark active goals containing this text as done/retired."""
-    return {"closed": conscience.close_goal(contains)}
+def close_goal(contains: str = "", ids: str = "", confirm: str = "") -> dict:
+    """Mark active goals done/retired — by id or whole words. Two steps, never a guess: without `confirm` nothing is removed — the
+    answer lists exactly what would go (with ids) and a one-time code. Read
+    it to the owner; only if he says yes, call again with confirm=<code>.
+    Anything big can only be approved by the owner himself — the answer says
+    how. `ids` is a comma-separated list."""
+    return conscience.close_goal(contains, ids, confirm)
 
 
 # ---------------------------------------------------------------- operational AI
@@ -389,9 +397,14 @@ def record_opportunity(o: OpportunityIn) -> dict:
 
 @door(app.delete("/opportunities", operation_id="resolve_opportunity"))
 @gate("goals.write")
-def resolve_opportunity(contains: str, outcome: str = "done") -> dict:
-    """Close pending opportunities containing this text."""
-    return {"resolved": conscience.resolve_opportunity(contains, outcome)}
+def resolve_opportunity(contains: str = "", outcome: str = "done", ids: str = "",
+                        confirm: str = "") -> dict:
+    """Close pending opportunities — by id or whole words. Two steps, never a guess: without `confirm` nothing is removed — the
+    answer lists exactly what would go (with ids) and a one-time code. Read
+    it to the owner; only if he says yes, call again with confirm=<code>.
+    Anything big can only be approved by the owner himself — the answer says
+    how. `ids` is a comma-separated list."""
+    return conscience.resolve_opportunity(contains, outcome, ids, confirm)
 
 
 @door(app.get("/brief", operation_id="daily_brief"))
@@ -484,9 +497,13 @@ def get_profile() -> dict:
 
 @door(app.delete("/profile", operation_id="forget_profile_field"))
 @gate("facts.write")
-def forget_profile_field(field: str) -> dict:
-    """Delete one profile detail. The right to erase is absolute."""
-    return rep.forget_profile_field(field)
+def forget_profile_field(field: str, confirm: str = "") -> dict:
+    """Delete one profile detail, by its exact name. Two steps, never a guess: without `confirm` nothing is removed — the
+    answer lists exactly what would go (with ids) and a one-time code. Read
+    it to the owner; only if he says yes, call again with confirm=<code>.
+    Anything big can only be approved by the owner himself — the answer says
+    how. `ids` is a comma-separated list."""
+    return rep.forget_profile_field(field, confirm)
 
 
 # ---------------------------------------------------------------- guardian
@@ -637,9 +654,14 @@ def story_gaps() -> dict:
 
 @door(app.delete("/life", operation_id="forget_life"))
 @gate("life.write")
-def forget_life(contains: str) -> dict:
-    """Erase anything in the life layer matching this text."""
-    return life.forget_life(contains)
+def forget_life(contains: str = "", ids: str = "", confirm: str = "") -> dict:
+    """Forget a person by EXACT name or id (with the moments and pictures
+    about them alone), or moments and pictures by id or whole words. Two steps, never a guess: without `confirm` nothing is removed — the
+    answer lists exactly what would go (with ids) and a one-time code. Read
+    it to the owner; only if he says yes, call again with confirm=<code>.
+    Anything big can only be approved by the owner himself — the answer says
+    how. `ids` is a comma-separated list."""
+    return life.forget_life(contains, ids, confirm)
 
 
 # ---------------------------------------------------------------- the album
@@ -790,9 +812,14 @@ def conscience_include(i: IncludeIn) -> dict:
 
 @door(app.delete("/conscience/include", operation_id="conscience_exclude"))
 @gate("facts.write")
-def conscience_exclude(contains: str) -> dict:
-    """Take something back out of the conscience; it stays on Self-Cloud."""
-    return rules.exclude(contains)
+def conscience_exclude(contains: str = "", ids: str = "", confirm: str = "") -> dict:
+    """Take something back out of the conscience; it stays on Self-Cloud.
+    Two steps, never a guess: without `confirm` nothing is removed — the
+    answer lists exactly what would go (with ids) and a one-time code. Read
+    it to the owner; only if he says yes, call again with confirm=<code>.
+    Anything big can only be approved by the owner himself — the answer says
+    how. `ids` is a comma-separated list."""
+    return rules.exclude(contains, ids, confirm)
 
 
 class RuleIn(BaseModel):
@@ -815,9 +842,13 @@ def set_rule(r: RuleIn) -> dict:
 
 @door(app.delete("/rules", operation_id="remove_rule"))
 @gate("facts.write")
-def remove_rule(rule_id_or_text: str) -> dict:
-    """Delete a rule. Never argued with."""
-    return rules.remove_rule(rule_id_or_text)
+def remove_rule(rule_id_or_text: str = "", confirm: str = "") -> dict:
+    """Delete a rule by its id, or by whole words of it. Two steps, never a guess: without `confirm` nothing is removed — the
+    answer lists exactly what would go (with ids) and a one-time code. Read
+    it to the owner; only if he says yes, call again with confirm=<code>.
+    Anything big can only be approved by the owner himself — the answer says
+    how. `ids` is a comma-separated list."""
+    return rules.remove_rule(rule_id_or_text, confirm)
 
 
 @door(app.get("/rules", operation_id="list_rules"))

@@ -23,14 +23,20 @@ Design rules — these are the sensitive ones, so they are strict:
 - **Private by default.** Every entry has a visibility: `private` (Jefferey
   only, ever), `family` (may be shared with named people), or `legacy`
   (intended to outlive the user and be told to those they name).
-- **Erasable, always.** One call removes anything, and it is never argued
-  with.
+- **Erasable, always — and never by accident.** Forgetting is never argued
+  with, and never done on a guess: the first call shows exactly what would
+  go, the second removes it, anything big waits for the owner's own hands,
+  and what went can be put back for three months. Erasing words for good,
+  everywhere, is the owner's own act (forgetting.py). A forgotten person is
+  never asked about again.
 """
 
 from __future__ import annotations
 
 import time
 from pathlib import Path
+
+import forgetting
 
 VISIBILITY = ("private", "family", "legacy")
 
@@ -53,6 +59,9 @@ class Life:
                    important_dates: str = "") -> dict:
         """Someone who matters. Jefferey should know their name before he
         needs it — not learn it from an obituary."""
+        # He asked to forget someone by this name; saying it again on purpose
+        # takes it off that list. The engine is told, so it can check.
+        again = forgetting.unforget(self.c.data, name)
         existing = next(
             (p for p in self.c.data["people"] if p["name"].lower() == name.strip().lower()),
             None)
@@ -70,6 +79,10 @@ class Life:
         }
         self.c.data["people"].append(entry)
         self.c._save()
+        if again:
+            return {**entry, "note": (
+                "He once asked JEFFEREY to forget someone by this name. Make sure "
+                "this is what he wants now; if not, forget_life undoes it.")}
         return entry
 
     def people(self) -> list[dict]:
@@ -122,22 +135,16 @@ class Life:
                      "unreachable until you switch it back on."),
         }
 
-    def forget_life(self, contains: str) -> dict:
-        """Erase anything in the life layer matching this text. Never argued
-        with, never questioned."""
-        c = contains.lower()
-        before = (len(self.c.data["memories"]), len(self.c.data["media"]),
-                  len(self.c.data["people"]))
-        self.c.data["memories"] = [m for m in self.c.data["memories"] if c not in m["text"].lower()]
-        self.c.data["media"] = [m for m in self.c.data["media"]
-                                if c not in (m["caption"] + " " + m["path"]).lower()]
-        self.c.data["people"] = [p for p in self.c.data["people"] if c not in p["name"].lower()]
-        self.c._save()
-        after = (len(self.c.data["memories"]), len(self.c.data["media"]),
-                 len(self.c.data["people"]))
-        return {"memories_removed": before[0] - after[0],
-                "media_removed": before[1] - after[1],
-                "people_removed": before[2] - after[2]}
+    def forget_life(self, contains: str = "", ids=None, confirm: str = "") -> dict:
+        """Forget a person (by exact name or id, with the moments and
+        pictures that are about them alone; their name comes off the ones
+        shared with others), or moments and pictures (by id, or by whole
+        words in what was said about them — never by the folder a picture
+        sits in). Never argued with, and never done on a guess: the first
+        call shows exactly what would go and gives a one-time code; only the
+        second, with the code, removes. A forgotten person is never asked
+        about again. See forgetting.py."""
+        return forgetting.forget_life(self.c, contains, ids, confirm)
 
     # ------------------------------------------------------------ the story
     def who_am_i(self, ceiling: str) -> dict:
@@ -230,11 +237,17 @@ class Life:
             gaps.append("Nobody is recorded yet. Who are the people that matter most?")
         if not mems:
             gaps.append("No moments recorded. What's a day you'd want remembered?")
+        # Someone he asked to forget is never asked about again.
+        gone = forgetting.forgotten(self.c.data)
         named = {p["name"].lower() for p in people}
         mentioned = {n.lower() for m in mems for n in m.get("people", [])}
         for n in sorted(mentioned - named):
+            if forgetting.name_key(n) in gone:
+                continue
             gaps.append(f"'{n}' appears in a memory but isn't recorded as a person — who are they?")
         for p in people:
+            if forgetting.name_key(p["name"]) in gone:
+                continue
             if not any(p["name"].lower() in {x.lower() for x in m.get("people", [])} for m in mems):
                 gaps.append(f"Nothing recorded yet about {p['name']} ({p['relationship']}).")
         if not any(m["visibility"] == "legacy" for m in mems):

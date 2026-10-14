@@ -94,7 +94,10 @@ That is `life.py`, and it is built. Three rules hold it honest:
 - **Permission is per-item, not per-system.** Every entry is `private`
   (Jefferey alone), `family` (may be shared with the named people), or
   `legacy` (meant to outlive them and be told to those they choose).
-- **Erasable, always** (`forget_life`), and never argued with.
+- **Erasable, always** (`forget_life`), and never argued with — but never on a
+  guess: shown first, removed on a yes, big ones by the owner's own hands, put
+  back for three months; erasing for good (memories, copies, the record of
+  what was sent) is the owner's own act (`connector/forgetting.py`).
 
 `story_gaps()` is the quiet engine of it: Jefferey notices what's missing —
 a person mentioned but never described, nothing yet marked legacy — and asks

@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import time
 
+import forgetting
+
 KINDS = ("disclosure", "reaction", "representation")
 
 # Audiences a rule can name. Anything else is treated as a named person or
@@ -72,15 +74,11 @@ class ConscienceRules:
         self.c._save()
         return {**entry, "rule": "Included by the owner's choice. Storage is total; the conscience is curated."}
 
-    def exclude(self, contains: str) -> dict:
+    def exclude(self, contains: str = "", ids=None, confirm: str = "") -> dict:
         """Take something back out of the conscience. It stays on Self-Cloud;
-        Jefferey simply no longer holds it as part of who they are."""
-        c = contains.lower()
-        before = len(self.c.data["conscience_included"])
-        self.c.data["conscience_included"] = [
-            e for e in self.c.data["conscience_included"] if c not in e["ref"].lower()]
-        self.c._save()
-        return {"excluded": before - len(self.c.data["conscience_included"])}
+        Jefferey simply no longer holds it as part of who they are. Two
+        steps, by id or whole words, never a wildcard (forgetting.py)."""
+        return forgetting.exclude(self.c, contains, ids, confirm)
 
     def included(self) -> list[dict]:
         return list(self.c.data.get("conscience_included", []))
@@ -114,16 +112,12 @@ class ConscienceRules:
         self.c._save()
         return rule
 
-    def remove_rule(self, rule_id_or_text: str) -> dict:
-        """Delete a rule by id or by any text it contains. Never argued with."""
-        key = rule_id_or_text.strip().lower()
-        before = len(self.c.data["rules"])
-        self.c.data["rules"] = [
-            r for r in self.c.data["rules"]
-            if r["id"] != key and key not in r["instruction"].lower()
-            and key not in " ".join(r["tags"])]
-        self.c._save()
-        return {"removed": before - len(self.c.data["rules"])}
+    def remove_rule(self, rule_id_or_text: str = "", confirm: str = "") -> dict:
+        """Delete a rule by its id, or by whole words of it, an exact tag or
+        its audience. Never argued with, never done on a guess: the first
+        call shows which rules would go and gives a one-time code; only the
+        second, with the code, removes them (forgetting.py)."""
+        return forgetting.remove_rules(self.c, rule_id_or_text, confirm)
 
     def rules(self, kind: str = "") -> list[dict]:
         rs = self.c.data.get("rules", [])

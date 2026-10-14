@@ -143,11 +143,14 @@ class Representative:
         """Everything Jefferey can put on a form for you. You own all of it."""
         return dict(self.c.data.get("profile", {}))
 
-    def forget_profile_field(self, field: str) -> dict:
-        key = self._normalize_field(field) or field.lower().strip().replace(" ", "_")
-        removed = self.c.data.get("profile", {}).pop(key, None)
-        self.c._save()
-        return {"removed": key if removed is not None else None}
+    def forget_profile_field(self, field: str, confirm: str = "") -> dict:
+        """One detail, by its exact name. Two steps like every removal: the
+        first call shows it and gives a one-time code (forgetting.py)."""
+        import forgetting
+        field = field if isinstance(field, str) else ""
+        key = (self._normalize_field(field) or field.lower().strip().replace(" ", "_")
+               if field.strip() else "")
+        return forgetting.forget_profile(self.c, field, key, confirm)
 
     # ---------------------------------------------------------------- forms
     def fill_form(self, fields: list[str]) -> dict:
