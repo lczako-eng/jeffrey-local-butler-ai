@@ -162,6 +162,15 @@ If something like that is already in your memories (an alarm code, a PIN, a
 card number), no AI sees it — it reaches them as `[hidden]`. To move it into
 your vault, type `/secrets` in **`Talk to JEFFEREY on this Mac`**.
 
+### Forms
+
+A form JEFFEREY fills is saved as a new copy in the **`Filled forms`** folder —
+at the top of your Self-Cloud drive, or in your home folder if no drive is
+plugged in — and nowhere else. Your original is never changed. A secret from
+your vault goes only into the box that asks for it, and *What left the house*
+lists every time one was used. Boxes that sign or say "I certify" are left for
+you, unless you type `/permit paperwork act` yourself.
+
 ### Forgetting, and bringing back
 
 Ask any AI to forget something and JEFFEREY first shows it exactly what would
@@ -208,6 +217,7 @@ nothing changes until you type `yes`:
 | `/permit groceries act 100 per week` | he may buy groceries, at most $100 in any 7 days |
 | `/permit selling act at least 450` | he may accept an offer of $450 or more |
 | `/permit correspondence act` | he may send letters for you — nothing that costs money |
+| `/permit paperwork act` | he may fill the boxes on a form that sign or certify for you |
 | `/permit groceries recommend` | back to bringing you options; you decide |
 | `/keys`, `/grant family`, `/scope remove family media.read`, `/revoke gpt-raw` | who holds a key, and changing it |
 

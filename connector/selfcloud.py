@@ -61,6 +61,10 @@ SCOPES = {
     # only the caretaker's.
     "act.request":     "may ask whether an act in the world is allowed (the caretaker)",
     "keys.read":       "may see every key and the record of who asked for what",
+    # October 2026 (I-02): reading a PDF form on this computer and saving a
+    # filled copy in the 'Filled forms' folder. It was 'facts.read', so every
+    # plain guest session could write files anywhere.
+    "paperwork.write": "may read PDF forms and save filled copies in the 'Filled forms' folder",
 }
 
 # The caretaker preset as it was before act.request and keys.read existed.
@@ -71,7 +75,10 @@ _CARETAKER_V1 = frozenset({
     "facts.read", "facts.write", "priorities.read", "priorities.write",
     "goals.read", "goals.write", "life.read", "life.write", "media.read",
     "family.read", "legacy.read", "money.read", "money.write", "vault.names"})
-GRANTS_VERSION = 2
+# ...and as it was before paperwork.write existed (forms were filled under
+# facts.read, which the guests held too — I-02).
+_CARETAKER_V2 = _CARETAKER_V1 | {"act.request", "keys.read"}
+GRANTS_VERSION = 3
 
 # Keys whose every change the owner is told about, in the brief and status.
 WATCHED_KEYS = ("jefferey", "family", "executor")
@@ -98,7 +105,7 @@ PRESETS: dict[str, dict] = {
             "goals.read", "goals.write",
             "life.read", "life.write", "media.read", "family.read", "legacy.read",
             "money.read", "money.write", "vault.names",
-            "act.request", "keys.read",
+            "act.request", "keys.read", "paperwork.write",
         ],
         "why": "The one who represents the owner. Trusted with the life layer "
                "and the money — never with the secrets themselves.",
@@ -123,9 +130,11 @@ def _now() -> str:
 
 def migrate_grants(data: dict) -> bool:
     """Keep reading old stores (October 2026). The caretaker preset gained
-    act.request and keys.read; a stored 'jefferey' key that still holds the
-    whole old preset is the untouched default, so it gets them too — once,
-    marked v2, so a scope the owner later removes is never put back. A key
+    act.request and keys.read (v2), then paperwork.write (v3: filling forms
+    left facts.read, so the caretaker keeps what it could already do and the
+    guests lose it). A stored 'jefferey' key that still holds the whole old
+    preset is the untouched default, so it gets them too — once, marked with
+    the version, so a scope the owner later removes is never put back. A key
     the owner had narrowed is left exactly as he made it. Changes memory
     only; the next real save keeps it (reading never writes). Returns True
     when something changed."""
@@ -141,8 +150,10 @@ def migrate_grants(data: dict) -> bool:
         v = 1
     if v >= GRANTS_VERSION:
         return False
-    if _CARETAKER_V1 <= set(g["scopes"]):
+    if v < 2 and _CARETAKER_V1 <= set(g["scopes"]):
         g["scopes"] = sorted(set(g["scopes"]) | {"act.request", "keys.read"})
+    if v < 3 and _CARETAKER_V2 <= set(g["scopes"]):
+        g["scopes"] = sorted(set(g["scopes"]) | {"paperwork.write"})
     g["v"] = GRANTS_VERSION
     return True
 

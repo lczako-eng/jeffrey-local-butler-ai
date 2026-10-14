@@ -136,14 +136,24 @@ RELEASE: dict[str, frozenset[str]] = {
     "remember_fact": frozenset({"id", "fact", "category", "added"}),
     "forget": FORGET | {"removed_facts"},
     "get_profile": frozenset({ANY}),
-    "set_profile_field": frozenset({"stored", "field", "value"}),
+    # a change to who the owner is comes back as a question first (I-30)
+    "set_profile_field": frozenset({"stored", "field", "value", "step", "would_change",
+                                    "confirm", "expires", "how_to_finish"}),
     "forget_profile_field": FORGET | {"removed"},
-    "fill_form": frozenset({"filled", "needs_you", "coverage", "vault_available"}),
-    # fill_pdf: the filled copy's location, never the values written into it
-    "fill_pdf": frozenset({"written", "fields_set", "filled_from_vault",
-                           "original_untouched", "fields", "references",
-                           "available"}),
-    "pdf_form_fields": frozenset({"path", "fields", "count"}),
+    # from_your_vault: "your SIN will go into box X", read to the owner first
+    "fill_form": frozenset({"filled", "needs_you", "coverage", "vault_available",
+                            "from_your_vault"}),
+    # fill_pdf: the filled copy's location, never the values written into it;
+    # which secret went into which box by NAME (I-02), what was taken out of
+    # the copy (I-31) and which boxes were signed under an approval (I-57)
+    "fill_pdf": frozenset({"written", "saved_in", "fields_set", "filled_from_vault",
+                           "original_untouched", "fields", "references", "available",
+                           "secrets_used", "not_on_this_form", "removed_from_copy",
+                           "signed", "wrong_boxes"}),
+    # field names are the PDF author's words: data, never instructions (I-31)
+    "pdf_form_fields": frozenset({"path", "fields", "count", "field_names_are",
+                                  "described", "sensitive", "for_someone_else",
+                                  "signing", "suspicious", "warning"}),
     # who wrote each line and through which door (I-45); an approval's id is
     # given only to the connection that asked for it, never in the log view
     "action_log": frozenset({"category", "description", "amount", "currency",
@@ -256,7 +266,7 @@ RELEASE: dict[str, frozenset[str]] = {
     # this door's own report — counts and destinations, never the bodies
     "what_left_the_house": frozenset({"since", "sends", "refused",
                                       "by_destination", "door", "log_lives",
-                                      "to_see_everything"}),
+                                      "secrets_used_on_forms", "to_see_everything"}),
 }
 
 
@@ -1681,6 +1691,20 @@ def note_refusal(tool: str, asked, reason: str) -> None:
         pass
 
 
+def note_secret_use(tool: str, uses: list[dict], where: str) -> None:
+    """A secret from the owner's vault is about to be written into a file
+    on his own disk (fill_pdf). Nothing leaves the house — but every use is
+    written down first, by the secret's NAME and the box it goes into, never
+    its value, and the owner sees it in 'What left the house' (I-02). Raises
+    OSError when the log cannot be written: then nothing is filled."""
+    asked = "; ".join(f"vault:{u.get('secret')} into the box '{u.get('field')}'"
+                      for u in uses)
+    words, _ = mask_text(f"{asked} — in a filled copy of '{where}', saved in the "
+                         f"'Filled forms' folder")
+    _write(_entry("secret_used", tool=tool, sent=None, asked=words[:ASKED_CAP],
+                  withheld=[], refused=None))
+
+
 def access_refusal(tool: str, asked, e: Exception) -> dict:
     """The access gate said no. Written down, and — for a surface whose SDK
     would reduce it to 'Error executing tool' — turned into a result the
@@ -1783,9 +1807,13 @@ def summary(days: int = 7) -> dict:
     es = entries(since)
     by: dict[tuple[str, str, str], dict] = {}
     refused = 0
+    secrets_used = 0
     for e in es:
         if e.get("kind") == "intent":
             continue          # written before a change ran; nothing was sent
+        if e.get("kind") == "secret_used":
+            secrets_used += 1  # into a file on this computer; nothing was sent
+            continue
         if e.get("refused"):
             refused += 1
             continue
@@ -1805,6 +1833,7 @@ def summary(days: int = 7) -> dict:
         "sends": sum(d["sends"] for d in dest),
         "refused": refused,
         "by_destination": dest,
+        "secrets_used_on_forms": secrets_used,
         "door": "shut" if is_shut() else "open",
         "log_lives": home.describe(),
         "to_see_everything": "double-click 'What left the house.command' — the "
@@ -1830,6 +1859,13 @@ def report(days: int | None = 7, full: bool = False) -> str:
                      f"{d['sends']} sends, {_kb(d['bytes'])}")
         for t, n in list(d["tools"].items())[:12]:
             lines.append(f"       {t} ×{n}")
+    used = [e for e in es if e.get("kind") == "secret_used"]
+    if used:
+        lines.append("")
+        lines.append(f"  🔑 secrets from your vault written onto forms on this computer: "
+                     f"{len(used)} (none of them was sent anywhere):")
+        for e in used:
+            lines.append(f"       {e['t']}  {e.get('asked')}")
     if s["refused"]:
         lines.append("")
         lines.append(f"  ✋ refused: {s['refused']} — kept home, with the reason:")

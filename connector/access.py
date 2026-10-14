@@ -85,7 +85,13 @@ TOOL_SCOPES: dict[str, str] = {
     "get_conscience": "facts.read", "remember_fact": "facts.write",
     "forget": "facts.write", "get_profile": "facts.read",
     "set_profile_field": "facts.write", "forget_profile_field": "facts.write",
-    "fill_form": "facts.read", "fill_pdf": "facts.read", "action_log": "facts.read",
+    "fill_form": "facts.read", "action_log": "facts.read",
+    # PDF forms on this computer: reading one, and saving a filled copy in the
+    # 'Filled forms' folder. A write to the owner's disk, so never under a
+    # read scope (I-02: fill_pdf was 'facts.read' and pdf_form_fields had no
+    # gate, so a plain guest session overwrote photos, the record of what
+    # left the house and the memory file itself). Only the caretaker holds it.
+    "fill_pdf": "paperwork.write", "pdf_form_fields": "paperwork.write",
     "conscience_include": "facts.write", "conscience_exclude": "facts.write",
     "set_rule": "facts.write", "remove_rule": "facts.write",
     "list_rules": "facts.read", "daily_brief": "facts.read",
@@ -144,8 +150,7 @@ NARROWING_TOOLS = frozenset({"selfcloud_revoke", "selfcloud_remove_scope"})
 # (I-12) instead of letting it land unrecorded.
 WRITE_TOOLS = frozenset(
     {t for t, s in TOOL_SCOPES.items() if s.endswith(".write") or s == "act.request"}
-    | NARROWING_TOOLS
-    | {"fill_pdf"})                     # writes a new file on the owner's disk
+    | NARROWING_TOOLS)
 
 
 def owner_only_refusal(tool: str) -> dict:

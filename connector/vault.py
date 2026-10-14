@@ -48,6 +48,14 @@ INDEX_KEY = "__index__"             # names we've stored (names only, no values)
 REF = re.compile(r"^vault:([a-z0-9_.-]{1,64})$", re.I)
 
 
+def reserved(name: str) -> bool:
+    """JEFFEREY's own bookkeeping inside the store (the list of names), never
+    a secret anyone may store or use: `vault:__index__` wrote the names of
+    every secret into a form (I-29)."""
+    n = str(name or "").strip().lower()
+    return n == INDEX_KEY or n.startswith("_")
+
+
 class VaultUnavailable(RuntimeError):
     """No platform credential store on this machine."""
 
@@ -91,7 +99,7 @@ def backend_name() -> str:
 def _index() -> list[str]:
     kr = _kr()
     raw = kr.get_password(SERVICE, INDEX_KEY) or ""
-    return [n for n in raw.split("\x1f") if n]
+    return [n for n in raw.split("\x1f") if n and not reserved(n)]
 
 
 def _write_index(names: list[str]) -> None:
@@ -106,6 +114,8 @@ def store(name: str, value: str) -> dict:
     name = name.strip().lower()
     if not re.fullmatch(r"[a-z0-9_.-]{1,64}", name):
         raise ValueError("name must be letters, digits, dot, dash, underscore")
+    if reserved(name):
+        raise ValueError("a name may not start with '_' (those are JEFFEREY's own)")
     kr = _kr()
     kr.set_password(SERVICE, name, value)
     _write_index(_index() + [name])
@@ -128,9 +138,15 @@ def resolve(value: str) -> str | None:
     """Turn `vault:sin` into the actual secret — on this machine only, at the
     moment of writing. Returns None if it isn't a reference token."""
     m = REF.match(str(value).strip())
-    if not m:
+    if not m or reserved(m.group(1)):
         return None
     return _kr().get_password(SERVICE, m.group(1).lower())
+
+
+def ref_name(value: str) -> str | None:
+    """The secret's name in a `vault:<name>` reference, or None."""
+    m = REF.match(str(value).strip())
+    return m.group(1).lower() if m else None
 
 
 def is_reference(value: str) -> bool:
@@ -140,6 +156,8 @@ def is_reference(value: str) -> bool:
 def delete(name: str) -> dict:
     kr = _kr()
     name = name.strip().lower()
+    if reserved(name):
+        raise ValueError("that name is JEFFEREY's own list of names, not a secret")
     try:
         kr.delete_password(SERVICE, name)
     except Exception:

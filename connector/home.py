@@ -27,6 +27,7 @@ Explicit environment variables always win:
     SELFCLOUD_DISCS            archived discs
     JEFFEREY_EGRESS            the egress log (what left the house)
     JEFFEREY_DOOR              the door-shut switch file
+    JEFFEREY_FORMS_OUTBOX      where filled forms are saved ('Filled forms')
 """
 
 from __future__ import annotations
@@ -136,6 +137,20 @@ def door_switch_path() -> Path:
     """A file whose mere existence shuts the egress door. The owner can make
     it by hand on the drive if every other switch has failed them."""
     return _pick("JEFFEREY_DOOR", "door-shut", "~/.jefferey/door-shut")
+
+
+FORMS_FOLDER = "Filled forms"
+
+
+def forms_outbox_path() -> Path:
+    """The ONE place a filled form is saved (October 2026, I-02): a folder
+    the owner can see and open — at the top of the Self-Cloud drive, or in
+    his home folder when there is no drive. Never chosen by an AI; the
+    representative refuses anything outside it."""
+    if os.environ.get("JEFFEREY_FORMS_OUTBOX"):
+        return Path(os.environ["JEFFEREY_FORMS_OUTBOX"]).expanduser()
+    r = root()
+    return (r / FORMS_FOLDER) if r else Path("~").expanduser() / FORMS_FOLDER
 
 
 def describe() -> str:

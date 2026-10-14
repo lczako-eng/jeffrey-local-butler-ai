@@ -57,6 +57,7 @@ def isolated_env(tmp: Path) -> tuple[dict, Path]:
         SELFCLOUD_INDEX=str(tmp / "photo-index"),
         SELFCLOUD_VOICE=str(tmp / "voice"),
         SELFCLOUD_DISCS=str(tmp / "discs"),
+        JEFFEREY_FORMS_OUTBOX=str(tmp / "Filled forms"),
         PYTHONDONTWRITEBYTECODE="1",
     )
     return env, home

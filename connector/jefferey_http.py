@@ -564,8 +564,9 @@ class FormIn(BaseModel):
 @gate("facts.read")
 def fill_form(f: FormIn) -> dict:
     """Given a form's field labels, return what Jefferey can fill from the
-    user's own profile and exactly what he cannot. He never guesses, and
-    never fills sensitive identifiers — those go back to the user."""
+    user's own profile and exactly what he cannot. He never guesses, never
+    fills a box about someone else with the owner's details, and never fills
+    sensitive identifiers — those go back to the user."""
     return rep.fill_form(f.fields)
 
 
@@ -581,14 +582,17 @@ def vault_status() -> dict:
 class ProfileIn(BaseModel):
     field: str
     value: str
+    confirm: str = ""
 
 
 @door(app.post("/profile", operation_id="set_profile_field"))
 @gate("facts.write")
 def set_profile_field(p: ProfileIn) -> dict:
-    """Store one identity detail Jefferey may reuse on forms. Sensitive
-    identifiers (SIN/SSN, cards, PINs) are refused by design."""
-    return rep.set_profile_field(p.field, p.value)
+    """Store one of the OWNER's own details Jefferey may reuse on forms.
+    Sensitive identifiers (SIN/SSN, cards, PINs) and anything about someone
+    else are refused. Changing his name or date of birth comes back as a
+    question with a one-time code: ask him, then send it again with confirm."""
+    return rep.set_profile_field(p.field, p.value, p.confirm)
 
 
 @door(app.get("/profile", operation_id="get_profile"))
