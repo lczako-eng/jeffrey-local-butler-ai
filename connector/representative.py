@@ -31,6 +31,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import egress
 import vault
 
 # ------------------------------------------------------------------ profile
@@ -60,6 +61,17 @@ SENSITIVE_PATTERNS = [
     "account number", "routing", "iban", "sort code",
     "password", "passcode", "pin", "secret", "security answer",
     "signature", "sign here",
+    # Identity documents and the answers that unlock accounts (I-58): the
+    # numbers identity thieves and fake "seller verification" forms ask for.
+    "licence", "license", "permis de conduire", "passport", "passeport",
+    "health card", "health number", "health insurance", "ohip", "ramq",
+    "carte sante", "carte santé", "assurance maladie", "maiden name",
+    "nom de jeune fille", "place of birth", "lieu de naissance",
+    "security question", "question de sécurité", "question de securite",
+    # Logins and the codes of a house (I-07), in English and French.
+    "login", "mot de passe", "code secret", "code d'acces", "code d'accès",
+    "alarm", "alarme", "door code", "gate code", "garage code", "lockbox",
+    "lock box", "keypad", "combination", "wifi key", "wi-fi key",
 ]
 
 # ------------------------------------------------------------------ triage
@@ -131,8 +143,26 @@ class Representative:
                 "field": key,
                 "reason": (
                     "Refused by design: identifiers like SIN/SSN, card numbers, "
-                    "PINs and passwords are never stored or auto-filled. Jefferey "
-                    "will always hand these fields back to you to enter yourself."
+                    "driver's licence and passport numbers, PINs, codes and passwords "
+                    "are never stored or auto-filled. JEFFEREY will always hand these "
+                    "fields back to you to enter yourself, or fill them from your "
+                    f"vault (python connector/vault.py set {self._suggest_slot(field)})."
+                ),
+            }
+        # The VALUE too, alone and beside its name (I-07): a card number under
+        # 'notes', or '4821' under 'house code', is still a secret.
+        why = (egress.looks_secret(str(value))
+               or egress.looks_secret(f"{field}: {value}"))
+        if why:
+            return {
+                "stored": False,
+                "field": key,
+                "reason": (
+                    f"Refused: the value looks like {why}, and the profile is read by "
+                    "every AI the owner lets in. It belongs in his vault instead: he "
+                    "stores it himself, at his own keyboard (python connector/vault.py "
+                    f"set {self._suggest_slot(field)}), and forms fill it from there "
+                    "without anyone seeing it."
                 ),
             }
         self.c.data["profile"][key] = value.strip()
@@ -140,8 +170,25 @@ class Representative:
         return {"stored": True, "field": key, "value": value.strip()}
 
     def get_profile(self) -> dict:
-        """Everything Jefferey can put on a form for you. You own all of it."""
-        return dict(self.c.data.get("profile", {}))
+        """Everything Jefferey can put on a form for you. You own all of it.
+
+        A detail of a kind that is never handed to an AI (a passport or
+        licence number, a maiden name, a security answer), kept in the
+        profile before that rule existed, stays in the file and is not
+        handed out (I-58): its value is hidden here, and the owner can move
+        it into his vault (/secrets)."""
+        prof = dict(self.c.data.get("profile", {}))
+        held = [k for k, v in prof.items()
+                if self._is_sensitive_words(k) and not vault.is_reference(str(v))]
+        for k in held:
+            prof[k] = "[hidden: this kind of detail is never handed to an AI]"
+        if held:
+            prof["kept_home"] = (
+                f"{len(held)} detail{'s' if len(held) != 1 else ''} of a kind that is "
+                "never handed to an AI stayed in the house. Never ask the owner to "
+                "read it to you; he can move it into his vault by typing /secrets in "
+                "'Talk to JEFFEREY on this Mac'.")
+        return prof
 
     def forget_profile_field(self, field: str, confirm: str = "") -> dict:
         """One detail, by its exact name. Two steps like every removal: the
@@ -319,6 +366,18 @@ class Representative:
                 billing_flags.append(reason)
                 billing_score += weight
 
+        # A message that carries a card number, a SIN, a code or a password is
+        # itself a warning sign (I-14): it is how account takeovers and fake
+        # "verify your card" messages work. It is still read and judged.
+        quoted = sorted({w for _, _, w in egress.find_secrets(text)},
+                        key=egress._ORDER.index)
+        if quoted:
+            scam_flags.append(
+                f"it carries what looks like {' and '.join(quoted)} — never read it out, "
+                "type it or send it to anyone who calls, texts or emails you; a real "
+                "bank, government office or company never asks for it")
+            scam_score += 0.3
+
         scam_score = round(min(1.0, scam_score), 2)
         billing_score = round(min(1.0, billing_score), 2)
         money = _MONEY.findall(text)[:5]
@@ -343,6 +402,9 @@ class Representative:
         else:
             verdict = "routine"
             advice = "Handle quietly. Do not interrupt the user for this."
+        if quoted:
+            advice += (" The message holds a secret-shaped number or word, hidden "
+                       "here: tell the owner never to read it out or pass it on.")
 
         # Does it touch anything they've told Jefferey matters?
         basis = self.c.explain_basis(subject or body[:80])
@@ -430,6 +492,14 @@ class Representative:
     def _is_sensitive(label: str) -> bool:
         low = str(label).lower()
         return any(pat in low for pat in SENSITIVE_PATTERNS)
+
+    @staticmethod
+    def _is_sensitive_words(label: str) -> bool:
+        """The same list, matched as whole words of a stored field's name
+        ('shipping_address' holds the letters 'pin' but is not a PIN)."""
+        low = " " + re.sub(r"[^a-z0-9éèàç']+", " ", str(label).lower()) + " "
+        return any(re.search(r"(?<![a-z0-9])" + re.escape(p) + r"(?![a-z0-9])", low)
+                   for p in SENSITIVE_PATTERNS)
 
     @staticmethod
     def _normalize_field(label: str) -> str | None:

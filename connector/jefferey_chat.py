@@ -1315,7 +1315,10 @@ def system_prompt() -> str:
         return (DIRECTIVES + "\n\n## The owner's memories cannot be read right now\n\n"
                 + e.plain + "\n\nTell the owner this plainly. Do not guess at "
                 "what the memories contained.")
-    snap = conscience.snapshot()
+    # Anything in his memories that looks like a secret (an alarm code noted
+    # before the scan knew French, a card number typed by hand) is hidden
+    # here, field by field; the door hides it again in the text as a backstop.
+    snap, _ = egress.mask(conscience.snapshot())
     return (
         DIRECTIVES
         + "\n\n## Live conscience (loaded this session — the user owns every byte)\n\n"
@@ -1553,13 +1556,18 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
     if once is not None:
         try:
             history.append({"role": "user", "content": egress.release_text("you_said", once)})
+        except EgressRefused as e:
+            kept_home_paste(once, e)
+            return
+        try:
             turn(history)
         except EgressRefused as e:
             print(f"{DIM}(kept in the house: {e}){RESET}")
         return
 
     print(f"{DIM}/conscience shows the store · /egress shows what left the house · "
-          f"/removed shows what was forgotten · /permissions and /keys show what "
+          f"/removed shows what was forgotten · /secrets moves a secret into your "
+          f"vault · /permissions and /keys show what "
           f"each AI may do (you change it with /permit, /grant, /scope, /revoke) · "
           f"/quit leaves (he keeps what he learned){RESET}\n")
     while True:
@@ -1588,12 +1596,16 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         if user.lower().split(" ", 1)[0] in _OWNER_COMMANDS:
             owner_command(user)       # the owner's hands only; never a model tool
             continue
+        if user.lower().split(" ", 1)[0] == "/secrets":
+            owner_secrets(user)       # the owner's hands only; never a model tool
+            continue
         try:
             history.append({"role": "user", "content": egress.release_text("you_said", user)})
         except EgressRefused as e:
             # The owner typed something that must not reach a rented engine.
-            # It never joins the history, so it can never be sent later either.
-            print(f"{DIM}(kept in the house — {e}){RESET}")
+            # It never joins the history, so it can never be sent later either
+            # — but he still gets an answer about it, from this Mac (I-14).
+            kept_home_paste(user, e)
             continue
         try:
             turn(history)
@@ -1607,6 +1619,112 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
             if history and history[-1]["role"] == "user" and isinstance(history[-1]["content"], str):
                 history.pop()
         print()
+
+
+def kept_home_paste(text: str, e: EgressRefused) -> dict | None:
+    """What the owner typed or pasted held a secret, so it stayed on this Mac.
+    He is told so in plain words — and if it is a message he wanted checked
+    (a text from 'the bank', an email quoting his card), JEFFEREY checks it
+    right here, with no engine, and says what it found (I-14)."""
+    why = egress.looks_secret(text)
+    if not why:                               # the door is shut, or another reason
+        print(f"{DIM}(kept in the house — {e}){RESET}")
+        return None
+    print(f"\n  That stayed on this Mac: it holds what looks like {why}, so nothing "
+          f"of it was sent to the AI.")
+    print("  Never read a password, a PIN, a code or a card number to anyone who calls, "
+          "texts or emails you — not even someone who says they are your bank.")
+    if len(text.split()) < 6:
+        print("  If you want it kept, put it in your vault (type /secrets to see how).\n")
+        return None
+    try:
+        verdict = rep.triage_message("", "", text)
+    except Exception:
+        return None
+    # The secret itself is one warning sign; say "scam" only on the others.
+    others = [f for f in verdict.get("scam_flags", [])
+              if not f.startswith("it carries what looks like")]
+    score = verdict.get("scam_score", 0) - (0.3 if len(others) < len(verdict.get("scam_flags", [])) else 0)
+    if others and score >= 0.25:
+        word = "is very likely a scam" if score >= 0.5 else "looks suspicious"
+        print(f"\n  ⚠  JEFFEREY checked it here, on your Mac: this message {word}.")
+        for flag in others[:5]:
+            print(f"     · {flag}")
+        print("  Do not click, call or reply. If it claims to be your bank or a company "
+              "you deal with, call the number on your card or your statement.\n")
+    else:
+        print("  JEFFEREY checked it here, on your Mac, and saw no other sign of a scam. "
+              "Still, keep the secret in it to yourself.\n")
+    return verdict
+
+
+def owner_secrets(command: str, answer=input) -> dict | None:
+    """/secrets and /secrets move N — typed by the OWNER at this terminal.
+    Lists what is already in his memories that looks like a password, a
+    code, or a card or ID number (no AI ever sees it: the door hides it),
+    and moves one into his vault with his own yes. Nothing is lost: the
+    words go into the vault whole, and his memory keeps the rest of the
+    sentence with a note saying where the secret went."""
+    import vault
+    parts = command.split()
+    try:
+        conscience.refresh()
+    except StoreProblem as e:
+        print(f"  {e.for_owner()}")
+        return None
+    rows = egress.stored_secrets(conscience.data)
+    seen = {r["path"] for r in rows}
+    for k, v in conscience.data.get("profile", {}).items():   # a passport, a maiden name…
+        if (("profile", k) not in seen and rep._is_sensitive_words(k)
+                and not vault.is_reference(str(v))):
+            rows.append({"path": ("profile", k), "section": "profile",
+                         "field": str(k).replace("_", " "), "words": str(v),
+                         "looks_like": "a passport, licence or other private detail"})
+    if len(parts) < 3 or parts[1].lower() != "move":
+        if not rows:
+            print("  Nothing in your memories looks like a password, a code or a card "
+                  "number. Good.")
+            return None
+        print(f"  {len(rows)} thing{'s' if len(rows) != 1 else ''} in your memories "
+              f"look{'' if len(rows) != 1 else 's'} like a secret. No AI sees "
+              f"{'them' if len(rows) != 1 else 'it'} (the door hides it), but the safe "
+              f"place is your vault:")
+        for i, r in enumerate(rows, 1):
+            where = f"your profile, {r['field']}" if r["section"] == "profile" else r["section"]
+            print(f"    {i}. ({where}) {r['words'][:120]}  — looks like {r['looks_like']}")
+        print("  To move one into your vault, type /secrets move and its number.")
+        return None
+    try:
+        row = rows[int(parts[2]) - 1]
+        assert int(parts[2]) >= 1
+    except (ValueError, IndexError, AssertionError):
+        print(f"  There is no number {parts[2]}. Type /secrets to see the list.")
+        return None
+    name, taken, n = egress.vault_name_for(row), set(vault.names()), 1
+    base = name
+    while name in taken:                      # never write over a secret already kept
+        n += 1
+        name = f"{base}_{n}"
+    print(f"  This goes into your vault as '{name}':  {row['words'][:200]}")
+    print(f"  Forms can then use it as vault:{name}, and no AI ever sees it.")
+    if answer("  Move it? Type yes and press return: ").strip().lower() not in ("y", "yes"):
+        print("  Nothing was changed.")
+        return None
+    try:
+        vault.store(name, row["words"])
+    except Exception as e:                    # no keychain on this machine
+        print(f"  Your vault cannot be reached, so nothing was changed. ({e})")
+        return None
+    try:
+        new = egress.put_in_vault(conscience.data, row, name)
+        conscience._save()
+    except StoreProblem as e:
+        print(f"  It is in your vault, but your memories could not be saved: {e.for_owner()}")
+        return None
+    print(f"  Done. It is in your vault as '{name}'. Your memory now reads: {new[:200]}")
+    print("  Older safety copies may still hold the old words; to wipe those too, "
+          "type /erase and the words.")
+    return {"moved": name, "now": new}
 
 
 _FORGET_COMMANDS = ("/removed", "/approve", "/bringback", "/erase")
@@ -2031,7 +2149,8 @@ def selftest() -> None:
         #     working afterwards because nothing was poisoned.
         r = dispatch_tool("remember_fact", {"fact": "my visa is 4111 1111 1111 1111"})
         assert r.get("refused") and "4111" not in json.dumps(r)
-        assert "4111" not in json.dumps(conscience.data)
+        # the whole number: a random id or code can contain "4111" by chance
+        assert "4111 1111 1111 1111" not in json.dumps(conscience.data)
         # The whole number, not "4111": the log holds sha256 hashes, and a hash
         # that happens to contain those four digits made this check flaky.
         _log = Path(os.environ["JEFFEREY_EGRESS"]).read_text()

@@ -149,7 +149,7 @@ where it went and a fingerprint stay).
 
 The door also refuses. If Claude ever tells you *"the door kept that in the
 house"*, something looked like a secret — a card number, your SIN, a
-password — or the door is shut. That is the system working. **Never read a
+password, a PIN or a door code, in English or French — or the door is shut. That is the system working. **Never read a
 secret to an AI.** Secrets go in the vault, from your own terminal:
 
 ```sh
@@ -157,6 +157,10 @@ secret to an AI.** Secrets go in the vault, from your own terminal:
 ```
 
 and JEFFEREY uses them by *name* (`vault:sin`) on forms, never by value.
+
+If something like that is already in your memories (an alarm code, a PIN, a
+card number), no AI sees it — it reaches them as `[hidden]`. To move it into
+your vault, type `/secrets` in **`Talk to JEFFEREY on this Mac`**.
 
 ### Forgetting, and bringing back
 

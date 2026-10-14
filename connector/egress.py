@@ -20,10 +20,13 @@ Three rules, and they are the whole of this file:
    that may go out. A field not named is withheld. A tool not named releases
    nothing. This fails *closed*: forgetting an entry costs a feature, never a
    secret. (Redaction fails open: forgetting a pattern costs a secret.)
-   On top of the allowlist a hard scan refuses the send outright if anything
-   shaped like a secret is in it — a card number, a SIN, a password, an API
-   key. Refused means the *whole* result stays home and the model is told
-   only the field name, never the value.
+   On top of the allowlist a hard scan looks for anything shaped like a
+   secret — a card number, a SIN, a password or PIN, a house code, a bank,
+   health-card, licence or passport number, an API key — in English or
+   French, however it is written. Going out, such words are replaced by
+   "[hidden: looks like …]" and the answer says plainly that part of it
+   stayed home; coming in, a tool that would keep them refuses. The scan is
+   a backstop: the control is the vault, where secrets are kept by name.
 
 3. **Nothing leaves unlogged.** Every send is written, word for word, to an
    append-only log beside the conscience — on the drive when there is one —
@@ -47,6 +50,7 @@ import re
 import sys
 import tempfile
 import time
+import unicodedata
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -67,8 +71,27 @@ ANY = "*any*"        # keys are the owner's own field names (get_profile) —
 
 # Shapes JEFFEREY itself produces — guidance strings and refusals, never owner
 # data — allowed on every tool so a refusal can be reported as a result.
+# kept_home: the door's own plain note when part of an answer looked like a
+# secret and was hidden (see kept_home_note).
 COMMON = frozenset({"error", "note", "rule", "reason", "refused", "tool",
-                    "tell_the_user"})
+                    "tell_the_user", "kept_home"})
+
+# Tools that only READ what the engine hands them: they analyse it, answer,
+# and keep none of it (I-14). A secret-shaped string handed to one of these
+# is not refused — a scam that quotes a card number or "your password is
+# about to expire" is exactly what must still be checked — it is hidden in
+# the log and in the answer instead. Every other tool keeps what it is given
+# (or might), so a secret handed to it is refused before it runs: deny by
+# default, so a tool added tomorrow refuses until it is named here.
+READS_ONLY = frozenset({
+    "triage_message", "draft_guidance", "score_opportunity", "explain_basis",
+    "priorities_for", "check_disclosure", "guidance_for", "fill_form",
+    "pdf_form_fields", "tell_story", "selfcloud_check_access",
+    # the first step of a removal keeps nothing of what was asked: the log
+    # keeps only a fingerprint (FINGERPRINT_ARGS), the pending code only ids
+    "forget", "forget_life", "close_goal", "conscience_exclude", "remove_rule",
+    "forget_profile_field",
+})
 
 # What every tool that removes or closes something returns (forgetting.py):
 # step one shows what would go and a one-time code; step two says what went,
@@ -238,9 +261,30 @@ RELEASE: dict[str, frozenset[str]] = {
 
 
 # ------------------------------------------------------------ the hard scan
-# Shapes that are a secret wherever they appear. A hit refuses the whole
-# result: the allowlist decides what *kind* of thing may leave; this decides
-# that a secret is not a kind of thing.
+# Shapes that are a secret wherever they appear. This scan is a BACKSTOP:
+# the control is the vault (connector/vault.py), where a secret is kept by
+# the owner's own hands and used by name, never by value. The scan catches
+# what slips past anyway — in English or French, however it is written:
+# digits with dots, spaces, dashes, slashes or line breaks between them,
+# full-width or Arabic digits, invisible characters, or the word a few words
+# before the value ("my password for Desjardins is …", "le code de l'alarme
+# est 4821", "the lockbox combination 1234").
+#
+# What a hit does depends on the direction (I-07, I-14):
+#   * handed IN to a tool that keeps what it is given  → refused, nothing kept;
+#   * handed IN to a tool that only reads it (triage_message and the other
+#     analysers, READS_ONLY below) → the tool still answers — a scam that
+#     quotes a card number is exactly what must still be checked — and the
+#     log keeps the words with the secret hidden;
+#   * going OUT → the secret-shaped words become "[hidden: looks like …]",
+#     the rest goes, and the answer says plainly what stayed home. The log
+#     names where, never the value.
+#
+# Digits only count as a number when they stand on their own: a run of
+# digits inside a word or a long code (a photo's sha256 fingerprint, a
+# tracking code like 1Z999AA10123456784, a file name) is not a card or a
+# SIN (I-15).
+
 def _luhn(digits: str) -> bool:
     total, alt = 0, False
     for ch in reversed(digits):
@@ -254,56 +298,669 @@ def _luhn(digits: str) -> bool:
     return total % 10 == 0
 
 
-_CARD = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")       # 13–19 digits
-_SIN = re.compile(r"(?<!\d)\d{3}[ -]?\d{3}[ -]?\d{3}(?!\d)")    # Canadian SIN
-_SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")           # US SSN
-_PASSWORD = re.compile(
-    r"(?i)\b(?:password|passcode|passphrase|pin|cvv|cvc|security code)\b\s*(?:is|[:=])\s*\S+")
+# What each kind of hit is called, in the owner's words.
+CARD = "a card number"
+SIN = "a social insurance number"
+SSN = "a social security number"
+PASSWORD = "a password or PIN"
+CODE = "a PIN or a door, alarm or lock code"
+APIKEY = "an API key"
+BANK = "a bank account number"
+HEALTH = "a health card number"
+LICENCE = "a driver's licence number"
+PASSPORT = "a passport number"
+# Most serious first: what looks_secret() names when several are present.
+_ORDER = (APIKEY, PASSWORD, CODE, SSN, CARD, SIN, BANK, HEALTH, LICENCE, PASSPORT)
+
+# ---- normalising: one spelling for what can be written many ways
+_FOLD = {**dict.fromkeys(map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
+                                  "\ufe58\ufe63\uff0d"), "-"),
+         **dict.fromkeys(map(ord, "\u2018\u2019\u201a\u201b\u2032\u02bc`\u00b4"), "'")}
+
+
+def _fold_char(ch: str) -> str:
+    if unicodedata.category(ch) == "Cf":      # zero-width spaces, soft hyphens
+        return ""
+    if ch.isdecimal():                        # Arabic, Devanagari, full-width …
+        try:
+            return str(unicodedata.decimal(ch))
+        except ValueError:
+            pass
+    s = unicodedata.normalize("NFKC", ch).translate(_FOLD)   # NBSP → space
+    s = "".join(c for c in unicodedata.normalize("NFKD", s)
+                if not unicodedata.combining(c))             # é → e
+    return "".join(str(unicodedata.decimal(c, 0)) if c.isdecimal() and not c.isascii()
+                   else c for c in s)
+
+
+def _normalise(text: str) -> tuple[str, list[int] | None]:
+    """The text in one spelling, and where each character came from in the
+    original (None when nothing changed), so a hit can be hidden in place."""
+    if text.isascii():
+        return text, None
+    out: list[str] = []
+    src: list[int] = []
+    for i, ch in enumerate(text):
+        f = ch if ch.isascii() else _fold_char(ch)
+        out.append(f)
+        src.extend([i] * len(f))
+    return "".join(out), src
+
+
+# ---- words that announce a secret, and what may follow them
+def _rx(*alts: str) -> str:
+    return "|".join(sorted(alts, key=len, reverse=True))
+
+
+_S = r"[\s\-]+"       # between the words of one phrase
+# Passwords: the value may be a word ("the password is couch").
+_PW_WORDS = _rx(
+    r"pass(?:word|wd|code|phrase)s?", r"pwd", r"pass" + _S + r"word",
+    r"mots?" + _S + r"de" + _S + r"passe", r"motdepasse", r"mdp",
+    r"contrasena", r"clave", r"passwort", r"kennwort", r"senha",
+    r"jelsz(?:o|avam|ava|avak)", r"wachtwoord", r"haslo", r"heslo")
+# PINs and the codes of a house: the value is a number ("PIN 4821").
+_PIN_WORDS = _rx(
+    r"pins?", r"pin" + r"[\s\-]*(?:code|number|no|#|kod)", r"nip",
+    r"code" + _S + r"(?:nip|pin)", r"geheimzahl", r"cvv2?", r"cvc2?", r"cvn",
+    r"numero" + _S + r"d'?\s*identification" + _S + r"personnel(?:le)?",
+    r"personal" + _S + r"identification" + _S + r"number",
+    r"security" + _S + r"code", r"code" + _S + r"de" + _S + r"securite",
+    r"secret" + _S + r"code", r"code" + _S + r"(?:secret|confidentiel)",
+    r"access" + _S + r"code", r"code" + _S + r"d'?\s*acces",
+    r"entry" + _S + r"code", r"code" + _S + r"d'?\s*entree",
+    r"(?:(?:front|back|side|garage|patio|main)" + _S + r")?door" + _S + r"(?:code|pin)",
+    r"code" + _S + r"(?:de" + _S + r"(?:la" + _S + r")?|du" + _S + r")?"
+    r"(?:porte|garage|barriere|portail|cadenas|coffre|boite" + _S + r"a" + _S + r"cles?)",
+    r"code" + _S + r"(?:de" + _S + r"|d'\s*)(?:l'\s*)?alarme",
+    r"code" + _S + r"du" + _S + r"systeme" + _S + r"d'\s*alarme",
+    r"gate" + _S + r"code", r"garage" + _S + r"(?:code|pin)",
+    r"alarm" + _S + r"(?:code|pin|number)",
+    r"lock" + r"[\s\-]*box(?:" + _S + r"(?:code|combination|combo))?",
+    r"key" + r"[\s\-]*(?:safe|box)(?:" + _S + r"code)?", r"keypad(?:" + _S + r"code)?",
+    r"(?:safe|lock)" + _S + r"(?:code|combination|combo)",
+    r"combination", r"combinaison", r"combo",
+    r"(?:buzzer|intercom)" + _S + r"code",
+    r"verification" + _S + r"code", r"code" + _S + r"de" + _S + r"verification",
+    r"one" + r"[\s\-]*time" + _S + r"(?:code|pin|passcode)",
+    r"code" + _S + r"a" + _S + r"usage" + _S + r"unique", r"otp", r"2fa" + _S + r"code",
+    r"auth(?:entication|orization)?" + _S + r"code",
+    r"wi[\s\-]?fi" + _S + r"(?:code|key|pin)")
+# Words that only count when the value follows at once ("wifi: BlueHouse20").
+_WEAK_WORDS = _rx(r"wi[\s\-]?fi", r"network" + _S + r"key",
+                  r"cle" + _S + r"(?:wi[\s\-]?fi|reseau|de" + _S + r"securite)")
+_KW = re.compile(r"(?<![^\W_])(?:(?P<pw>" + _PW_WORDS + r")|(?P<pin>" + _PIN_WORDS
+                 + r")|(?P<weak>" + _WEAK_WORDS + r")|(?P<code>code))(?![^\W_])", re.I)
+
+# Words before a bare "code" that make it something else (a postal code).
+_NOT_A_SECRET_CODE = frozenset(
+    "postal zip area promo promotional discount coupon country dress source morse "
+    "bar qr tax product error status colour color dial region building fiscal "
+    "civil penal criminal highway traffic".split())
+_CONNECT = frozenset(["is", "was", "are", "were", "will", "be", "'s", ":", "=", "-",
+                      "->", "=>", "est", "etait", "c'est", "sont", "sera", "ist",
+                      "war", "es", "era"])
+# Only these may stand between a password word and a plain word that is the
+# password ("the password is couch" — but not "the passcode was guessable").
+_SAYS = frozenset(["is", "'s", ":", "=", "est", "c'est", "ist", "es"])
+_STOP = frozenset("""
+a an the this that these those it its in on at to of for from by with without
+about above below under behind inside into onto near next not no never still also
+only just now then here there my your his her our their me you him them we they i
+written saved stored kept lost forgotten forgot changed change changing wrong
+incorrect required needed needs missing expired expiring expire expires
+reset same different new old too very being been sent attached hidden safe secure
+strong weak case sensitive protected verify confirm enter type update please
+click tap following something anything nothing everything one ones vault keychain
+manager same le la les un une des de du dans sur sous pas plus encore aussi ici
+mon ma mes ton ta tes son sa ses notre votre nos vos leur leurs oublie perdu
+change changer requis expire nouveau nouvelle ancien ancienne bon mauvais el los
+las una unos en mi tu su der die das ein eine mein dein sein nicht
+""".split())
+# A number right after one of these is that thing's number, not the secret.
+_LABEL = frozenset(
+    "unit apt apartment suite room floor building house page chapter version model "
+    "item line ext extension step appartement chambre etage bureau local lot route "
+    "highway exit bus flight vol".split())
+_PIN_VALUE = re.compile(r"[#*]?\d{3,12}[#*]?|\d{1,4}(?:-\d{1,4}){1,3}")
+_YEAR = re.compile(r"(?:19|20)\d\d")
+_TOK = re.compile(r"'s\b|c'est\b|->|=>|[:=]|[^\s:=]+", re.I)
+_LEAD, _TRAIL = "\"'([{<«", "\"')]}>».,;:!?"
+_BEFORE = re.compile(
+    r"(?:^|\s)(?P<v>[^\s]+)\s+(?:is|was|est|c'est|=|:)\s+(?:(?:my|the|our|his|her|your|mon|ma|"
+    r"mes|le|la|notre|votre|son|sa|leur)\s+)?$", re.I)
+_MAX_GAP = 5
+
+
+def _ndigits(s: str) -> int:
+    return sum(c.isdigit() for c in s)
+
+
+def _is_value(fam: str, raw: str, conn: bool, gap: int, prev: str,
+              says: bool = True) -> bool:
+    """Is this token the secret that the word before announced?"""
+    v = raw.lstrip(_LEAD + "-").rstrip(_TRAIL)
+    if not v:
+        return False
+    d = _ndigits(v)
+    if fam in ("pin", "code"):
+        if not _PIN_VALUE.fullmatch(v) or prev in _LABEL:
+            return False
+        if fam == "code" and not (conn and gap == 0 and 4 <= d <= 8):
+            return False
+        return not (gap and not conn and _YEAR.fullmatch(v))
+    letters = any(c.isalpha() for c in v)
+    if fam == "weak":
+        return conn and gap == 0 and ((d and letters and len(v) >= 6)
+                                      or bool(_PIN_VALUE.fullmatch(v) and d >= 4))
+    # a password
+    if _PIN_VALUE.fullmatch(v):
+        return d >= 3 and prev not in _LABEL and not (gap and not conn and _YEAR.fullmatch(v))
+    if d and letters and len(v) >= 4:
+        return True                                   # hunter22, Tulipe2024!
+    return (conn and says and gap == 0 and letters and len(v) >= 3
+            and v.lower() not in _STOP
+            and not raw.startswith(("[", "(", "<")))  # "the password is couch"
+
+
+def _trim(n: str, s: int, e: int) -> tuple[int, int]:
+    """A hit's span without the quotes, brackets and commas around it, so
+    hiding it never eats the punctuation of the sentence (or of JSON)."""
+    while e > s and n[e - 1] in "\"'),;]}>»\\":
+        e -= 1
+    while s < e and n[s] in "\"'([{<«\\":
+        s += 1
+    return s, e
+
+
+def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
+    out = []
+    for m in _KW.finditer(n):
+        fam = m.lastgroup
+        what = PASSWORD if fam in ("pw", "weak") else CODE
+        if fam == "code":
+            before = re.findall(r"[a-z]+", n[max(0, m.start() - 20):m.start()].lower())
+            if before and before[-1] in _NOT_A_SECRET_CODE:
+                continue
+        # the value after the word: "PIN 4821", "mot de passe Desjardins est Soleil24"
+        conn, says, gap, prev, last = False, False, 0, "", m.end()
+        for t in _TOK.finditer(n, m.end(), min(len(n), m.end() + 200)):
+            between = n[last:t.start()]
+            if "\n" in between and (gap or "\n\n" in between):
+                break
+            raw = t.group()
+            low = raw.lower()
+            if low in _CONNECT:
+                conn, says, last = True, low in _SAYS, t.end()
+                continue
+            if _is_value(fam, raw, conn, gap, prev, says):
+                end = t.end()
+                if fam in ("pw", "weak") and raw[-1:] not in ".,;!?\"'":
+                    # a passphrase can be several words: hide to the end of the clause
+                    for k, u in enumerate(_TOK.finditer(n, end, min(len(n), end + 120))):
+                        if k >= 5 or "\n" in n[end:u.start()]:
+                            break
+                        end = u.end()
+                        if u.group()[-1:] in ".,;!?\"'":
+                            break
+                out.append((*_trim(n, t.start(), end), what))
+                break
+            gap += 1
+            if gap > _MAX_GAP or raw[-1:] in ".!?;":
+                break
+            prev, last = low.strip(_LEAD + _TRAIL), t.end()
+        # ...or before it: "4821 is my PIN", "Soleil2024 est mon mot de passe"
+        if fam in ("pw", "pin"):
+            b = _BEFORE.search(n[max(0, m.start() - 80):m.start()])
+            if b:
+                v = b.group("v")
+                core = v.lstrip(_LEAD + "-").rstrip(_TRAIL)
+                if _ndigits(core) >= (3 if fam == "pin" else 1) and _is_value(fam, v, True, 0, ""):
+                    s = max(0, m.start() - 80) + b.start("v")
+                    out.append((*_trim(n, s, s + len(v)), what))
+    return out
+
+
+# ---- numbers that stand on their own
+_SEPR = "(?:[ \\t]*[.\\-/_\u00b7\u2022][ \\t]*|\\s{1,3})"
+_RUN = re.compile(r"(?<![^\W_])(?<![^\W_][\-./_])\d+(?:" + _SEPR + r"\d+)*"
+                  r"(?![^\W_])(?![\-./_][^\W_])")
+_DIGITS = re.compile(r"\d+")
+_CARD_CTX = re.compile(r"(?<![^\W_])(?:cards?|cartes?|visa|master\s?card|amex|american express"
+                       r"|discover|credit|debit|cc|cvv)(?![^\W_])", re.I)
+_SIN_CTX = re.compile(r"(?<![^\W_])(?:s\.?\s?i\.?\s?n\.?|n\.?\s?a\.?\s?s\.?|social\s+insurance"
+                      r"|assurance\s+sociale)(?![^\W_])", re.I)
+_SSN_CTX = re.compile(r"(?<![^\W_])(?:s\.?\s?s\.?\s?n\.?|social\s+security)(?![^\W_])", re.I)
+# A long number after one of these is an order or a parcel, not a card.
+_REF_CTX = re.compile(r"(?:(?<![^\W_])(?:orders?|ref|reference|tracking|track|confirmation"
+                      r"|invoice|transaction|receipt|parcel|package|shipment|colis|commande"
+                      r"|suivi|facture|booking|reservation|ticket|case|claim|policy|member"
+                      r"|membership|serial|imei|iccid|barcode|upc|isbn|no|num|n°|nº)(?![^\W_])"
+                      r"(?:\W{1,3}(?:number|no|num|n°|nº|#))?|#)\W{0,3}$", re.I)
+
+
+_MONEY_BEFORE = re.compile(r"[$€£]\s?$")
+_MONEY_AFTER = re.compile(r"\s?(?:[$€£%]|dollars?\b|cad\b|usd\b|eur\b)", re.I)
+
+
+def _number_hits(n: str) -> list[tuple[int, int, str]]:
+    out = []
+    for m in _RUN.finditer(n):
+        gs = [(m.start() + g.start(), m.start() + g.end()) for g in _DIGITS.finditer(m.group())]
+        lens = [e - s for s, e in gs]
+        digits = "".join(n[s:e] for s, e in gs)
+        seps = [n[gs[i][1]:gs[i + 1][0]].strip() for i in range(len(gs) - 1)]
+        if len(gs) == 4 and max(lens) <= 3 and all(s == "." for s in seps):
+            continue                                     # an IP address
+        ctx = n[max(0, m.start() - 40):m.start()]
+        near = ctx[-25:]
+        card_kw, sin_kw, ssn_kw = (_CARD_CTX.search(ctx), _SIN_CTX.search(near),
+                                   _SSN_CTX.search(near))
+        if not (card_kw or sin_kw or ssn_kw) and lens[:4] != [4, 4, 4, 4]:
+            if (_MONEY_BEFORE.search(n[max(0, m.start() - 3):m.start()])
+                    or _MONEY_AFTER.match(n, m.end())):
+                continue                                 # "123 456 789 $": an amount
+            if len(gs) > 1 and all(_YEAR.fullmatch(n[s:e]) for s, e in gs):
+                continue                                 # "2019 2020 2021": years
+        ref = _REF_CTX.search(ctx) and not card_kw and not sin_kw and not ssn_kw
+
+        def hit(i, j, what):
+            out.append((gs[i][0], gs[j][1], what))
+
+        found = False
+        for i in range(len(gs)):
+            w3 = lens[i:i + 3]
+            sub = "".join(n[s:e] for s, e in gs[i:i + 3])
+            if w3 == [3, 2, 4] and len(set(seps[i:i + 2])) == 1 and (
+                    seps[i] == "-" or (sub[:3] not in ("000", "666") and sub[0] != "9"
+                                       and sub[3:5] != "00" and sub[5:] != "0000")):
+                hit(i, i + 2, SSN); found = True
+            elif w3 == [3, 3, 3] and len(set(seps[i:i + 2])) == 1 and (_luhn(sub) or sin_kw):
+                hit(i, i + 2, SIN); found = True
+            for shape in ([4, 4, 4, 4, 3], [4, 4, 4, 4], [4, 6, 5], [4, 6, 4]):
+                k = len(shape)
+                if lens[i:i + k] == shape:
+                    sub = "".join(n[s:e] for s, e in gs[i:i + k])
+                    if _luhn(sub):
+                        hit(i, i + k - 1, CARD); found = True
+                        break
+        if found:
+            continue
+        nd, ng = len(digits), len(gs)
+        if nd == 9 and (sin_kw or ssn_kw):
+            hit(0, ng - 1, SSN if ssn_kw and not sin_kw else SIN)
+        elif 13 <= nd <= 19 and _luhn(digits) and (card_kw or (ng != 2 and not ref)):
+            hit(0, ng - 1, CARD)
+        elif nd == 9 and ng == 1 and _luhn(digits) and not ref:
+            hit(0, 0, SIN)
+    return out
+
+
+# ---- identifiers announced by their name: bank, health card, licence, passport
+_ID_WORDS = {
+    BANK: re.compile(r"(?<![^\W_])(?:transit|institution|inst|routing|aba|sort" + _S + r"code"
+                     r"|bsb|folio|(?:numero|no)" + _S + r"de" + _S + r"(?:transit|compte)"
+                     r"|(?:(?:bank|chequing|checking|savings|cheque|current|joint)" + _S
+                     + r")?account|acct|a/c|compte(?:" + _S + r"(?:bancaire|cheques?|epargne"
+                     r"|conjoint))?)(?:" + _S + r"(?:number|no|num|#))?(?![^\W_])", re.I),
+    HEALTH: re.compile(r"(?<![^\W_])(?:ohip|ramq|health" + _S + r"(?:insurance" + _S
+                       + r")?(?:card|number)|healthcard|carte" + _S + r"(?:sante|soleil|"
+                       r"d'\s*assurance" + _S + r"maladie)|(?:numero" + _S + r")?d?'?\s*"
+                       r"assurance" + _S + r"maladie|personal" + _S + r"health" + _S
+                       + r"number|phn|care" + r"[\s\-]*card|medicare)(?:" + _S
+                       + r"(?:number|no|num|#))?(?![^\W_])", re.I),
+    LICENCE: re.compile(r"(?<![^\W_])(?:driver'?s?" + _S + r"licen[cs]e|driving" + _S
+                        + r"licen[cs]e|licen[cs]e|permis(?:" + _S + r"de" + _S
+                        + r"conduire)?|dl)(?:" + _S + r"(?:number|no|num|#))?(?![^\W_])", re.I),
+    PASSPORT: re.compile(r"(?<![^\W_])(?:passport|passeport)(?:" + _S
+                         + r"(?:number|no|num|#))?(?![^\W_])", re.I),
+}
+_ID_FILLER = frozenset(["number", "no", "num", "#", "is", "was", "est", "my", "the", "mon",
+                        "ma", "le", "la", "de", "du", "of", "card", "carte", ":", "=", "-",
+                        "'s", "c'est"])
+# After these words the number that follows is something else (an amount, a date).
+_ID_BREAK = frozenset("balance solde total amount montant since depuis until opened "
+                      "closed ouvert ferme expires expiry expire line ligne phone "
+                      "telephone call appeler".split())
+_DATE_OR_PHONE = re.compile(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}"
+                            r"|(?:\+?1[-.]?)?\(?\d{3}\)?[-.]\d{3}[-.]\d{4}")
+_PASSPORT_VALUE = re.compile(r"[a-z]{1,2}\d{6,8}|\d{8,9}", re.I)
+_SHAPES = [
+    (HEALTH, re.compile(r"(?<![^\W_])\d{4}[ \-]?\d{3}[ \-]?\d{3}[ \-]?[A-Z]{2}(?![^\W_])")),
+    (LICENCE, re.compile(r"(?<![^\W_])[A-Z]\d{4}[ \-]?\d{5}[ \-]?\d{5}(?![^\W_])")),   # Ontario
+    (LICENCE, re.compile(r"(?<![^\W_])[A-Z]\d{4}[ \-]?\d{6}[ \-]?\d{2}(?![^\W_])")),   # Quebec
+]
+_RAMQ = re.compile(r"(?<![^\W_])[A-Z]{4} ?\d{2}(\d{2}) ?(\d{2})\d{2}(?![^\W_])")
+_IBAN = re.compile(r"(?<![^\W_])[A-Z]{2}\d{2}(?:[ \-]?[A-Z0-9]{4}){2,7}(?:[ \-]?[A-Z0-9]{1,3})?"
+                   r"(?![^\W_])", re.I)
+
+
+def _iban_ok(s: str) -> bool:
+    s = re.sub(r"[ \-]", "", s).upper()
+    if not 15 <= len(s) <= 34:
+        return False
+    moved = s[4:] + s[:4]
+    try:
+        return int("".join(str(int(c, 36)) for c in moved)) % 97 == 1
+    except ValueError:
+        return False
+
+
+def _id_hits(n: str) -> list[tuple[int, int, str]]:
+    out = []
+    for what, rx in _ID_WORDS.items():
+        for m in rx.finditer(n):
+            gap, start, end, digits, chunk = 0, None, None, 0, ""
+            for t in _TOK.finditer(n, m.end(), min(len(n), m.end() + 80)):
+                raw = t.group()
+                v = raw.lstrip(_LEAD).rstrip(_TRAIL)
+                if start is None:
+                    if v.lower() in _ID_FILLER or not v:
+                        continue
+                    if not any(c.isdigit() for c in v):
+                        gap += 1
+                        if gap > 3 or raw[-1:] in ".!?;" or v.lower() in _ID_BREAK:
+                            break
+                        continue
+                    if ("$" in raw or "%" in raw or re.search(r"\d,\d{3}", v)
+                            or _DATE_OR_PHONE.fullmatch(v)):
+                        break                     # money, a date or a phone number
+                    start = t.start()
+                elif not (v == raw and (re.fullmatch(r"[A-Za-z0-9\-]{0,5}\d[A-Za-z0-9\-]{0,5}", v)
+                                        or (what == HEALTH and re.fullmatch(r"[A-Za-z]{2}", v)))):
+                    break                                     # the number has ended
+                end, chunk = t.end(), chunk + v
+                digits = _ndigits(chunk)
+            if start is None:
+                continue
+            compact = re.sub(r"[^A-Za-z0-9]", "", chunk)
+            ok = {BANK: digits >= 3 and compact.isdigit()
+                        and (digits >= 5 or not re.match(r"(?i)(?:.*account|acct|compte|a/c)",
+                                                         m.group())),
+                  HEALTH: digits >= 8,
+                  LICENCE: digits >= 5 and (len(m.group()) > 4 or digits >= 7),
+                  PASSPORT: bool(_PASSPORT_VALUE.fullmatch(compact))}[what]
+            if ok:
+                out.append((*_trim(n, start, end), what))
+    for what, rx in _SHAPES:
+        out.extend((m.start(), m.end(), what) for m in rx.finditer(n))
+    for m in _RAMQ.finditer(n):
+        mm, dd = int(m.group(1)), int(m.group(2))
+        if (1 <= mm <= 12 or 51 <= mm <= 62) and 1 <= dd <= 31:
+            out.append((m.start(), m.end(), HEALTH))
+    out.extend((m.start(), m.end(), BANK) for m in _IBAN.finditer(n) if _iban_ok(m.group()))
+    return out
+
+
+# ---- keys for other services
 _APIKEY = re.compile(
-    r"\b(?:sk-ant-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}"
-    r"|ghp_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{30,})")
+    r"(?<![A-Za-z0-9])(?:sk-ant-[A-Za-z0-9_\-]{4,}|sk-(?:proj|svcacct|admin|live|test)-"
+    r"[A-Za-z0-9_\-]{12,}|sk-[A-Za-z0-9]{20,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{8,}"
+    r"|whsec_[A-Za-z0-9]{16,}|A(?:KIA|SIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_\-]{30,}"
+    r"|hf_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_\-]{20,}|npm_[A-Za-z0-9]{30,}"
+    r"|SG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}"
+    r"|-----BEGIN[A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----|[\s\S]*))")
+_KEY_WORDS = re.compile(
+    r"(?<![^\W_])(?:api" + r"[\s_\-]?key|apikey|secret[\s_\-]?key|access[\s_\-]?key(?:[\s_\-]?id)?"
+    r"|client[\s_\-]?secret|(?:auth|access|refresh|bearer)[\s_\-]?token|bearer|private[\s_\-]?key"
+    r"|aws_secret_access_key|token)(?![^\W_])\W{0,4}(?P<v>[A-Za-z0-9_\-+/=.]{20,})", re.I)
+
+
+def _key_hits(n: str) -> list[tuple[int, int, str]]:
+    out = [(m.start(), m.end(), APIKEY) for m in _APIKEY.finditer(n)]
+    for m in _KEY_WORDS.finditer(n):
+        v = m.group("v")
+        if any(c.isdigit() for c in v) and any(c.isalpha() for c in v):
+            out.append((m.start("v"), m.end("v"), APIKEY))
+    return out
+
+
+_HEXID = re.compile(r"(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{20,}")
+
+
+def find_secrets(text: str) -> list[tuple[int, int, str]]:
+    """Every secret-shaped span in `text`: (start, end, what), in the
+    original text's positions, overlapping spans merged, in order."""
+    if not isinstance(text, str) or len(text) < 6 or _HEXID.fullmatch(text):
+        return []                      # a sha256 or other long hex id: never a secret
+    n, src = _normalise(text)
+    hits = _key_hits(n) + _keyword_hits(n) + _number_hits(n) + _id_hits(n)
+    if not hits:
+        return []
+    if src is not None:
+        hits = [(src[s], src[e - 1] + 1, w) for s, e, w in hits]
+    hits.sort(key=lambda h: (h[0], -h[1]))
+    merged: list[list] = []
+    for s, e, w in hits:
+        if merged and s < merged[-1][1]:
+            m = merged[-1]
+            m[1] = max(m[1], e)
+            if _ORDER.index(w) < _ORDER.index(m[2]):
+                m[2] = w
+        else:
+            merged.append([s, e, w])
+    return [(s, e, w) for s, e, w in merged]
 
 
 def looks_secret(text: str) -> str | None:
     """Why this string must not leave, or None."""
-    if not isinstance(text, str) or len(text) < 6:
+    hits = find_secrets(text)
+    if not hits:
         return None
-    if _APIKEY.search(text):
-        return "an API key"
-    if _PASSWORD.search(text):
-        return "a password or PIN"
-    if _SSN.search(text):
-        return "a social security number"
-    for m in _CARD.finditer(text):
-        digits = re.sub(r"\D", "", m.group())
-        if 13 <= len(digits) <= 19 and _luhn(digits):
-            return "a card number"
-    for m in _SIN.finditer(text):
-        digits = re.sub(r"\D", "", m.group())
-        if _luhn(digits):
-            return "a social insurance number"
-    return None
+    return min((w for _, _, w in hits), key=_ORDER.index)
+
+
+def hidden_mark(what: str) -> str:
+    return f"[hidden: looks like {what}]"
+
+
+def mask_text(text: str) -> tuple[str, list[str]]:
+    """The text with every secret-shaped span replaced by a plain mark, and
+    what each was."""
+    hits = find_secrets(text)
+    if not hits:
+        return text, []
+    parts, last = [], 0
+    for s, e, w in hits:
+        parts.append(text[last:s])
+        parts.append(hidden_mark(w))
+        last = e
+    parts.append(text[last:])
+    return "".join(parts), [w for _, _, w in hits]
+
+
+def _label(k) -> str:
+    return str(k).replace("_", " ")
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+_KEY_LABEL = re.compile(r"(?<![^\W_])(?:api|key|secret|token|bearer|credential)s?(?![^\W_])",
+                        re.I)
+
+
+@functools.lru_cache(maxsize=4096)
+def _announces(label: str) -> bool:
+    """Can a field of this name hold a secret on its own ('alarm code',
+    'passport', 'sin', 'api key')? Field names repeat, so this is remembered."""
+    n, _ = _normalise(label)
+    return bool(_KW.search(n) or _SIN_CTX.search(n) or _SSN_CTX.search(n)
+                or _CARD_CTX.search(n) or _KEY_LABEL.search(n)
+                or any(rx.search(n) for rx in _ID_WORDS.values()))
+
+
+def _pair_secret(k, v, alone_checked: bool = False) -> str | None:
+    """A value that is only a secret beside its name: {'alarm code': '4821'}."""
+    if not (isinstance(v, str) or _is_number(v)) or not _announces(_label(k)):
+        return None
+    if not alone_checked and looks_secret(str(v)):
+        return None                     # the value alone is found where it sits
+    return looks_secret(f"{_label(k)}: {v}")
 
 
 def _scan(obj, where: str = "") -> tuple[str, str] | None:
-    """Walk the whole value. Returns (field, what) for the first secret."""
-    if isinstance(obj, str):
-        why = looks_secret(obj)
+    """Walk the whole value. Returns (field, what) for the first secret.
+    Text and whole numbers are scanned (a card number can arrive as a JSON
+    number); a value is also scanned beside its field name."""
+    if isinstance(obj, str) or _is_number(obj):
+        why = looks_secret(str(obj))
         return (where or "text", why) if why else None
     if isinstance(obj, dict):
         for k, v in obj.items():
+            here = f"{where}.{k}" if where else str(k)
             why = looks_secret(str(k))
             if why:
                 return (where or "a field name", why)
-            hit = _scan(v, f"{where}.{k}" if where else str(k))
+            hit = _scan(v, here)
             if hit:
                 return hit
+            why = _pair_secret(k, v, alone_checked=True)
+            if why:
+                return (here, why)
     elif isinstance(obj, (list, tuple)):
         for i, v in enumerate(obj):
             hit = _scan(v, f"{where}[{i}]")
             if hit:
                 return hit
     return None
+
+
+def mask(obj, where: str = "") -> tuple[object, list[tuple[str, str]]]:
+    """A copy of `obj` with every secret-shaped part hidden in place, and
+    (where, what) for each. A field whose NAME looks like a secret is left
+    out whole."""
+    found: list[tuple[str, str]] = []
+
+    def go(o, w):
+        if isinstance(o, str):
+            m, whats = mask_text(o)
+            found.extend((w or "text", x) for x in whats)
+            return m
+        if _is_number(o):
+            why = looks_secret(str(o))
+            if why:
+                found.append((w or "a number", why))
+                return hidden_mark(why)
+            return o
+        if isinstance(o, dict):
+            out = {}
+            for k, v in o.items():
+                here = f"{w}.{k}" if w else str(k)
+                why = looks_secret(str(k))
+                if why:
+                    found.append((w or "a field name", why))
+                    continue
+                n_before = len(found)
+                masked = go(v, here)
+                if len(found) == n_before:            # nothing in the value alone
+                    why = _pair_secret(k, v, alone_checked=True)
+                    if why:
+                        found.append((here, why))
+                        masked = hidden_mark(why)
+                out[k] = masked
+            return out
+        if isinstance(o, (list, tuple)):
+            return [go(v, f"{w}[{i}]") for i, v in enumerate(o)]
+        return o
+
+    return go(obj, where), found
+
+
+# Parts of the store that are JEFFEREY's own bookkeeping, not the owner's words.
+_NOT_WORDS = frozenset({"selfcloud_grants", "permissions", "_rev", "conscience_included"})
+
+
+def stored_secrets(data: dict) -> list[dict]:
+    """What is ALREADY in the owner's memories that looks like a secret —
+    written before the scan knew its shape, in another language, or by hand.
+    None of it goes out (release() hides it); this is so the owner can see it
+    and move it into his vault with his own hands (/secrets, at his own
+    terminal). Each row: where it is (`path`, for put_in_vault), what it is
+    called, the words, and what it looks like."""
+    rows: list[dict] = []
+
+    def walk(o, path):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if not path and k in _NOT_WORDS:
+                    continue
+                if isinstance(v, str) or _is_number(v):
+                    why = looks_secret(str(v)) or _pair_secret(k, v)
+                    if why:
+                        rows.append({"path": path + (k,), "section": path[0] if path else k,
+                                     "field": _label(k), "words": str(v), "looks_like": why})
+                else:
+                    walk(v, path + (k,))
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                if isinstance(v, str) and looks_secret(v):
+                    rows.append({"path": path + (i,), "section": path[0] if path else "",
+                                 "field": "", "words": v, "looks_like": looks_secret(v)})
+                else:
+                    walk(v, path + (i,))
+
+    walk(data, ())
+    return rows
+
+
+def vault_name_for(row: dict) -> str:
+    """A short, plain name for the vault: 'alarm_code', 'card_number' …"""
+    field = re.sub(r"[^a-z0-9]+", "_", _label(row.get("field", "")).lower()).strip("_")
+    if row.get("section") == "profile" and field:
+        return field[:40]
+    base = {CARD: "card_number", SIN: "sin", SSN: "ssn", PASSWORD: "password",
+            CODE: "code", APIKEY: "api_key", BANK: "bank_account", HEALTH: "health_card",
+            LICENCE: "drivers_licence", PASSPORT: "passport"}.get(row.get("looks_like"), "secret")
+    n, _ = _normalise(str(row.get("words", "")))
+    for word, short in (("alarm", "alarm"), ("alarme", "alarm"), ("garage", "garage"),
+                        ("door", "door"), ("porte", "door"), ("gate", "gate"),
+                        ("portail", "gate"), ("lockbox", "lockbox"), ("cadenas", "lockbox"),
+                        ("wifi", "wifi"), ("wi-fi", "wifi"), ("bank", "bank"),
+                        ("banque", "bank"), ("visa", "visa"), ("desjardins", "desjardins"),
+                        ("rbc", "rbc"), ("td", "td"), ("bmo", "bmo"), ("scotia", "scotia"),
+                        ("cibc", "cibc")):
+        if re.search(r"(?<![^\W_])" + re.escape(word) + r"(?![^\W_])", n, re.I):
+            return "visa_card" if short == "visa" else f"{short}_{base}"
+    return base
+
+
+def put_in_vault(data: dict, row: dict, name: str) -> str:
+    """Replace, in `data`, the secret-shaped words of `row` by a reference to
+    the vault entry `name` (the caller has already stored them there). A
+    profile value becomes 'vault:<name>', which forms fill without anyone
+    seeing it; words in a note keep everything else and say where the
+    secret went. Returns the new words."""
+    o = data
+    for k in row["path"][:-1]:
+        o = o[k]
+    last = row["path"][-1]
+    old = str(o[last])
+    if row.get("section") == "profile" or not find_secrets(old):
+        new = f"vault:{name}"
+    else:
+        hits = find_secrets(old)
+        parts, prev = [], 0
+        for s, e, _ in hits:
+            parts += [old[prev:s], f"[in the vault as '{name}']"]
+            prev = e
+        new = "".join(parts + [old[prev:]])
+    o[last] = new
+    return new
+
+
+def kept_home_note(found: list[tuple[str, str]]) -> str:
+    """What the model is told when part of an answer stayed in the house."""
+    kinds = sorted({w for _, w in found}, key=_ORDER.index)
+    n = len(found)
+    return (f"{n} part{'s' if n != 1 else ''} of this answer looked like "
+            f"{', or '.join(kinds)}, so {'they were' if n != 1 else 'it was'} hidden "
+            f"and stayed in the house; the rest is complete. Never ask anyone to read "
+            f"a hidden part to you. If it came from the owner's own memories, tell him "
+            f"plainly: he can move it into his vault by typing /secrets in 'Talk to "
+            f"JEFFEREY on this Mac'.")
 
 
 # ------------------------------------------------------------------ the door
@@ -451,20 +1108,18 @@ def fingerprint(text: str) -> str:
 
 def _describe(asked, tool: str | None = None) -> str:
     """The arguments, for the log's 'why' — capped, and never a secret's
-    home: if what the engine sent looks like a secret, the log says so and
-    keeps the value out. What it asked to forget is kept as a fingerprint."""
+    home: anything in what the engine sent that looks like a secret is
+    written down as "[hidden: looks like …]", never as itself. What it asked
+    to forget is kept as a fingerprint."""
     if asked is None:
         return ""
     asked = _plain(asked)
-    hit = _scan(asked)
-    if hit:
-        return (f"[not written down: '{hit[0]}' in what the engine sent "
-                f"contained what looks like {hit[1]}]")
     if tool in FINGERPRINT_ARGS and isinstance(asked, dict):
         asked = dict(asked)
         for k in FINGERPRINT_ARGS[tool]:
             if isinstance(asked.get(k), str) and asked[k]:
                 asked[k] = f"[not written down; {fingerprint(asked[k])}]"
+    asked, _ = mask(asked)
     try:
         s = _dumps(asked)
     except Exception:
@@ -506,20 +1161,59 @@ class _Locked:
         return False
 
 
+class LogUnwritable(OSError):
+    """The record of what left the house could not be written whole."""
+
+
 def _write(entry: dict) -> None:
     """Append one line, fsynced, before anything leaves. A log that cannot be
-    written is a door that cannot be opened."""
+    written is a door that cannot be opened.
+
+    Written whole or not at all (I-67): os.write may take only part of the
+    line on a full drive, so it is called until every byte is down; if the
+    drive refuses the rest, the file is cut back to where it was and the send
+    is refused. A file that does not end in a line break (a power cut tore
+    its last line) gets one first, so a torn line never swallows this one."""
     p = log_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     line = (_dumps(entry) + "\n").encode()
-    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     with _Locked(p):
         fd = os.open(p, flags, 0o600)
         try:
-            os.write(fd, line)
-            os.fsync(fd)
+            size = os.fstat(fd).st_size
+            if size and os.pread(fd, 1, size - 1) != b"\n":
+                line = b"\n" + line
+            try:
+                view = memoryview(line)
+                while view:
+                    n = os.write(fd, view)
+                    if n <= 0:
+                        raise LogUnwritable(28, "the drive took no more")   # ENOSPC
+                    view = view[n:]
+                os.fsync(fd)
+            except BaseException:
+                try:
+                    os.ftruncate(fd, size)
+                    os.fsync(fd)
+                except OSError:
+                    pass
+                raise
         finally:
             os.close(fd)
+
+
+NOT_LOGGED = ("JEFFEREY could not write it down in the record of what left the "
+              "house (the drive may be full, unplugged or read-only), so nothing "
+              "was sent. Tell the owner plainly")
+
+
+def _write_or_refuse(entry: dict) -> None:
+    """The last step before a send: written whole, or the send is refused."""
+    try:
+        _write(entry)
+    except OSError:
+        raise EgressRefused(f"withheld by the egress door: {NOT_LOGGED}.") from None
 
 
 # ------------------------------------------------------------- erasure
@@ -725,8 +1419,12 @@ def _entry(kind: str, *, tool: str | None, sent: str | None, asked: str,
 
 
 def _refuse(kind: str, tool: str | None, asked, reason: str) -> EgressRefused:
-    _write(_entry(kind, tool=tool, sent=None, asked=_describe(asked, tool),
-                  withheld=[], refused=reason))
+    """A refusal: written down if the log can be written; refused either way."""
+    try:
+        _write(_entry(kind, tool=tool, sent=None, asked=_describe(asked, tool),
+                      withheld=[], refused=reason))
+    except OSError:
+        pass
     return EgressRefused(
         f"withheld by the egress door: {reason}. Nothing from this result left "
         f"the house. Tell the owner plainly; do not ask them to read it to you "
@@ -768,25 +1466,35 @@ def admit(tool: str, asked) -> None:
     """The other direction of the same door: what the engine HANDS IN.
 
     A rented engine may not put a secret into the conscience. If it did, the
-    stored value would poison every aggregate result afterwards (who_am_i,
-    get_conscience, the daily brief) — each refused whole at the door until
-    the owner found and forgot the fact. So the scan runs on the arguments
-    *before* the tool runs and nothing is written. Secrets go in the vault,
-    from the owner's own terminal, never through an engine."""
-    if asked is None:
+    value would sit in the owner's memories and go out again to every engine
+    that reads them. So for a tool that keeps what it is given, the scan runs
+    on the arguments *before* the tool runs, and a hit means nothing is
+    written. Secrets go in the vault, by the owner's own hands, never through
+    an engine.
+
+    A tool that only reads what it is given (READS_ONLY) is not refused: it
+    answers, and the record of the call hides the secret-shaped words (I-14).
+    Refusing there protected nothing — the engine already holds the text —
+    and it switched off the scam check on exactly the messages that quote a
+    card, a SIN, a code or a password."""
+    if asked is None or tool in READS_ONLY:
         return
     hit = _scan(_plain(asked))
     if hit:
         field, what = hit
-        _write(_entry("tool_call", tool=tool, sent=None, asked=_describe(asked, tool),
-                      withheld=[], refused=f"the engine handed in what looks like "
-                                          f"{what} in '{field}'; not taken"))
+        try:
+            _write(_entry("tool_call", tool=tool, sent=None, asked=_describe(asked, tool),
+                          withheld=[], refused=f"the engine handed in what looks like "
+                                              f"{what} in '{field}'; not taken"))
+        except OSError:
+            pass
         raise EgressRefused(
-            f"refused at the door: '{field}' in what you sent contains what looks "
-            f"like {what}. JEFFEREY does not take secrets into the conscience from "
-            f"an engine — nothing was stored. If the owner needs it kept, they "
-            f"store it in the vault from their own terminal "
-            f"(python connector/vault.py set <name>) and you use 'vault:<name>'.")
+            f"refused at the door: '{field}' in what you sent looks like {what}. "
+            f"JEFFEREY never keeps passwords, PINs, house codes, or card or ID numbers "
+            f"in the owner's memories, so nothing was stored. If he wants it kept, it "
+            f"belongs in his vault: he stores it himself, at his own keyboard "
+            f"(python connector/vault.py set <name>), and you then use 'vault:<name>' "
+            f"without ever seeing it.")
 
 
 def _writes() -> frozenset:
@@ -846,7 +1554,11 @@ def release(tool: str, out, asked=None):
     """A tool result is about to go to the engine. Return what may go.
 
     Order matters: shut? → known tool? → allowlist → secret scan → log → go.
-    Every refusal is logged too, with the reason and never the value."""
+    Anything in the result that looks like a secret is hidden in place
+    ("[hidden: looks like a card number]") and the answer says plainly that
+    part of it stayed home — one secret-shaped line no longer blacks out
+    'who am I' or the whole profile for good (I-15). Every refusal is logged
+    too, with the reason and never the value."""
     if _SURFACE is None:
         raise _refuse("tool_result", tool, asked,
                       "no surface is bound to this process, so nothing leaves it")
@@ -861,28 +1573,45 @@ def release(tool: str, out, asked=None):
         kept, withheld = _filter(tool, out)
     except ValueError as e:
         raise _refuse("tool_result", tool, asked, str(e))
-    hit = _scan(kept)
-    if hit:
-        field, what = hit
-        raise _refuse("tool_result", tool, asked,
-                      f"'{field}' contains what looks like {what}")
-    _write(_entry("tool_result", tool=tool, sent=_dumps(kept),
-                  asked=_describe(asked, tool), withheld=withheld, refused=None))
+    kept, found = mask(kept)
+    if found:
+        hit = _scan(kept)
+        if hit:                       # hiding did not clear it: nothing goes
+            raise _refuse("tool_result", tool, asked,
+                          f"'{hit[0]}' contains what looks like {hit[1]}")
+        if isinstance(kept, dict):
+            kept["kept_home"] = kept_home_note(found)
+        withheld = list(withheld) + [f"{where} (hidden: looked like {what})"
+                                     for where, what in found]
+    _write_or_refuse(_entry("tool_result", tool=tool, sent=_dumps(kept),
+                            asked=_describe(asked, tool), withheld=withheld,
+                            refused=None))
     return kept
 
 
-def release_text(kind: str, text: str, why: str = "") -> str:
+def release_text(kind: str, text: str, why: str = "", hide: bool = False) -> str:
     """Text the owner's own terminal is about to send: the system prompt, or
-    what they typed. Same door, same scan, same log."""
+    what they typed. Same door, same scan, same log.
+
+    What the owner TYPED with a secret in it stays home whole (he is told,
+    on his own screen). Text JEFFEREY assembled — the system prompt, with
+    the live conscience in it — is sent with any secret-shaped words hidden
+    (`hide=True`), so one old note with a door code in it does not silence
+    the whole conversation."""
     if _SURFACE is None:
         raise _refuse(kind, None, why, "no surface is bound to this process")
     shut_why = shut_reason()
     if shut_why:
         raise _refuse(kind, None, why, shut_why)
+    withheld: list[str] = []
+    if hide:
+        text, whats = mask_text(text)
+        withheld = [f"hidden: looked like {w}" for w in whats]
     what = looks_secret(text)
     if what:
         raise _refuse(kind, None, why, f"it contains what looks like {what}")
-    _write(_entry(kind, tool=None, sent=text, asked=why, withheld=[], refused=None))
+    _write_or_refuse(_entry(kind, tool=None, sent=text, asked=why, withheld=withheld,
+                            refused=None))
     return text
 
 
@@ -898,7 +1627,7 @@ def request(payload: dict, model: str) -> dict:
     if shut_why:
         raise _refuse("request", None, model, shut_why)
     raw = _dumps(payload).encode()
-    _write({
+    _write_or_refuse({
         "t": _now(), "surface": _SURFACE, "to": _client(),
         "engine": _ENGINE or model, "kind": "request", "tool": None,
         "asked": f"model={model} messages={len(payload.get('messages', []))}",
@@ -908,14 +1637,20 @@ def request(payload: dict, model: str) -> dict:
     return payload
 
 
+_SYSTEM_SENT: str | None = None     # what went out for _ANNOUNCED_SYSTEM
+
+
 def system_prompt_once(text: str) -> str:
-    """The system prompt is logged whenever it changes, not every turn."""
-    global _ANNOUNCED_SYSTEM
+    """The system prompt is logged whenever it changes, not every turn, and
+    marked as logged only once the log has it whole (I-67). Returns what may
+    be sent: the prompt with any secret-shaped words hidden."""
+    global _ANNOUNCED_SYSTEM, _SYSTEM_SENT
     h = hashlib.sha256(text.encode()).hexdigest()
-    if h != _ANNOUNCED_SYSTEM:
-        release_text("system_prompt", text, why="the directives plus the live conscience")
-        _ANNOUNCED_SYSTEM = h
-    return text
+    if h != _ANNOUNCED_SYSTEM or _SYSTEM_SENT is None:
+        sent = release_text("system_prompt", text, hide=True,
+                            why="the directives plus the live conscience")
+        _ANNOUNCED_SYSTEM, _SYSTEM_SENT = h, sent
+    return _SYSTEM_SENT
 
 
 def refusal_result(tool: str, e: EgressRefused) -> dict:
@@ -923,9 +1658,10 @@ def refusal_result(tool: str, e: EgressRefused) -> dict:
     would otherwise swallow the reason (the MCP SDK reduces any exception to
     'Error executing tool <name>')."""
     return {"refused": True, "tool": tool, "reason": str(e),
-            "tell_the_user": "Say plainly that the egress door kept this in the "
-                             "house, and stop. Do not ask the owner to read it "
-                             "to you another way."}
+            "tell_the_user": "Tell the owner in a sentence, in plain words, what the "
+                             "reason says. Never ask him to read a secret to you, "
+                             "spell it or split it up, and do not try another way "
+                             "around the door."}
 
 
 def _access_errors() -> tuple:
@@ -1009,14 +1745,32 @@ def entries(since: datetime | None = None) -> list[dict]:
     out = []
     with p.open("rb") as f:
         for line in f:
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue          # a torn last line from a power cut
+            e = _parse_line(line)
+            if e is None:
+                continue          # a torn line from a power cut or a full drive
             if since and e.get("t", "") < since.strftime("%Y-%m-%dT%H:%M:%SZ"):
                 continue
             out.append(e)
     return out
+
+
+def _parse_line(line: bytes) -> dict | None:
+    """One entry. A line that a torn write ran into the next one (a log
+    written before every line was made to start fresh) still gives up the
+    whole entry at its end, so one torn line never hides its neighbour."""
+    try:
+        e = json.loads(line)
+        return e if isinstance(e, dict) else None
+    except ValueError:
+        pass
+    i = line.find(b'{"', 1)
+    while i != -1:
+        try:
+            e = json.loads(line[i:])
+            return e if isinstance(e, dict) else None
+        except ValueError:
+            i = line.find(b'{"', i + 1)
+    return None
 
 
 def _kb(n: int) -> str:
@@ -1157,35 +1911,48 @@ def selftest() -> int:
     assert "bare text" in refused(release, "orb_state", "calm")
     print("  ✓ bare text leaves only for tools that return text")
 
-    # 6. The hard scan: a secret anywhere refuses the WHOLE result and the
-    #    value is in neither the exception nor the log.
+    # 6. The hard scan: a secret anywhere in a result is hidden in place —
+    #    the value is in neither the result nor the log, the rest goes, and
+    #    the answer says plainly that part of it stayed home. (Until October
+    #    2026 a hit refused the WHOLE result, so one secret-shaped line — or a
+    #    photo fingerprint that happened to look like a SIN — blacked out
+    #    'who am I' and the profile for good: I-15.)
     card = "4111 1111 1111 1111"
-    msg = refused(release, "remember_fact",
-                  {"fact": f"my visa is {card}", "category": "money", "added": "x"})
-    assert "card number" in msg and card not in msg and "4111" not in msg
-    assert card not in log_path().read_text() and "4111" not in log_path().read_text()
-    assert "insurance" in refused(release, "remember_fact",
-                                  {"fact": "SIN 046 454 286", "category": "x", "added": ""})
-    assert "password" in refused(release, "add_memory",
-                                 {"text": "the wifi password is hunter22", "when": "",
-                                  "people": [], "tags": [], "visibility": "private", "added": ""})
-    assert "API key" in refused(release, "log_observation",
-                                {"note": "key sk-ant-api03-abcdefghijklmnop", "category": "x",
-                                 "added": "", "ts": 0})
-    # nested, inside a list inside a dict
-    assert "card number" in refused(release, "who_am_i",
-                                    {"moments": [{"text": "card 5500 0000 0000 0004"}]})
+    out = release("remember_fact", {"fact": f"my visa is {card}", "category": "money",
+                                    "added": "x"})
+    assert out["fact"] == "my visa is [hidden: looks like a card number]", out
+    assert out["category"] == "money" and "stayed in the house" in out["kept_home"]
+    assert "4111" not in _dumps(out) and "4111" not in log_path().read_text()
+    assert "fact (hidden: looked like a card number)" in entries()[-1]["withheld"]
+    assert "insurance" in release("remember_fact", {"fact": "SIN 046 454 286",
+                                                    "category": "x", "added": ""})["fact"]
+    assert "password" in release("add_memory", {
+        "text": "the wifi password is hunter22", "when": "", "people": [], "tags": [],
+        "visibility": "private", "added": ""})["text"]
+    assert "API key" in release("log_observation", {
+        "note": "key sk-ant-api03-abcdefghijklmnop", "category": "x", "added": "",
+        "ts": 0})["note"]
+    # nested, inside a list inside a dict: only that part is hidden
+    out = release("who_am_i", {"moments": [{"text": "card 5500 0000 0000 0004"},
+                                           {"text": "the lake"}]})
+    assert out["moments"][1]["text"] == "the lake" and "5500" not in _dumps(out)
+    # bare text is hidden in place too
+    assert "4111" not in release("get_directives", f"pay with {card}")
     # and ordinary numbers are not secrets
     release("remember_fact", {"fact": "call 416 555 0199 before June 12 2026",
                               "category": "x", "added": ""})
     release("expect_charge", {"merchant": "Hydro", "amount": 1234.56, "cadence": "monthly"})
-    print("  ✓ a card, a SIN, a password or an API key refuses the whole result;")
-    print("    the value is in neither the message nor the log; phone numbers pass")
+    assert "kept_home" not in release("orb_state", {"mood": "calm"})
+    print("  ✓ a card, a SIN, a password or an API key in a result is hidden in place;")
+    print("    the value is in neither the result nor the log; phone numbers pass")
 
-    # 7. get_profile keeps the owner's own field names but is still scanned.
+    # 7. get_profile keeps the owner's own field names but is still scanned —
+    #    each value beside its name, so {'alarm code': '4821'} is caught too.
     assert release("get_profile", {"first_name": "L", "email": "l@x.ca"})["email"] == "l@x.ca"
-    assert "card" in refused(release, "get_profile", {"card": "4111111111111111"})
-    print("  ✓ the profile passes by field name, and is still scanned")
+    p = release("get_profile", {"card": "4111111111111111", "alarm_code": "4821",
+                                "city": "Ottawa"})
+    assert p["city"] == "Ottawa" and "4111" not in _dumps(p) and "4821" not in _dumps(p)
+    print("  ✓ the profile passes by field name, and every value is still scanned")
 
     # 8. Shut door: nothing leaves, by file or by env.
     shut()
@@ -1261,7 +2028,7 @@ def selftest() -> int:
     assert "nothing was stored" in msg and "4111" not in msg and not ran
     tail = entries()[-1]
     assert tail["kind"] == "tool_call" and tail["refused"] and "4111" not in _dumps(tail)
-    assert "not written down" in tail["asked"]
+    assert "[hidden: looks like a card number]" in tail["asked"]
     assert w(fact="recital June 12")["fact"] == "recital June 12" and ran == ["recital June 12"]
     # a vault REFERENCE is not a secret and passes in
     def fill_pdf(pdf_path: str, values: dict) -> dict:
@@ -1294,7 +2061,7 @@ def selftest() -> int:
 
     # 13. The report reads back, names destinations, never leaks a refused value.
     s = summary(1)
-    assert s["sends"] >= 8 and s["refused"] >= 10 and s["door"] == "open"
+    assert s["sends"] >= 8 and s["refused"] >= 8 and s["door"] == "open"
     rep = report(1, full=True)
     assert "a test engine" in rep and "REFUSED" in rep and "4111" not in rep
     assert "orb_state" in rep
@@ -1306,7 +2073,10 @@ def selftest() -> int:
     with log_path().open("ab") as f:
         f.write(b'{"t": "2026-')
     assert entries()
-    print("  ✓ a torn last line is skipped, not fatal")
+    n = len(entries())
+    release("orb_state", {"mood": "after the cut"})     # starts on a fresh line
+    assert len(entries()) == n + 1 and entries()[-1]["sent"] == '{"mood": "after the cut"}'
+    print("  ✓ a torn last line is skipped, not fatal, and never swallows the next send")
 
     # 15. Every allowlist entry is a set of names; no entry allows everything by
     #     accident except the profile.
