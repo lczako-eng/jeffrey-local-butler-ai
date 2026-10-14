@@ -25,9 +25,25 @@ if ! "$PY" -c "import sounddevice, numpy" >/dev/null 2>&1; then
     "$PY" -m pip install --quiet sounddevice numpy
 fi
 
+# A name is required, typed by the person who will speak. It is never taken
+# from this Mac's account: on a shared account that would put someone else's
+# voice in the owner's recordings.
 echo
-read -r -p "  Whose voice is this? Your name: " WHO
-[ -z "$WHO" ] && WHO="$(id -un)"
+WHO=""
+for _ in 1 2 3; do
+    read -r -p "  Whose voice is this? Type your own name: " WHO
+    WHO="$(printf '%s' "$WHO" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    [ -n "$WHO" ] && break
+    echo "  Please type your name: the name of the person who will be speaking."
+done
+if [ -z "$WHO" ]; then
+    echo
+    echo "  No name was typed, so nothing was recorded."
+    echo
+    echo "Press return to close this window."
+    read -r _
+    exit 1
+fi
 
 "$PY" tools/voice_enrol.py --who "$WHO" start "$@"
 STATUS=$?

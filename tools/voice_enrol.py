@@ -10,23 +10,40 @@ separate decision.
 
 The safeguards from FOUNDER_DIRECTIONS §1 are in the code, not just the docs:
 
-  1. The recordings live ONLY under ~/.selfcloud/voice/. Nothing here imports
+  1. The recordings live ONLY in the voice folder (on the Self-Cloud drive if
+     one is plugged in, otherwise ~/.selfcloud/voice/). Nothing here imports
      anything that can talk to a network. Nothing is uploaded, ever.
   2. THE PERSON MUST BE PRESENT. This refuses to run without an interactive
-     terminal — a script, a cron job or a model cannot drive it.
-  3. CONSENT IS THE FIRST TAKE, IN THE PERSON'S OWN VOICE: "I am ___, it is
-     ___, and I am recording my own voice for my own Self-Cloud, to be used
-     only as I direct." That recording is kept with the rest, so the consent
-     is not a checkbox somewhere — it is audible.
-  4. Every take is checksummed, logged and made read-only. The manifest is
-     the audit.
-  5. `delete` is one action and it is REAL deletion: each file is overwritten
-     before it is unlinked, and the manifest goes with it.
+     terminal, and recordings only ever come from the microphone: a script,
+     a cron job or a model cannot feed it audio. (A fake microphone is
+     accepted only by the self-test, inside a temporary folder.)
+  3. A NAME IS REQUIRED, and it must look like a name. It is never guessed
+     from the computer's account.
+  4. EVERY SITTING BEGINS WITH CONSENT, IN THE PERSON'S OWN VOICE: "I am ___,
+     it is ___, and I am recording my own voice for my own Self-Cloud, to be
+     used only as I direct. Today's words are ___." The three words are new
+     every time, so an old recording (a voicemail, a video) cannot stand in
+     for the person. A silent or steady-noise take is refused. Consent counts
+     only while its recording is there and matches its checksum.
+  5. ONE FOLDER, ONE PERSON. Carrying on an existing set shows whose it is and
+     when they agreed, and asks "are you that person?" (pressing return is
+     not yes). A voice that sounds clearly different from the one already
+     recorded must say "it is me" before anything is kept, and that is
+     written down. A similar-looking name never merges into someone else's.
+  6. Every take is checksummed, logged and made read-only by its owner alone
+     (takes 0400, the list 0600, folders 0700). The manifest is the audit.
+  7. `delete` is REAL deletion, done by the person at the keyboard typing the
+     name: every place a voice may be (the drive, this computer's home
+     folder) is searched, each file is overwritten to its full size before it
+     is unlinked, and shortcuts (symbolic links) are removed without ever
+     being followed. It says plainly what overwriting cannot reach: flash
+     storage and backups may still hold old copies.
 
-    python tools/voice_enrol.py start              # record (resumable)
-    python tools/voice_enrol.py status
-    python tools/voice_enrol.py play 7             # hear a take back
-    python tools/voice_enrol.py delete             # gone, for real
+    python tools/voice_enrol.py --who "Your Name" start    # record (resumable)
+    python tools/voice_enrol.py --who "Your Name" status
+    python tools/voice_enrol.py status                     # everyone recorded
+    python tools/voice_enrol.py --who "Your Name" play 7   # hear a take back
+    python tools/voice_enrol.py --who "Your Name" delete   # gone, for real
 
 Install on the Mac (once):   pip install sounddevice numpy
 
@@ -38,15 +55,21 @@ carry on tomorrow. Read naturally. It's you it's learning, not an announcer.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
-import getpass
+import errno
 import hashlib
 import json
 import os
 import platform
+import secrets
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
+import textwrap
+import unicodedata
 import wave
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
@@ -56,11 +79,32 @@ VOICE_ROOT = home.voice_path()          # on the drive, if one is plugged in
 RATE = 48000          # capture high; anything downstream can resample
 MIN_SECONDS = 0.6     # shorter than this is a mis-press, not a phrase
 
+# What counts as someone speaking. Measured in 30 ms slices of the take.
+FRAME_SECONDS = 0.03
+SOUND_RMS = 0.005          # a slice louder than this has something in it
+MIN_SOUND_SECONDS = 0.3    # any take: at least this much sound, or it was silence
+MIN_CONSENT_SECONDS = 4.0  # the consent sentence cannot be read faster than this
+MIN_CONSENT_SPEECH = 2.0   # ...and at least this much of it must be speech
+MAX_TRIES = 5              # unusable takes in a row before giving up for now
+VOICE_DIFFERS = 1.5        # pitch ratio beyond which a voice "sounds different"
+
+NAME_MAX_CHARS = 60
+NAME_MAX_WORDS = 6
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+
+# The self-test (and tests/test_voice.py) may swap the microphone for a fake,
+# and confirm a deletion without typing, but only inside a temporary folder.
+_SELFTEST = False
+_ROOTS: list[Path] | None = None        # override of all_roots(), tests only
+
 # ---------------------------------------------------------------- phrases
 #
 # Short, natural, and phonetically varied — numbers, names, questions, a bit
 # of feeling. The first is not on the list: it is the consent sentence, built
-# from the person's own name and today's date.
+# from the person's own name, today's date and three fresh words.
 PHRASES = [
     "Good morning. It's going to be a long day, so let's make it a good one.",
     "The kitchen table is where everything important ever got decided.",
@@ -123,46 +167,358 @@ OPEN = [
     "Say whatever you like. This one is yours.",
 ]
 
+# Today's words: plain, easy to read aloud, easy to tell apart when heard.
+# Three are drawn fresh for every consent, so no earlier recording has them.
+CHALLENGE_WORDS = [
+    "apple", "river", "candle", "garden", "yellow", "window", "pepper",
+    "violin", "harbour", "blanket", "orange", "pencil", "sunset", "teapot",
+    "mountain", "button", "ladder", "rabbit", "lemon", "anchor", "basket",
+    "bridge", "cherry", "forest", "kettle", "meadow", "parrot", "pillow",
+    "rocket", "saddle", "tiger", "tulip", "wagon", "walnut", "zebra",
+    "copper", "silver", "maple", "island", "lantern",
+]
+
+RULE = ("Recordings of a living person, made by that person, present and "
+        "consenting. They live only here. Nothing plays or synthesises this "
+        "voice yet — that is a separate decision the owner makes later, with "
+        "the safeguards in FOUNDER_DIRECTIONS §1.")
+
+LIMITS_NOTE = (
+    "  What 'gone' cannot promise: the drive and this {computer} keep data on\n"
+    "  flash storage (an SSD), which can hold old copies where no program can\n"
+    "  reach them, and backups such as Time Machine may still have copies made\n"
+    "  while these recordings existed. Overwriting cannot reach those. To be\n"
+    "  certain, delete those backups too, or erase the drive.")
+
+
+class Refused(Exception):
+    """Something was not done, and why, in words the person can read."""
+
 
 # ---------------------------------------------------------------- helpers
+def _computer() -> str:
+    return "Mac" if sys.platform == "darwin" else "computer"
+
+
+def _wrap(msg: str, indent: str = "  ") -> str:
+    """Short lines, easy to read in a Terminal window."""
+    return "\n".join(textwrap.fill(part, 72, initial_indent=indent,
+                                   subsequent_indent=indent) if part else ""
+                     for part in msg.split("\n"))
+
+
+def _row(label: str, text: str) -> str:
+    """One line of `status`: a label, then text wrapped under itself."""
+    return textwrap.fill(text, 74, initial_indent=f"  {label:<10} ",
+                         subsequent_indent=" " * 13)
+
+
+def _tell(msg: str) -> None:
+    """A refusal or a warning: always shown, even in quiet mode."""
+    print(f"\n{_wrap(msg)}\n", file=sys.stderr)
+
+
+def _norm(name: str) -> str:
+    """For comparing two spellings of one name: same letters, any case."""
+    return " ".join(unicodedata.normalize("NFC", name or "").split()).casefold()
+
+
+def clean_name(who: str) -> str:
+    """The person's name, tidied, or Refused with a plain reason.
+
+    A name is required (never the computer's account name), and it must be a
+    name: it goes word for word into the consent sentence the person reads.
+    """
+    name = " ".join(unicodedata.normalize("NFC", who or "").split())
+    if not name:
+        raise Refused("Please type a name: the name of the person whose voice "
+                      "this is. Nothing was recorded.")
+    if len(name) > NAME_MAX_CHARS or len(name.split()) > NAME_MAX_WORDS:
+        raise Refused("That is longer than a name. Please type just the name of "
+                      "the person who will be speaking. Nothing was recorded.")
+    ok_marks = set(" -'’.")
+    if not unicodedata.category(name[0]).startswith("L") or not all(
+            unicodedata.category(c)[0] in "LM" or c in ok_marks for c in name):
+        raise Refused("A name can only have letters, spaces, hyphens (-), "
+                      "apostrophes (') and dots (.). Please type just the name. "
+                      "Nothing was recorded.")
+    return name
+
+
+def slug(who: str) -> str:
+    """The folder name for a person. Unchanged from the first version, so
+    every existing enrolment is found where it was made."""
+    return "".join(c if c.isalnum() else "-" for c in who.strip().lower()).strip("-")
+
+
+def _slugs(who: str) -> list[str]:
+    """Folder names a person's recordings may be under (old and new tidying)."""
+    tidy = " ".join(unicodedata.normalize("NFC", who or "").split())
+    out = []
+    for s in (slug(tidy), slug(who or "")):
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
 def person_dir(who: str) -> Path:
-    slug = "".join(c if c.isalnum() else "-" for c in who.strip().lower()).strip("-")
-    if not slug:
-        raise SystemExit("Who is this? Give --who a name.")
-    d = VOICE_ROOT / slug
-    # Belt and braces: never let a name walk out of the voice folder.
-    if not d.resolve().is_relative_to(VOICE_ROOT.resolve()):
-        raise SystemExit("That name is not allowed.")
-    return d
+    s = slug(" ".join(unicodedata.normalize("NFC", who or "").split()))
+    if not s:
+        raise Refused("Who is this? Please give a name.")
+    return VOICE_ROOT / s          # letters, digits and '-' only: cannot leave
+
+
+def _is_link(p: Path) -> bool:
+    try:
+        return stat.S_ISLNK(os.lstat(p).st_mode)
+    except OSError:
+        return False
+
+
+def _link_target(p: Path) -> str:
+    try:
+        return os.readlink(p)
+    except OSError:
+        return "somewhere else"
+
+
+def _secure_dir(p: Path, create: bool) -> None:
+    """A real folder, never a shortcut, readable by its owner only (0700)."""
+    if create:
+        try:
+            os.mkdir(p, 0o700)
+        except FileExistsError:
+            pass
+    st = os.lstat(p)
+    if stat.S_ISLNK(st.st_mode):
+        raise Refused(f"The folder {p} is a shortcut to {_link_target(p)}, so "
+                      "JEFFEREY will not use it. Nothing was recorded or changed. "
+                      "Please ask someone you trust to look at it.")
+    if not stat.S_ISDIR(st.st_mode):
+        raise Refused(f"{p} should be a folder but is not. Nothing was changed.")
+    fd = os.open(p, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+    try:
+        os.fchmod(fd, 0o700)
+    except OSError:
+        pass                         # some drive formats cannot hold modes
+    finally:
+        os.close(fd)
+
+
+def _tighten(d: Path) -> None:
+    """Bring an older enrolment to owner-only modes, without following links:
+    takes 0400 (read-only originals), everything else 0600, the folder 0700."""
+    try:
+        _secure_dir(d, create=False)
+        with os.scandir(d) as it:
+            names = [e.name for e in it]
+    except (OSError, Refused):
+        return
+    for nm in names:
+        p = d / nm
+        try:
+            fd = os.open(p, os.O_RDONLY | _NOFOLLOW | _NONBLOCK)
+        except OSError:
+            continue                  # a shortcut, or unreadable: leave it be
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                take = nm.startswith("take-") and nm.endswith(".wav")
+                os.fchmod(fd, 0o400 if take else 0o600)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+
+@contextlib.contextmanager
+def _lock(d: Path):
+    """One window at a time per person, so two sittings never collide."""
+    try:
+        import fcntl
+    except ImportError:               # not a Mac or Linux: carry on unlocked
+        yield True
+        return
+    try:
+        fd = os.open(d / ".lock", os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.EMLINK):
+            raise Refused(f"Something odd is in {d} (a shortcut where JEFFEREY "
+                          "keeps its lock), so nothing was recorded. Please ask "
+                          "someone you trust to look at it.")
+        raise
+    locked = True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        locked = False
+    except OSError:
+        pass                          # a drive that cannot lock: carry on
+    try:
+        yield locked
+    finally:
+        os.close(fd)
 
 
 def load_manifest(d: Path) -> dict:
+    """The list of recordings, read without following a shortcut. {} if there
+    is none yet; Refused if it is a shortcut or damaged (never overwritten)."""
     m = d / "manifest.json"
-    return json.loads(m.read_text()) if m.exists() else {}
+    try:
+        st = os.lstat(m)
+    except FileNotFoundError:
+        return {}
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        raise Refused(f"The list of recordings in {d} is a shortcut to somewhere "
+                      "else, so JEFFEREY will not trust it. Nothing was changed. "
+                      "Please ask someone you trust to look at it.")
+    try:
+        fd = os.open(m, os.O_RDONLY | _NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            man = json.loads(fh.read().decode("utf-8"))
+        if not isinstance(man, dict) or not isinstance(man.get("takes"), list):
+            raise ValueError("not a list of recordings")
+    except (OSError, ValueError, UnicodeDecodeError):
+        raise Refused(f"The list of recordings in {d} is damaged, so nothing was "
+                      "changed. The recordings themselves are still there. Please "
+                      "ask someone you trust to look at it.")
+    return _migrate(man)
+
+
+def _migrate(man: dict) -> dict:
+    """Read the first version's shape and bring it up to date, in memory.
+
+    Version 1 had one `consent` file name and nothing else. Version 2 keeps
+    that field (the first consent ever) and adds `consents`, one entry per
+    sitting with its checksum and today's words, and on each take the consent
+    it was recorded under. Nothing is dropped.
+    """
+    takes = man.setdefault("takes", [])
+    if not isinstance(man.get("consents"), list):
+        c = man.get("consent")
+        first = next((t for t in takes if t.get("file") == c), None) if c else None
+        man["consents"] = []
+        if c:
+            man["consents"].append({
+                "file": c,
+                "sha256": first.get("sha256") if first else None,
+                "at": (first or {}).get("recorded_at") or man.get("created"),
+                "challenge": None,
+            })
+        for t in takes:
+            if first is not None and t is first:
+                t.setdefault("kind", "consent")
+            elif c:
+                t.setdefault("consent", c)
+    man["version"] = max(2, int(man.get("version") or 1))
+    return man
 
 
 def save_manifest(d: Path, man: dict) -> None:
-    (d / "manifest.json").write_text(json.dumps(man, indent=2, ensure_ascii=False))
+    """Write the list beside itself, then swap it in. The temporary file is
+    created fresh (a stale one, or a planted shortcut, is removed first and
+    never written through) and the list is readable by its owner only."""
+    data = json.dumps(man, indent=2, ensure_ascii=False).encode("utf-8")
+    tmp = d / "manifest.json.tmp"
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, d / "manifest.json")
 
 
-def sha256(path: Path) -> str:
+def _hash_fd(fd: int) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        while block := fh.read(1 << 20):
-            h.update(block)
+    os.lseek(fd, 0, os.SEEK_SET)
+    while block := os.read(fd, 1 << 20):
+        h.update(block)
     return h.hexdigest()
 
 
-def write_wav(path: Path, samples, rate: int) -> None:
-    """16-bit mono PCM via the standard library. No codec, no dependency."""
+def sha256(path: Path) -> str:
+    """Checksum of a real file. A shortcut is refused (OSError), not followed."""
+    fd = os.open(path, os.O_RDONLY | _NOFOLLOW | _NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "not a file")
+        return _hash_fd(fd)
+    finally:
+        os.close(fd)
+
+
+def _file_ok(d: Path, name: str | None, digest: str | None) -> str:
+    """'ok', 'missing', 'changed' or 'shortcut' for one recording."""
+    if not name:
+        return "missing"
+    p = d / name
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return "missing"
+    if stat.S_ISLNK(st.st_mode):
+        return "shortcut"
+    try:
+        return "ok" if digest and sha256(p) == digest else "changed"
+    except OSError:
+        return "changed"
+
+
+def write_wav(fh, samples, rate: int) -> None:
+    """16-bit mono PCM via the standard library, into an open binary file."""
     import numpy as np
     pcm = np.clip(np.asarray(samples, dtype="float32"), -1, 1)
     pcm = (pcm * 32767).astype("<i2")
-    with wave.open(str(path), "wb") as w:
+    with wave.open(fh, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(rate)
         w.writeframes(pcm.tobytes())
+
+
+def read_wav(path: Path):
+    """(samples, rate) from a take, without following a shortcut; None if not."""
+    try:
+        import numpy as np
+        fd = os.open(path, os.O_RDONLY | _NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh, wave.open(fh, "rb") as w:
+            if w.getsampwidth() != 2:
+                return None
+            ch, rate = w.getnchannels(), w.getframerate()
+            raw = w.readframes(w.getnframes())
+    except (ImportError, OSError, EOFError, wave.Error):
+        return None
+    a = np.frombuffer(raw, dtype="<i2").astype("float32") / 32767
+    if ch > 1:
+        a = a[: (a.size // ch) * ch].reshape(-1, ch)[:, 0]
+    return a, rate
+
+
+def _write_take(d: Path, n: int, samples) -> tuple[int, str]:
+    """Save a take as a brand-new file: never over an existing name, never
+    through a shortcut (O_EXCL refuses both), read-only to its owner after."""
+    while True:
+        fname = f"take-{n:03d}.wav"
+        try:
+            fd = os.open(d / fname, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+                         0o600)
+            break
+        except FileExistsError:
+            n += 1                    # taken already (or a planted link): next
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            write_wav(fh, samples, RATE)
+            fh.flush()
+            os.fsync(fh.fileno())
+            os.fchmod(fh.fileno(), 0o400)    # an original: read-only from now on
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(d / fname)
+        raise
+    return n, fname
 
 
 def level(samples) -> tuple[float, float]:
@@ -172,6 +528,196 @@ def level(samples) -> tuple[float, float]:
     if a.size == 0:
         return 0.0, 0.0
     return float(np.sqrt(np.mean(a * a))), float(np.max(np.abs(a)))
+
+
+def _frame_levels(samples, rate: int):
+    import numpy as np
+    a = np.asarray(samples, dtype="float64")
+    n = max(1, int(FRAME_SECONDS * rate))
+    k = a.size // n
+    if k == 0:
+        return np.zeros(0)
+    f = a[: k * n].reshape(k, n)
+    return np.sqrt((f * f).mean(axis=1))
+
+
+def sound_seconds(samples, rate: int = RATE) -> float:
+    """How much of the take has any sound in it at all."""
+    lv = _frame_levels(samples, rate)
+    return float((lv > SOUND_RMS).sum() * FRAME_SECONDS)
+
+
+def speech_seconds(samples, rate: int = RATE) -> float:
+    """How much of the take rises clearly above the room: speech comes and goes
+    between words, a hum or a held tone does not."""
+    import numpy as np
+    lv = _frame_levels(samples, rate)
+    if lv.size == 0:
+        return 0.0
+    floor = float(np.percentile(lv, 10))
+    return float((lv > max(SOUND_RMS, 2 * floor)).sum() * FRAME_SECONDS)
+
+
+def take_problem(samples, rate: int = RATE, consent: bool = False) -> str | None:
+    """None if the take can be kept; otherwise the plain reason it cannot."""
+    secs = len(samples) / rate
+    if secs < MIN_SECONDS:
+        return f"That was {secs:.1f} seconds, too short to be a phrase. Please try again."
+    if sound_seconds(samples, rate) < MIN_SOUND_SECONDS:
+        return ("That was silence, or too quiet to hear anyone, so it was not kept. "
+                "Please speak a little closer to the microphone and try again.")
+    if consent:
+        if secs < MIN_CONSENT_SECONDS:
+            return ("That was too short to be the whole sentence. Please read all "
+                    "of it aloud, including today's words.")
+        if speech_seconds(samples, rate) < MIN_CONSENT_SPEECH:
+            return ("That did not sound like someone speaking (it was one steady "
+                    "sound), so it was not kept. Please read the sentence aloud "
+                    "yourself.")
+    return None
+
+
+def voice_pitch(samples, rate: int = RATE) -> float | None:
+    """The typical pitch of the voice in Hz, or None if it cannot be told.
+
+    A rough measure (autocorrelation over the spoken parts), good enough to
+    notice a clearly different voice, such as a man's and a woman's. It is
+    not proof of who is speaking."""
+    import numpy as np
+    a = np.asarray(samples, dtype="float64")[: rate * 20]
+    n = int(0.04 * rate)
+    k = a.size // n
+    if k < 5:
+        return None
+    frames = a[: k * n].reshape(k, n)
+    lv = np.sqrt((frames * frames).mean(axis=1))
+    loud = frames[lv > max(SOUND_RMS, 2 * float(np.percentile(lv, 10)))]
+    if loud.shape[0] < 5:
+        return None
+    loud = loud - loud.mean(axis=1, keepdims=True)
+    spec = np.fft.rfft(loud, 2 * n, axis=1)
+    ac = np.fft.irfft(np.abs(spec) ** 2, axis=1)[:, :n]
+    lo, hi = int(rate / 400), int(rate / 70)          # speaking voices: 70–400 Hz
+    seg = ac[:, lo:hi]
+    lag = seg.argmax(axis=1) + lo
+    strength = seg.max(axis=1) / np.maximum(ac[:, 0], 1e-12)
+    keep = strength > 0.3
+    if keep.sum() < 5:
+        return None
+    return float(np.median(rate / lag[keep]))
+
+
+def challenge_words(k: int = 3) -> list[str]:
+    return secrets.SystemRandom().sample(CHALLENGE_WORDS, k)
+
+
+def consent_sentence(name: str, words: list[str], today: dt.date | None = None) -> str:
+    day = (today or dt.date.today()).strftime("%B %-d, %Y")
+    return (f"I am {name}. It is {day}. I am recording my own voice, for my own "
+            f"Self-Cloud, to be used only as I direct. "
+            f"Today's words are {', '.join(words)}.")
+
+
+def _when(iso: str | None) -> str:
+    try:
+        return dt.datetime.fromisoformat(iso).strftime("%B %-d, %Y")
+    except (TypeError, ValueError):
+        return "an earlier day"
+
+
+def _consent_states(d: Path, man: dict) -> list[tuple[dict, str]]:
+    return [(c, _file_ok(d, c.get("file"), c.get("sha256"))) for c in man.get("consents", [])]
+
+
+def _reference_pitch(d: Path, man: dict) -> tuple[float | None, str | None]:
+    """The voice already recorded here: the first intact consent take, or
+    failing that the first intact take of any kind."""
+    by_file = {t.get("file"): t for t in man.get("takes", [])}
+    cands = [c.get("file") for c in man.get("consents", [])]
+    cands += [t.get("file") for t in man.get("takes", [])]
+    seen = set()
+    for f in cands:
+        if not f or f in seen:
+            continue
+        seen.add(f)
+        t = by_file.get(f) or {}
+        if _file_ok(d, f, t.get("sha256")) != "ok":
+            continue
+        hz = t.get("voice_hz")
+        if hz is None:
+            got = read_wav(d / f)
+            hz = voice_pitch(*got) if got else None
+        if hz:
+            return float(hz), f
+    return None, None
+
+
+def _place(root: Path) -> str:
+    """Plain words for where a voice folder is."""
+    here = os.path.abspath(root)
+    with contextlib.suppress(RuntimeError, KeyError):
+        if here == os.path.abspath(Path.home() / ".selfcloud" / "voice"):
+            return f"on this {_computer()}"
+    if Path(here).parts[-3:] == (".selfcloud", "jefferey", "voice"):
+        return "on the Self-Cloud drive"
+    return "in the voice folder"
+
+
+def all_roots() -> list[Path]:
+    """Every place a voice may have been recorded: the folder in use now, the
+    one set by SELFCLOUD_VOICE, every Self-Cloud drive plugged in, and this
+    computer's own home folder (where recordings go when no drive is in)."""
+    if _ROOTS is not None:
+        return [Path(r) for r in _ROOTS]
+    out: list[Path] = []
+    seen: set[str] = set()
+
+    def add(p: Path) -> None:
+        keys = {os.path.abspath(p), os.path.realpath(p)}
+        if keys & seen:
+            return
+        seen.update(keys)
+        out.append(Path(p))
+
+    add(VOICE_ROOT)
+    if os.environ.get("SELFCLOUD_VOICE"):
+        add(Path(os.environ["SELFCLOUD_VOICE"]).expanduser())
+    drives: list[Path] = []
+    with contextlib.suppress(Exception):
+        r = home.root()
+        if r:
+            drives.append(r)
+        drives += [m for m in home._mounts() if (m / home.MARKER).is_file()]
+    for dr in drives:
+        add(dr / home.NAMESPACE / "voice")
+    with contextlib.suppress(RuntimeError, KeyError):
+        add(Path.home() / ".selfcloud" / "voice")
+    return out
+
+
+def _test_place(*paths: Path) -> bool:
+    """True only for the self-test, and only inside the temporary folder."""
+    if not _SELFTEST:
+        return False
+    tmp = os.path.realpath(tempfile.gettempdir())
+    for p in paths or (VOICE_ROOT,):
+        rp = os.path.realpath(p)
+        if not (rp == tmp or rp.startswith(tmp + os.sep)):
+            return False
+    return True
+
+
+@contextlib.contextmanager
+def selftest_mode(root: Path, roots: list[Path] | None = None):
+    """Point the module at a temporary voice folder and allow a fake
+    microphone there. Outside a temporary folder it still refuses."""
+    global VOICE_ROOT, _SELFTEST, _ROOTS
+    saved = VOICE_ROOT, _SELFTEST, _ROOTS
+    VOICE_ROOT, _SELFTEST, _ROOTS = Path(root), True, roots
+    try:
+        yield
+    finally:
+        VOICE_ROOT, _SELFTEST, _ROOTS = saved
 
 
 # --------------------------------------------------------------- recording
@@ -215,254 +761,700 @@ def play(path: Path) -> None:
     print(f"  No player found. The file is at {path}")
 
 
+def _reply(ask, prompt: str, eof: str = "") -> str:
+    try:
+        return (ask(prompt) or "").strip()
+    except EOFError:
+        return eof
+
+
 # ---------------------------------------------------------------- session
-def start(who: str, limit: int, recorder=record_until_enter, quiet: bool = False) -> int:
-    if not sys.stdin.isatty() and recorder is record_until_enter:
+def start(who: str, limit: int = len(PHRASES), recorder=record_until_enter,
+          quiet: bool = False, ask=None) -> int:
+    """Record one sitting: a fresh consent first, then phrases, resumable.
+
+    `recorder` and `ask` are for the self-test only (a fake microphone and
+    scripted answers); anywhere but a temporary folder they are refused.
+    """
+    interactive = recorder is record_until_enter
+    if interactive and not sys.stdin.isatty():
         # Structural, not polite: a person must be here. A script, a cron job
         # or a model cannot enrol a voice.
-        print("\n  Voice enrolment needs a person at a keyboard. Refusing.\n",
-              file=sys.stderr)
+        _tell("Voice enrolment needs a person at a keyboard. Refusing.")
+        return 2
+    if not interactive and not _test_place():
+        _tell("Recordings can only come from the microphone, with the person "
+              "sitting here. Nothing was recorded.")
+        return 2
+    if ask is None or (interactive and not _test_place()):
+        ask = input if interactive else (lambda prompt: "")
+    try:
+        return _start(who, limit, recorder, quiet, ask, interactive)
+    except Refused as exc:
+        _tell(str(exc))
+        return 2
+    except OSError as exc:
+        _tell(f"JEFFEREY could not write to {exc.filename or VOICE_ROOT} "
+              f"({exc.strerror or exc}). Is the drive plugged in and not full? "
+              "Whatever was already recorded is safe.")
         return 2
 
-    d = person_dir(who)
-    d.mkdir(parents=True, exist_ok=True)
-    man = load_manifest(d)
-    fresh = not man
-    if fresh:
-        man = {
-            "person": who.strip(),
-            "created": dt.datetime.now().isoformat(timespec="seconds"),
-            "machine": platform.node(),
-            "rate": RATE,
-            "consent": None,
-            "takes": [],
-            "rule": ("Recordings of a living person, made by that person, present "
-                     "and consenting. They live only here. Nothing plays or "
-                     "synthesises this voice yet — that is a separate decision "
-                     "the owner makes later, with the safeguards in "
-                     "FOUNDER_DIRECTIONS §1."),
-        }
 
+def _start(who, limit, recorder, quiet, ask, interactive) -> int:
     say = (lambda *a, **k: None) if quiet else print
-    say(f"\n  Recording {who}'s voice into {d}")
-    say("  Nothing here leaves this machine. Read naturally. Press return to")
-    say("  start each one and return again to stop. Type q at any prompt to quit.\n")
+    name = clean_name(who)
+    d = person_dir(name)
+    VOICE_ROOT.parent.mkdir(parents=True, exist_ok=True)
+    _secure_dir(VOICE_ROOT, create=True)
+    created = not os.path.lexists(d)
+    _secure_dir(d, create=True)
 
-    done_phrases = {t["phrase"] for t in man["takes"]}
-    n = len(man["takes"])
-
-    def take(text: str, tag: str) -> str:
-        """Record one phrase; return 'kept', 'skipped' or 'quit'."""
-        nonlocal n
-        while True:
-            say(f"\n  ┌ {tag}")
-            for line in text.split("\n"):
-                say(f"  │  {line}")
-            say("  └ return = start recording · s = skip · q = quit")
-            if recorder is record_until_enter:
-                ans = input("  > ").strip().lower()
-                if ans == "q":
-                    return "quit"
-                if ans == "s":
-                    return "skipped"
-                say("  ● recording — press return when you've finished")
-            samples = recorder(RATE)
-            secs = len(samples) / RATE
-            rms, peak = level(samples)
-            if secs < MIN_SECONDS:
-                say(f"  that was {secs:.1f}s — too short to be a phrase; try again")
-                continue
-            note = ""
-            if rms < 0.01:
-                note = "  (very quiet — closer to the mic, or check the input)"
-            elif peak > 0.99:
-                note = "  (clipping — a little further from the mic)"
-            say(f"  {secs:.1f}s, level {rms:.3f}{note}")
-            if recorder is record_until_enter:
-                ans = input("  return = keep · r = redo · s = skip · q = quit > ").strip().lower()
-                if ans == "r":
-                    continue
-                if ans == "s":
-                    return "skipped"
-                if ans == "q":
-                    return "quit"
-            n += 1
-            fname = f"take-{n:03d}.wav"
-            path = d / fname
-            write_wav(path, samples, RATE)
-            entry = {"n": n, "tag": tag, "phrase": text, "file": fname,
-                     "seconds": round(secs, 2), "rms": round(rms, 4),
-                     "sha256": sha256(path),
-                     "recorded_at": dt.datetime.now().isoformat(timespec="seconds")}
-            man["takes"].append(entry)
-            try:
-                path.chmod(0o444)          # an original: read-only from now on
-            except OSError:
-                pass
-            save_manifest(d, man)          # after EVERY take: quitting loses nothing
-            return "kept"
-
-    # 1. Consent, first and always, in the person's own voice.
-    if not man.get("consent"):
-        today = dt.date.today().strftime("%B %-d, %Y")
-        consent = (f"I am {who.strip()}. It is {today}. I am recording my own "
-                   f"voice, for my own Self-Cloud, to be used only as I direct.")
-        r = take(consent, "CONSENT — read this exactly")
-        if r != "kept":
-            say("\n  No consent recording, so nothing else is recorded. "
-                "Nothing has been kept.\n")
-            if fresh:
-                shutil.rmtree(d, ignore_errors=True)
+    with _lock(d) as locked:
+        if not locked:
+            _tell(f"Another window is already recording {name}'s voice. Please "
+                  "finish there, or close it, then try again.")
             return 1
-        man["consent"] = man["takes"][-1]["file"]
+        _tighten(d)
+        man = load_manifest(d)
+        fresh = not man
+        if fresh:
+            man = _migrate({
+                "person": name,
+                "created": dt.datetime.now().isoformat(timespec="seconds"),
+                "machine": platform.node(),
+                "rate": RATE,
+                "consent": None,
+                "takes": [],
+                "rule": RULE,
+            })
+        person = man.get("person") or name
+
+        def give_up(msg: str, rc: int = 1) -> int:
+            _tell(msg)
+            if fresh and created:
+                _shred(d, set(), _result())
+            return rc
+
+        # One folder, one person: a look-alike name never merges in.
+        if _norm(person) != _norm(name):
+            return give_up(
+                f"The recordings in {d} belong to {person}, whose name looks the "
+                f"same to the computer as {name}. So that two people's voices are "
+                "never mixed, please use a name that tells you apart, for example "
+                "with a surname or a middle name. Nothing was recorded.")
+
+        here = _place(VOICE_ROOT)
+        say(f"\n  Recording {person}'s voice {here}, in {d}")
+        if here.startswith("on this"):
+            say(_wrap("(No Self-Cloud drive is plugged in, so this stays on this "
+                      f"{_computer()}. Plug the drive in first if you want it there.)"))
+        say("  Nothing here leaves this machine. Read naturally. Press return to")
+        say("  start each one and return again to stop. Type q at any prompt to quit.\n")
+
+        states = _consent_states(d, man)
+        if not fresh:
+            first = man["consents"][0] if man["consents"] else {}
+            say(_wrap(f"There are already {len(man['takes'])} recordings of {person}'s "
+                      f"voice here. {person} first agreed on {_when(first.get('at'))}. "
+                      f"Only {person} may add to them."))
+            ans = _reply(ask, f"  Are you {person} yourself? Type yes to carry on: ")
+            if ans.strip(" .!").lower() not in ("yes", "y"):
+                return give_up(
+                    "Not carried on. If you are someone else, please run this again "
+                    "with your own name, so your voice is kept separately. Nothing "
+                    "was recorded.")
+            if man["takes"] and not any(s == "ok" for _, s in states):
+                lost = man["consents"][0].get("file") if man["consents"] else None
+                say("\n" + _wrap(f"The recording of {person} agreeing"
+                                 + (f" ({lost})" if lost else "")
+                                 + " is missing or has been changed. It must be said "
+                                 "again now; nothing else will be recorded until it is."))
+
+        n = max((int(t.get("n") or 0) for t in man["takes"]), default=0)
+
+        def capture(text: str, tag: str, consent: bool = False):
+            """Record until a take is usable: ('kept', samples), or 'skipped'/'quit'."""
+            tries = 0
+            while True:
+                say(f"\n  ┌ {tag}")
+                for line in textwrap.wrap(text, 66) or [""]:
+                    say(f"  │  {line}")
+                say("  └ return = start recording · s = skip · q = quit")
+                if interactive:
+                    ans = _reply(ask, "  > ", eof="q").lower()
+                    if ans == "q":
+                        return "quit", None
+                    if ans == "s":
+                        return "skipped", None
+                    say("  ● recording — press return when you've finished")
+                samples = recorder(RATE)
+                problem = take_problem(samples, RATE, consent=consent)
+                if problem:
+                    tries += 1
+                    say(_wrap(problem))
+                    if tries >= MAX_TRIES:
+                        _tell("The microphone does not seem to be hearing anyone, so "
+                              "nothing more was recorded this time. On a Mac, check "
+                              "System Settings → Privacy & Security → Microphone, "
+                              "and allow Terminal.")
+                        return "quit", None
+                    continue
+                secs = len(samples) / RATE
+                rms, peak = level(samples)
+                note = ""
+                if rms < 0.01:
+                    note = "  (very quiet — closer to the mic, or check the input)"
+                elif peak > 0.99:
+                    note = "  (clipping — a little further from the mic)"
+                say(f"  {secs:.1f}s, level {rms:.3f}{note}")
+                if interactive:
+                    ans = _reply(ask, "  return = keep · r = redo · s = skip · q = quit > ",
+                                 eof="q").lower()
+                    if ans == "r":
+                        continue
+                    if ans == "s":
+                        return "skipped", None
+                    if ans == "q":
+                        return "quit", None
+                return "kept", samples
+
+        def commit(samples, text: str, tag: str, **extra) -> dict:
+            nonlocal n
+            n, fname = _write_take(d, n + 1, samples)
+            rms, _ = level(samples)
+            entry = {"n": n, "tag": tag, "phrase": text, "file": fname,
+                     "seconds": round(len(samples) / RATE, 2), "rms": round(rms, 4),
+                     "sha256": sha256(d / fname),
+                     "recorded_at": dt.datetime.now().isoformat(timespec="seconds")}
+            entry.update(extra)
+            man["takes"].append(entry)
+            return entry
+
+        # 1. Consent, first and every sitting, in the person's own voice, with
+        #    three words nobody could have recorded before today.
+        words = challenge_words()
+        text = consent_sentence(person, words)
+        say("  First, in your own voice, say that you agree. The last three words")
+        say("  are new every time, so an old recording can never stand in for you.")
+        got, samples = capture(text, "CONSENT — read this exactly, out loud", consent=True)
+        if got != "kept":
+            return give_up("No consent recording, so nothing else is recorded. "
+                           "Nothing new has been kept.")
+        hz = voice_pitch(samples)
+        ref_hz, ref_file = (None, None) if fresh else _reference_pitch(d, man)
+        differs = bool(hz and ref_hz and max(hz, ref_hz) / min(hz, ref_hz) > VOICE_DIFFERS)
+        if differs:
+            which = "higher" if hz > ref_hz else "lower"
+            say("\n" + _wrap(f"This voice sounds quite different from the voice "
+                             f"already recorded for {person} (it is {which}). These "
+                             f"recordings must be only {person}'s own voice. If you "
+                             f"are not {person}, please stop now."))
+            ans = _reply(ask, f"  If it really is you, {person}, type: it is me  > ")
+            if ans.strip(" .!").lower() != "it is me":
+                return give_up("Stopped. The new recording was not kept. If you are "
+                               "someone else, please run this again with your own "
+                               "name, so your voice is kept separately.")
+        entry = commit(samples, text, "CONSENT", kind="consent",
+                       challenge=" ".join(words),
+                       voice_hz=round(hz, 1) if hz else None,
+                       compared_with=ref_file, voice_differs=differs)
+        man["consents"].append({"file": entry["file"], "sha256": entry["sha256"],
+                                "at": entry["recorded_at"], "challenge": entry["challenge"],
+                                "voice_hz": entry["voice_hz"], "voice_differs": differs})
+        if not man.get("consent"):
+            man["consent"] = entry["file"]
         save_manifest(d, man)
+        this_consent = entry["file"]
 
-    # 2. The phrases, resumable.
-    todo = [p for p in PHRASES if p not in done_phrases][:max(0, limit)]
-    for i, phrase in enumerate(todo, 1):
-        r = take(phrase, f"{len(done_phrases) + i} of {len(PHRASES)}")
-        if r == "quit":
-            break
-    else:
-        # 3. In their own words — only once the sheet is done.
-        for prompt in OPEN:
-            if prompt in done_phrases:
-                continue
-            if take(prompt, "IN YOUR OWN WORDS") == "quit":
+        # 2. The phrases, resumable.
+        done = {t["phrase"] for t in man["takes"] if t.get("kind") != "consent"}
+
+        def phrase_take(text: str, tag: str) -> str:
+            got, samples = capture(text, tag)
+            if got == "kept":
+                commit(samples, text, tag, consent=this_consent)
+                save_manifest(d, man)      # after EVERY take: quitting loses nothing
+            return got
+
+        todo = [p for p in PHRASES if p not in done][:max(0, limit)]
+        already = sum(1 for p in PHRASES if p in done)
+        for i, phrase in enumerate(todo, 1):
+            if phrase_take(phrase, f"{already + i} of {len(PHRASES)}") == "quit":
                 break
+        else:
+            # 3. In their own words — only once the sheet is done.
+            for prompt in OPEN:
+                if prompt in done:
+                    continue
+                if phrase_take(prompt, "IN YOUR OWN WORDS") == "quit":
+                    break
 
-    total = sum(t["seconds"] for t in man["takes"])
-    say(f"\n  {len(man['takes'])} takes, {total / 60:.1f} minutes of your voice, "
-        f"in {d}")
-    say("  Run this again any time to carry on. `status` shows where you are.\n")
-    return 0
-
-
-def status(who: str) -> int:
-    d = person_dir(who)
-    man = load_manifest(d)
-    if not man:
-        print(f"\n  Nothing recorded yet for {who}. Run `start`.\n")
+        total = sum(t["seconds"] for t in man["takes"])
+        say(f"\n  {len(man['takes'])} takes, {total / 60:.1f} minutes of your voice, "
+            f"in {d}")
+        say("  Run this again any time to carry on. `status` shows where you are.\n")
         return 0
-    total = sum(t["seconds"] for t in man["takes"])
-    phrases_done = sum(1 for t in man["takes"] if t["phrase"] in PHRASES)
-    own = sum(1 for t in man["takes"] if t["phrase"] in OPEN)
-    ok = sum(1 for t in man["takes"] if (d / t["file"]).exists()
-             and sha256(d / t["file"]) == t["sha256"])
-    print(f"\n  {man['person']} — {len(man['takes'])} takes, {total / 60:.1f} min")
-    print(f"  consent    {'recorded (' + man['consent'] + ')' if man.get('consent') else 'MISSING'}")
+
+
+def _people_in(root: Path) -> list[tuple[Path, dict | None]]:
+    out = []
+    try:
+        if _is_link(root) or not root.is_dir():
+            return out
+        with os.scandir(root) as it:
+            entries = sorted(it, key=lambda e: e.name)
+    except OSError:
+        return out
+    for e in entries:
+        p = Path(e.path)
+        if e.is_symlink() or not e.is_dir(follow_symlinks=False):
+            continue
+        try:
+            out.append((p, load_manifest(p) or None))
+        except Refused:
+            out.append((p, None))
+    return out
+
+
+def status(who: str | None = None) -> int:
+    if not (who or "").strip():
+        found = False
+        for root in all_roots():
+            for p, man in _people_in(root):
+                found = True
+                if man:
+                    print(f"  {man.get('person', p.name)} — {len(man['takes'])} "
+                          f"recordings, {_place(root)} ({p})")
+                else:
+                    print(f"  {p.name} — a folder without a readable list, "
+                          f"{_place(root)} ({p})")
+        if not found:
+            print("\n  No voice has been recorded yet.\n")
+        return 0
+    try:
+        return _status(who)
+    except Refused as exc:
+        _tell(str(exc))
+        return 1
+    except OSError as exc:
+        _tell(f"JEFFEREY could not read {exc.filename or VOICE_ROOT} "
+              f"({exc.strerror or exc}). Nothing was changed.")
+        return 1
+
+
+def _status(who: str) -> int:
+    name = " ".join(who.split())
+    d = person_dir(who)
+    elsewhere = [p for p in _find(_slugs(who), all_roots())[0]
+                 if os.path.abspath(p) != os.path.abspath(d)]
+    if not os.path.lexists(d / "manifest.json"):
+        if elsewhere:
+            print(f"\n  Nothing recorded for {name} {_place(VOICE_ROOT)} ({d}).")
+            print("  But recordings were found:")
+            for p in elsewhere:
+                print(f"    · {_place(p.parent)} ({p})")
+            print()
+        else:
+            print(f"\n  Nothing recorded yet for {name}. Run `start`.\n")
+        return 0
+    if _is_link(d):
+        raise Refused(f"The folder {d} is a shortcut to {_link_target(d)}, so "
+                      "JEFFEREY will not read it.")
+    _tighten(d)
+    man = load_manifest(d)
+    person = man.get("person") or name
+    takes = man["takes"]
+    total = sum(t.get("seconds", 0) for t in takes)
+    phrases_done = sum(1 for t in takes if t.get("phrase") in PHRASES)
+    own = sum(1 for t in takes if t.get("phrase") in OPEN)
+    ok = sum(1 for t in takes if _file_ok(d, t.get("file"), t.get("sha256")) == "ok")
+    states = _consent_states(d, man)
+    print(f"\n  {person} — {len(takes)} takes, {total / 60:.1f} min")
+    good = [c for c, s in states if s == "ok"]
+    if not states:
+        print(_row("consent", f"MISSING: there is no recording of {person} agreeing. "
+                   "Nothing more is recorded until it is said, at the start of the "
+                   "next sitting."))
+    label = "consent"
+    for c, s in states:
+        f, when = c.get("file"), _when(c.get("at"))
+        if s == "ok":
+            silent = False
+            got = read_wav(d / f)
+            if got is not None:
+                silent = sound_seconds(*got) < MIN_SOUND_SECONDS
+            if silent:
+                print(_row(label, f"SILENT: the recording of {when} ({f}) has no "
+                           "voice in it, so it does not count as agreeing."))
+                good.remove(c)
+            else:
+                print(_row(label, f"recorded on {when} ({f}), and checked"))
+        else:
+            why = {"missing": "is gone", "changed": "has been changed",
+                   "shortcut": "has been replaced by a shortcut"}[s]
+            print(_row(label, f"MISSING: the recording of {person} agreeing on "
+                       f"{when} ({f}) {why}, so it no longer counts."))
+        if c.get("voice_differs"):
+            print(_row("", f"That day the voice sounded different from the first "
+                       f"one, and the speaker said it was {person}."))
+        label = ""
+    if states and not good:
+        print(_row("", f"Nothing more is recorded until {person} says it again, "
+                   "at the start of the next sitting."))
+    unconsented = [t for t in takes if t.get("kind") != "consent"
+                   and t.get("consent") not in {c.get("file") for c in good}]
+    if unconsented and good:
+        print(_row("", f"{len(unconsented)} recordings were made under an "
+                   "agreement that no longer counts."))
     print(f"  phrases    {phrases_done} of {len(PHRASES)}")
     print(f"  own words  {own} of {len(OPEN)}")
-    print(f"  integrity  {ok} of {len(man['takes'])} files match their checksum")
+    print(f"  integrity  {ok} of {len(takes)} files match their checksum")
     print(f"  where      {d}")
-    print(f"\n  {man['rule']}\n")
+    for p in elsewhere:
+        print(f"  also       {_place(p.parent)} ({p})")
+    print(f"\n{_wrap(man.get('rule', RULE))}\n")
     return 0
+
+
+# ---------------------------------------------------------------- deletion
+def _result() -> dict:
+    return {"wiped": 0, "links": [], "shared": [], "unwiped": [], "failed": [],
+            "blocked": None}
+
+
+def _overwrite(fd: int, size: int) -> None:
+    """Random bytes over every byte of the file, then to the disk."""
+    os.lseek(fd, 0, os.SEEK_SET)
+    left = size
+    while left > 0:
+        mv = memoryview(os.urandom(min(left, 1 << 20)))
+        while mv:
+            w = os.write(fd, mv)
+            left -= w
+            mv = mv[w:]
+    os.fsync(fd)
+    with contextlib.suppress(ImportError, OSError, AttributeError):
+        import fcntl
+        fcntl.fcntl(fd, fcntl.F_FULLFSYNC)       # macOS: past the drive's cache
+
+
+def _shred_file(p: Path, known: set[str], res: dict) -> None:
+    try:
+        fd = os.open(p, os.O_RDONLY | _NOFOLLOW | _NONBLOCK)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.EMLINK):   # became a shortcut
+            res["links"].append((p, _link_target(p)))
+        else:
+            res["unwiped"].append(p)
+        with contextlib.suppress(OSError):
+            os.unlink(p)
+        return
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            os.unlink(p)
+            return
+        if st.st_nlink > 1 and _hash_fd(fd) not in known:
+            # Another name elsewhere points at these same bytes, and they are
+            # not one of the recordings: overwriting would damage that other
+            # file. Remove this name only, and say so.
+            res["shared"].append(p)
+            os.unlink(p)
+            return
+        with contextlib.suppress(OSError):
+            os.fchmod(fd, 0o600)          # through the open file, never a path
+        try:
+            wfd = os.open(p, os.O_WRONLY | _NOFOLLOW | _NONBLOCK)
+        except OSError:
+            res["unwiped"].append(p)
+            os.unlink(p)
+            return
+        try:
+            wst = os.fstat(wfd)
+            if (wst.st_dev, wst.st_ino) != (st.st_dev, st.st_ino):
+                res["failed"].append((p, "it changed while being deleted"))
+                return
+            _overwrite(wfd, wst.st_size)
+        finally:
+            os.close(wfd)
+        os.unlink(p)
+        res["wiped"] += 1
+    except OSError as exc:
+        res["failed"].append((p, exc.strerror or "it could not be removed"))
+    finally:
+        os.close(fd)
+
+
+def _shred(path: Path, known: set[str], res: dict) -> None:
+    """Overwrite and remove everything at `path`, following no shortcut."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(st.st_mode):
+        res["links"].append((path, _link_target(path)))
+        with contextlib.suppress(OSError):
+            os.unlink(path)           # the shortcut itself, never what it points to
+        return
+    if stat.S_ISDIR(st.st_mode):
+        try:
+            with os.scandir(path) as it:
+                names = sorted(e.name for e in it)
+        except OSError:
+            res["failed"].append((path, "the folder could not be opened"))
+            return
+        for nm in names:
+            _shred(path / nm, known, res)
+        try:
+            os.rmdir(path)
+        except OSError:
+            res["failed"].append((path, "the folder could not be removed"))
+        return
+    if stat.S_ISREG(st.st_mode):
+        _shred_file(path, known, res)
+        return
+    with contextlib.suppress(OSError):
+        os.unlink(path)               # a pipe or a device entry: no data in it
+
+
+def _find(slugs: list[str], roots: list[Path]) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """Each folder of this person's, in every place; and places that hold one
+    behind a shortcut (which are reported, never followed)."""
+    found: list[Path] = []
+    blocked: list[tuple[Path, str]] = []
+    for r in roots:
+        try:
+            st = os.lstat(r)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            if any(os.path.lexists(r / s) for s in slugs):   # a look, not a write
+                blocked.append((r, _link_target(r)))
+            continue
+        if not stat.S_ISDIR(st.st_mode):
+            continue
+        for s in slugs:
+            p = r / s
+            if os.path.lexists(p) and p not in found:
+                found.append(p)
+    return found, blocked
 
 
 def delete(who: str, force: bool = False) -> int:
-    """Real deletion. Overwrite, then unlink, then remove the folder."""
-    d = person_dir(who)
-    if not d.exists():
-        print(f"\n  There is nothing recorded for {who}.\n")
+    """Real deletion, in every place, by the person at the keyboard.
+
+    `force` skips the typed confirmation; only the self-test may use it, and
+    only inside a temporary folder. --yes on the command line is refused.
+    """
+    raw = " ".join((who or "").split())
+    slugs = _slugs(who or "")
+    if not slugs:
+        _tell("Please say whose recordings to delete, by name. Nothing was deleted.")
+        return 2
+    roots = all_roots()
+    if force and not _test_place(*roots):
+        _tell("Deleting a voice cannot be done by a script, or with --yes. The "
+              "person has to be at the keyboard and type the name. Nothing was "
+              "deleted.")
+        return 2
+    found, blocked = _find(slugs, roots)
+    if not found and not blocked:
+        print(f"\n  There is nothing recorded for {raw}. JEFFEREY looked:")
+        for r in roots:
+            print(f"    · {_place(r)} ({r})")
+        print(_wrap("If a Self-Cloud drive that is not plugged in now was ever "
+                    "used, plug it in and look again.") + "\n")
         return 0
     if not force:
         if not sys.stdin.isatty():
-            print("  Deleting a voice needs a person to confirm. Refusing.",
-                  file=sys.stderr)
+            _tell("Deleting a voice needs a person to confirm. Refusing.")
             return 2
-        ans = input(f"\n  Delete every recording of {who}'s voice, permanently? "
-                    f"Type the name to confirm: ").strip()
-        if ans.lower() != who.strip().lower():
+        print(f"\n  Recordings of {raw}'s voice were found:")
+        for p in found:
+            print(f"    · {_place(p.parent)} ({p})")
+        for r, target in blocked:
+            print(f"    · behind a shortcut at {r}, which points to {target}")
+        try:
+            ans = input(f"\n  Delete every recording of {raw}'s voice, permanently? "
+                        "This cannot be undone.\n  Type the name to confirm: ")
+        except EOFError:
+            ans = ""
+        if _norm(ans) != _norm(raw):
             print("  Not deleted.\n")
             return 1
-    for p in sorted(d.rglob("*")):
-        if p.is_file():
-            try:
-                p.chmod(0o600)
-                size = p.stat().st_size
-                with open(p, "r+b") as fh:
-                    fh.write(os.urandom(min(size, 1 << 26)))
-                    fh.flush()
-                    os.fsync(fh.fileno())
-            except OSError:
-                pass
-            p.unlink(missing_ok=True)
-    shutil.rmtree(d, ignore_errors=True)
-    print(f"\n  Gone. Every file overwritten and removed, manifest included.\n")
-    return 0
+
+    complete = True
+    for p in found:
+        known: set[str] = set()
+        with contextlib.suppress(Refused, OSError):
+            if not _is_link(p):
+                known = {t.get("sha256") for t in load_manifest(p).get("takes", [])
+                         if t.get("sha256")}
+        res = _result()
+        whole_link = _is_link(p)
+        _shred(p, known, res)
+        where = f"{_place(p.parent)} ({p})"
+        if whole_link:
+            complete = False
+            print(f"\n  {where}:")
+            print(_wrap(f"This was a shortcut to {_link_target_text(res)}. JEFFEREY "
+                        "removed the shortcut but did not follow it, so anything there "
+                        "is untouched. Please look there with someone you trust.", "    "))
+            continue
+        print(f"\n  {where}:")
+        print(f"    {res['wiped']} files overwritten, then removed.")
+        inner = res["links"]
+        if inner:
+            print(_wrap(f"{len(inner)} shortcut{'s' if len(inner) > 1 else ''} removed "
+                        "without being followed, so what they pointed to was not "
+                        "touched:", "    "))
+            for lp, t in inner:
+                print(f"      {lp.name} → {t}")
+        if res["shared"]:
+            complete = False
+            print(_wrap(f"{len(res['shared'])} file(s) also had another name elsewhere "
+                        "on this drive and were not among the recordings, so they were "
+                        "removed from here but not overwritten (the other copy was "
+                        "left as it was):", "    "))
+            for sp in res["shared"]:
+                print(f"      {sp.name}")
+        if res["unwiped"]:
+            complete = False
+            print(_wrap(f"{len(res['unwiped'])} file(s) could not be overwritten, "
+                        "only removed: " + ", ".join(u.name for u in res["unwiped"]),
+                        "    "))
+        if res["failed"]:
+            complete = False
+            for fp, why in res["failed"]:
+                print(f"    could not finish with {fp}: {why}")
+    for r, target in blocked:
+        complete = False
+        print("\n" + _wrap(f"The voice folder at {r} is a shortcut to {target}. "
+                           "JEFFEREY did not follow it, so anything there is "
+                           "untouched. Please look there with someone you trust."))
+
+    if complete:
+        print("\n" + _wrap(f"Gone. Every recording of {raw}'s voice that JEFFEREY "
+                           "could find was overwritten, then removed, with its list "
+                           "of recordings."))
+    else:
+        print("\n" + _wrap("Not everything could be removed: see above. Everything "
+                           "else is gone."))
+    print("\n  Please note:\n" +
+          _wrap(f"If {raw}'s voice was ever recorded onto a Self-Cloud drive that is "
+                "not plugged in now, those recordings are still on it. Plug it in "
+                "and run this again.") + "\n\n" +
+          LIMITS_NOTE.format(computer=_computer()) + "\n")
+    return 0 if complete else 1
+
+
+def _link_target_text(res: dict) -> str:
+    return res["links"][0][1] if res["links"] else "somewhere else"
 
 
 # ---------------------------------------------------------------- selftest
+def _fake_voice(hz: float = 220.0, seconds: float = 6.0, rate: int = RATE):
+    """A stand-in for speech: a voice-like tone in syllables, with pauses."""
+    import numpy as np
+    t = np.arange(int(rate * seconds)) / rate
+    syll = ((t % 0.35) < 0.25) & (t > 0.3)
+    return (0.3 * np.sin(2 * np.pi * hz * t) * syll).astype("float32")
+
+
 def selftest() -> int:
     """Everything except the microphone, which is swapped for a tone."""
-    import tempfile
     import numpy as np
-    global VOICE_ROOT
     td = Path(tempfile.mkdtemp(prefix="voice-selftest-"))
-    saved = VOICE_ROOT
-    VOICE_ROOT = td / "voice"
+    yes = (lambda prompt: "yes")
     try:
-        calls = {"n": 0}
+        with selftest_mode(td / "voice", roots=[td / "voice"]):
+            fake = (lambda rate: _fake_voice())
 
-        def fake(rate):
-            calls["n"] += 1
-            t = np.arange(int(rate * 1.2)) / rate
-            return (0.3 * np.sin(2 * np.pi * 220 * t)).astype("float32")
+            # a short session: consent + 3 phrases + the 5 open prompts
+            rc = start("Test Person", limit=3, recorder=fake, quiet=True)
+            assert rc == 0, rc
+            d = person_dir("Test Person")
+            man = load_manifest(d)
+            assert man["consent"] == "take-001.wav", man["consent"]
+            assert "I am Test Person" in man["takes"][0]["phrase"]
+            words = man["consents"][0]["challenge"].split()
+            assert len(words) == 3 and all(w in man["takes"][0]["phrase"] for w in words)
+            assert len(man["takes"]) == 1 + 3 + len(OPEN), len(man["takes"])
+            for t in man["takes"]:
+                f = d / t["file"]
+                assert f.exists() and sha256(f) == t["sha256"], t["file"]
+                mode = f.stat().st_mode & 0o777
+                assert mode == 0o400, f"a take is {oct(mode)}, not owner read-only"
+                with wave.open(str(f)) as w:
+                    assert w.getnchannels() == 1 and w.getframerate() == RATE
+                    assert w.getsampwidth() == 2
+            assert (d.stat().st_mode & 0o777) == 0o700
+            assert ((d / "manifest.json").stat().st_mode & 0o777) == 0o600
 
-        # a short session: consent + 3 phrases + the 5 open prompts
-        rc = start("Test Person", limit=3, recorder=fake, quiet=True)
-        assert rc == 0, rc
-        d = person_dir("Test Person")
-        man = load_manifest(d)
-        assert man["consent"] == "take-001.wav", man["consent"]
-        assert "I am Test Person" in man["takes"][0]["phrase"]
-        assert len(man["takes"]) == 1 + 3 + len(OPEN), len(man["takes"])
-        for t in man["takes"]:
-            f = d / t["file"]
-            assert f.exists() and sha256(f) == t["sha256"], t["file"]
-            assert not (f.stat().st_mode & 0o222), "a take is writable"
-            with wave.open(str(f)) as w:
-                assert w.getnchannels() == 1 and w.getframerate() == RATE
-                assert w.getsampwidth() == 2
+            # resumable: a second sitting begins with a FRESH consent, then
+            # records only what is missing. (The first version kept the old
+            # consent and recorded none; the stress test showed that lets a
+            # second person carry on under the first one's agreement.)
+            before = len(man["takes"])
+            rc = start("Test Person", limit=2, recorder=fake, quiet=True, ask=yes)
+            assert rc == 0, rc
+            man = load_manifest(d)
+            assert len(man["takes"]) == before + 1 + 2, len(man["takes"])
+            assert man["consent"] == "take-001.wav", "the first consent was lost"
+            assert len(man["consents"]) == 2, man["consents"]
+            spoken = [t["phrase"] for t in man["takes"] if t.get("kind") != "consent"]
+            assert len(set(spoken)) == len(spoken), "a phrase repeated"
 
-        # resumable: a second run records only what is missing
-        before = len(man["takes"])
-        rc = start("Test Person", limit=2, recorder=fake, quiet=True)
-        man = load_manifest(d)
-        assert len(man["takes"]) == before + 2, len(man["takes"])
-        assert man["consent"] == "take-001.wav", "consent was re-recorded"
-        assert len({t["phrase"] for t in man["takes"]}) == len(man["takes"]), "a phrase repeated"
+            # pressing return is not "yes, I am that person"
+            rc = start("Test Person", limit=2, recorder=fake, quiet=True,
+                       ask=lambda p: "")
+            assert rc == 1 and len(load_manifest(d)["takes"]) == before + 3
 
-        # everything lives under the voice root and nowhere else
-        assert d.resolve().is_relative_to(VOICE_ROOT.resolve())
-        # a hostile name is either refused outright or lands INSIDE the folder
-        for hostile in ("../../etc", "/etc/passwd", "..", "a/b/../../../c", "   "):
-            try:
-                hd = person_dir(hostile)
-            except SystemExit:
-                continue                      # refused: fine
-            assert hd.resolve().is_relative_to(VOICE_ROOT.resolve()), hostile
-            assert hd.parent.resolve() == VOICE_ROOT.resolve(), hostile
+            # everything lives under the voice root and nowhere else
+            assert d.resolve().is_relative_to(VOICE_ROOT.resolve())
+            # a hostile name is either refused outright or lands INSIDE the folder
+            for hostile in ("../../etc", "/etc/passwd", "..", "a/b/../../../c", "   "):
+                try:
+                    hd = person_dir(hostile)
+                except Refused:
+                    continue                      # refused: fine
+                assert hd.resolve().is_relative_to(VOICE_ROOT.resolve()), hostile
+                assert hd.parent.resolve() == VOICE_ROOT.resolve(), hostile
+                assert start(hostile, limit=0, recorder=fake, quiet=True) == 2, hostile
 
-        # too short is refused and retried, not kept
-        def short_first():
-            yield np.zeros(int(RATE * 0.2), dtype="float32")   # a mis-press
-            while True:
-                yield fake(RATE)
-        feed = short_first()
-        rc = start("Second Person", limit=0, recorder=lambda r: next(feed),
-                   quiet=True)
-        m2 = load_manifest(person_dir("Second Person"))
-        assert m2["takes"], "nothing kept"
-        assert all(t["seconds"] >= MIN_SECONDS for t in m2["takes"]), \
-            "a too-short take was kept"
-        # limit=0 means no sheet phrases this sitting; consent + own words only
-        assert m2["consent"] and len(m2["takes"]) == 1 + len(OPEN), len(m2["takes"])
+            # too short is refused and retried, not kept; silence likewise
+            def awkward_first():
+                yield np.zeros(int(RATE * 0.2), dtype="float32")   # a mis-press
+                yield np.zeros(int(RATE * 6), dtype="float32")     # silence
+                while True:
+                    yield _fake_voice()
+            feed = awkward_first()
+            rc = start("Second Person", limit=0, recorder=lambda r: next(feed),
+                       quiet=True)
+            m2 = load_manifest(person_dir("Second Person"))
+            assert m2["takes"], "nothing kept"
+            assert all(t["seconds"] >= MIN_SECONDS and t["rms"] > 0.01
+                       for t in m2["takes"]), "a too-short or silent take was kept"
+            # limit=0 means no sheet phrases this sitting; consent + own words only
+            assert m2["consent"] and len(m2["takes"]) == 1 + len(OPEN), len(m2["takes"])
 
-        # real deletion: files gone, folder gone
-        files = [d / t["file"] for t in man["takes"]]
-        assert delete("Test Person", force=True) == 0
-        assert not d.exists() and not any(f.exists() for f in files)
+            # a silent consent keeps nothing at all
+            assert start("Third Person", limit=0, quiet=True,
+                         recorder=lambda r: np.zeros(RATE * 6, dtype="float32")) == 1
+            assert not person_dir("Third Person").exists()
+
+            # real deletion: files gone, folder gone, and a shortcut planted in
+            # the folder is removed without the file it points to being touched
+            outside = td / "keep.txt"
+            outside.write_text("the owner's own file")
+            os.symlink(outside, d / "take-099.wav")
+            files = [d / t["file"] for t in man["takes"]]
+            assert delete("Test Person", force=True) == 0
+            assert not d.exists() and not any(f.exists() for f in files)
+            assert outside.read_text() == "the owner's own file"
+
+        # outside the self-test, a fake microphone and --yes are refused
+        assert start("Test Person", limit=0, recorder=fake, quiet=True) == 2
 
         # nothing here can reach a network
         import ast
@@ -474,26 +1466,25 @@ def selftest() -> int:
         for bad in ("socket", "urllib", "http", "requests", "ssl"):
             assert bad not in names, f"{bad} imported"
 
-        print("\n  ✓ voice enrolment: consent recorded first and kept, takes are")
-        print("    checksummed WAVs made read-only, resumable without repeating,")
-        print("    names cannot escape the voice folder, too-short takes are")
-        print("    retried, deletion is real, and nothing here can reach a network.\n")
+        print("\n  ✓ voice enrolment: every sitting begins with a fresh spoken")
+        print("    consent with today's words, silent takes are refused, takes are")
+        print("    checksummed WAVs readable by their owner only, resumable without")
+        print("    repeating, a second person cannot carry on by pressing return,")
+        print("    names cannot escape the voice folder, deletion is real and never")
+        print("    follows a shortcut, and nothing here can reach a network.\n")
         return 0
     finally:
-        VOICE_ROOT = saved
         for p in td.rglob("*"):
-            if p.is_file():
-                try:
+            if p.is_file() and not p.is_symlink():
+                with contextlib.suppress(OSError):
                     p.chmod(0o644)
-                except OSError:
-                    pass
         shutil.rmtree(td, ignore_errors=True)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--who", default=getpass.getuser(),
-                    help="whose voice (a name; default: your login name)")
+    ap.add_argument("--who", default=None,
+                    help="whose voice: the person's own name (required)")
     sub = ap.add_subparsers(dest="cmd")
     s = sub.add_parser("start", help="record, or carry on recording")
     s.add_argument("--phrases", type=int, default=len(PHRASES),
@@ -502,26 +1493,49 @@ def main() -> int:
     p = sub.add_parser("play", help="hear a take back")
     p.add_argument("take", type=int)
     dl = sub.add_parser("delete", help="remove every recording, for real")
-    dl.add_argument("--yes", action="store_true", help="skip the confirmation")
+    dl.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
 
     if a.selftest:
         return selftest()
+    need_name = ("Please say whose voice this is, by name: "
+                 "--who \"Your Name\". Nothing was done.")
     if a.cmd == "start":
+        if not (a.who or "").strip():
+            _tell(need_name)
+            return 2
         return start(a.who, a.phrases)
     if a.cmd == "status":
         return status(a.who)
     if a.cmd == "play":
-        d = person_dir(a.who)
+        if not (a.who or "").strip():
+            _tell(need_name)
+            return 2
+        try:
+            d = person_dir(a.who)
+        except Refused as exc:
+            _tell(str(exc))
+            return 2
         f = d / f"take-{a.take:03d}.wav"
-        if not f.exists():
+        try:
+            ok = stat.S_ISREG(os.lstat(f).st_mode) and not _is_link(d)
+        except OSError:
+            ok = False
+        if not ok:
             print(f"  No take {a.take}.")
             return 1
         play(f)
         return 0
     if a.cmd == "delete":
-        return delete(a.who, force=a.yes)
+        if a.yes:
+            _tell("Deleting a voice always needs the person at the keyboard to type "
+                  "the name; --yes is no longer accepted. Nothing was deleted.")
+            return 2
+        if not (a.who or "").strip():
+            _tell(need_name)
+            return 2
+        return delete(a.who)
     ap.print_help()
     return 0
 
