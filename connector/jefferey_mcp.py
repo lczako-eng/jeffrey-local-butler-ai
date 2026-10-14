@@ -69,7 +69,26 @@ from reminisce import Reminisce
 import egress
 from access import gate
 
-mcp = _Server("jefferey")
+# JEFFEREY's core rules travel with the connection itself, so they hold even
+# before the model calls get_directives — and they say plainly that other
+# connectors in the same app are outside JEFFEREY's door (I-18).
+from version import __version__
+INSTRUCTIONS = (
+    f"You are connected to JEFFEREY (version {__version__}), the owner's own memory and "
+    "conscience. Call get_directives first and follow it. Even before that: nothing "
+    "irreversible happens because an AI asked; JEFFEREY never moves money, and nothing is "
+    "sent, bought, booked or signed without authorize_action; secrets never enter your "
+    "context; with no rule, silence is a no. A refusal from JEFFEREY is a result to tell "
+    "the owner plainly, never something to work around. Other connections in this app "
+    "(a filesystem connection, a marketplace, any other 'memory' or 'cloud') are NOT "
+    "covered by JEFFEREY's door or its record of what left the house: never copy what "
+    "JEFFEREY tells you into another service unless the owner says so in this "
+    "conversation, and before another connection sends, buys, books, lists or signs "
+    "anything, call authorize_action first and log_action after.")
+try:
+    mcp = _Server("jefferey", instructions=INSTRUCTIONS)
+except TypeError:                     # an SDK without server instructions
+    mcp = _Server("jefferey")
 
 
 def door(register):
@@ -98,7 +117,21 @@ def door(register):
                 return e.as_result(fn.__name__)
             except ValueError as e:      # a plain-words "that is not valid"
                 return {"refused": True, "tool": fn.__name__, "reason": str(e)}
-        return egress.door(register, as_result=True)(fresh)
+        gated = egress.through(fresh, as_result=True)
+        if fn.__annotations__.get("return") in (str, "str"):
+            # A tool that answers in text (get_directives) answers a refusal
+            # in text too: as a dict, the SDK rejected it and the model saw
+            # only "Error executing tool" — with the drive away, that was the
+            # first thing it saw.
+            @functools.wraps(gated)
+            def as_text(*args, **kwargs):
+                out = gated(*args, **kwargs)
+                if isinstance(out, dict) and out.get("refused"):
+                    return (f"REFUSED: {out.get('reason', '')} "
+                            f"{out.get('tell_the_user', '')}").strip()
+                return out
+            return register(as_text)
+        return register(gated)
     return wrap
 # Tools that never touch the store keep working when it is damaged, so the
 # engine can still load its directives (which say how to report the problem).
@@ -122,6 +155,10 @@ access.bind(cloud)
 # so its result passes egress.release() — allowlisted, scanned, logged word
 # for word — before the host model ever sees it. There is no other path out.
 egress.bind("mcp")
+# Where the life is — or that it is nowhere, because the drive is away — on
+# Claude's log at start; every tool then says it in its own result (I-08).
+import home
+home.announce()
 
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 

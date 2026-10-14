@@ -20,28 +20,13 @@ else
     fi
 fi
 
+# The report, the door's state, and the menu, in plain words. Words work in
+# English or French ("shut", "fermer", "open", "ouvrir"); anything not
+# understood is asked again, and the door's state is printed after every
+# answer. (Typing "shut" used to open the log and leave the door open.)
 echo
-"$PY" connector/egress.py report --days 7
-echo
-echo "  [return]  see every send, word for word"
-echo "  [a]       everything since the beginning"
-echo "  [s]       SHUT the door — nothing leaves until you open it"
-echo "  [o]       open the door"
-echo "  [k]       keep each send word for word only for a number of days"
-echo "  [q]       close this window"
-echo
-read -r -p "  > " CHOICE
-case "$CHOICE" in
-    a|A) "$PY" connector/egress.py report --all --full | less -R ;;
-    s|S) "$PY" connector/egress.py shut ;;
-    o|O) "$PY" connector/egress.py open ;;
-    k|K) "$PY" connector/egress.py keep
-         read -r -p "  How many days? (or 'always') " DAYS
-         "$PY" connector/egress.py keep "$DAYS" ;;
-    q|Q) exit 0 ;;
-    *)   "$PY" connector/egress.py report --days 7 --full | less -R ;;
-esac
+"$PY" connector/egress.py menu
 
 echo
 echo "Press return to close this window."
-read -r _
+read -r _ || true

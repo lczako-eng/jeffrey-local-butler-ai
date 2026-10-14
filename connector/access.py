@@ -202,7 +202,9 @@ class Gate:
     def __init__(self, cloud, client: str, announce: bool = True):
         self.cloud = cloud
         self.client = (client or DEFAULT_CLIENT).strip().lower()
-        self._provisioned: set[str] = set()
+        # (store, client): a key issued in one store is not issued in another —
+        # the life moves to the drive when it is plugged in (I-08).
+        self._provisioned: set[tuple[str, str]] = set()
         if announce:
             self.announce()
 
@@ -238,14 +240,15 @@ class Gate:
         from conscience import ConscienceConflict
 
         client = client or self.client
-        if client in self._provisioned:
+        done = (str(getattr(self.cloud.c, "path", "")), client)
+        if done in self._provisioned:
             return
         grants = self.cloud.c.data.get("selfcloud_grants", {})
         if client in grants:
-            self._provisioned.add(client)
+            self._provisioned.add(done)
             return
         if client not in PRESETS:
-            self._provisioned.add(client)
+            self._provisioned.add(done)
             print(f"\n  ⚠  JEFFEREY_CLIENT={client!r} has no key and no preset.\n"
                   f"     Every scoped call will be refused until the owner types, in\n"
                   f"     'Talk to JEFFEREY on this Mac':  /grant {client} <scopes>\n",
@@ -267,7 +270,7 @@ class Gate:
                 self.cloud.grant(client, note="auto-issued from its preset on "
                                               "first use; the owner may narrow it",
                                  auto=True)
-        self._provisioned.add(client)
+        self._provisioned.add(done)
 
     def announce(self) -> None:
         scopes = self._effective_scopes()          # no write on startup

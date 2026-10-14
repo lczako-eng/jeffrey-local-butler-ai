@@ -2,7 +2,7 @@
 
 **For:** Laszlo, on the Mac, with the drive. Nothing here needs a terminal
 except one copy-paste in step 0. Everything else is a double-click.
-**Updated:** 2026-09-16.
+**Updated:** 2026-10-14.
 
 Two products, two repos. **Self-Cloud** is the drive and the box — storage,
 the catalog, the kill switch — built by the laptop agent in `lczako-eng/Self-Cloud`.
@@ -23,6 +23,9 @@ open ~/JEFFEREY
 
 A Finder window opens with the buttons. If the Mac asks to install
 "command line developer tools", say yes and run the three lines again after.
+From then on, to update, double-click **`Update JEFFEREY.command`** with the
+Mac online: it brings this copy and the drive's copy to the same version,
+checks it works, and tells you the version.
 
 If a `.command` file refuses to open ("cannot be opened because it is from
 an unidentified developer"): right-click it → **Open**, once. Or:
@@ -33,8 +36,11 @@ System Settings → Privacy & Security → **Open Anyway**.
 ## 1. Prepare the hard drive
 
 Plug the drive in. Double-click **`Make this drive a Self-Cloud.command`**.
-Drag the drive from Finder into the window, press return, say **Y** to the
-rename.
+Type its number (or drag it in) and press return, and type **yes** to the
+rename (anything else keeps the name). It also tells this Mac the drive is
+yours: JEFFEREY then uses that drive and no other, and with it unplugged he
+is off — he never starts a second life on the Mac. If he already kept
+memories on this Mac, it offers to move them onto the drive (type yes).
 
 What it does — and it **creates only**; it never moves, renames or deletes a
 file already on the drive:
@@ -76,8 +82,9 @@ nothing.
 
 ## 3. Install JEFFEREY on this Mac
 
-Double-click **`Install JEFFEREY.command`** (in `~/JEFFEREY`, or in
-`Self-Cloud/app` on the drive — same thing). It:
+Double-click **`Install JEFFEREY.command`** in `~/JEFFEREY` (not the copy on
+the drive — it refuses that one, because Claude would stop the moment the
+drive is unplugged). It:
 
 1. makes JEFFEREY a private Python space (`~/.jefferey/venv`);
 2. runs the whole self-test — **if anything fails it refuses to connect**;
@@ -86,7 +93,12 @@ Double-click **`Install JEFFEREY.command`** (in `~/JEFFEREY`, or in
    album, money and rules — because this is *your* Claude on *your* Mac. It
    still cannot widen any key, its own included, or let any AI spend: only you
    can, by typing it yourself (see *What JEFFEREY may do for you*, below).
-   Any other connections in Claude's config are left alone and listed.
+   Any other connections in Claude's config are left alone and listed —
+   except that one which can read your home folder or the drive is named in
+   a loud warning, with an offer to disconnect it (type yes; the backup
+   keeps it). Reinstalling keeps the key Claude held before. If a Self-Cloud
+   drive is plugged in that this Mac does not know, it asks if it is yours;
+   with none, it asks whether you have one.
    (An earlier version of this page said `claude-raw`. It was wrong; the
    installer has always given your own Desktop the caretaker key. Install a
    narrower one with `python3 tools/install.py --client claude-raw`.)
@@ -106,7 +118,7 @@ With the drive plugged in, everything he learns lands on the drive.
 *directly* — not through JEFFEREY's gate, and not through the egress door, so
 nothing it reads appears in *What left the house*. That is fine for folders
 you meant to share. It should never name the Self-Cloud drive or your home
-folder.
+folder; the installer warns you if it does.
 
 ---
 
@@ -248,9 +260,10 @@ to a plain Claude or ChatGPT. Only you let more people see something:
 |---|---|---|
 | `Make this drive a Self-Cloud.command` | folders, marker, cloud icon, Start button on the drive | no |
 | `Install JEFFEREY.command` | private Python, self-test, wires Claude Desktop | one `pip install` |
+| `Update JEFFEREY.command` | every copy to the same newest version, reinstall, self-test | one download |
 | `Show me my life.command` | index the photographs, open the wall | one-time model download |
 | `Record my voice.command` | enrol your voice onto the drive | no |
-| `What left the house.command` | the egress log, in plain words; shut / open the door | no |
+| `What left the house.command` | the egress log, in plain words; type `shut` (or `fermer`) / `open` | no |
 | `Restore my memories.command` | see the copies of your memories JEFFEREY keeps, and put one back | no |
 | `Forget or bring back.command` | OK a big forget an AI asked for, put back something removed, or erase words for good | no |
 | `Talk to JEFFEREY on this Mac.command` | JEFFEREY riding Hermes on your own Mac, same conscience | one-time download; then no |
@@ -261,8 +274,10 @@ to a plain Claude or ChatGPT. Only you let more people see something:
 With the drive in: `<drive>/.selfcloud/jefferey/` — `conscience.json` (+
 history, and `conscience.access.jsonl`: who asked for what), `photo-index/`,
 `voice/`, `egress.jsonl`, `door-shut` (exists only while the door is shut).
-Without the drive: `~/.jefferey/` and `~/.selfcloud/`.
-The drive always wins when it is plugged in; unplugged means gone.
+Only if you chose to keep them on this Mac (or already did before October
+2026): `~/.jefferey/` and `~/.selfcloud/`. Once your drive is paired,
+unplugged means off: every tool says "your Self-Cloud drive is not plugged
+in", and nothing is kept anywhere else.
 
 ## If something goes wrong
 
@@ -280,8 +295,14 @@ The drive always wins when it is plugged in; unplugged means gone.
   deleted) and puts back the one you pick. What is there now is kept too, so
   it can be undone. You can edit the memory file by hand; if a typo makes it
   unreadable, he tells you which line instead of quietly using an old copy.
+- JEFFEREY says your **drive is not plugged in** → plug it in, type its
+  password if the Mac asks, and ask again. No restart needed.
+- He says a drive **is not yours** or **not paired** → if it is yours,
+  double-click `Install JEFFEREY.command` and type yes when it asks.
 - Two Self-Cloud drives plugged in at once → every tool refuses to guess and
   says so. Unplug one.
+- He says your memories were saved by a **newer JEFFEREY** → double-click
+  `Update JEFFEREY.command`.
 - The icon didn't change → eject, re-plug.
 - You want everything to stop → unplug the drive. That is the whole security
   model, and it is not a metaphor.

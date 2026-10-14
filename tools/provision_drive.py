@@ -7,6 +7,7 @@ The hard drive IS the product. Plug it into any Mac and it is your cloud:
 your photographs, your conscience, your voice, and the software that runs
 them, all on the drive — the Mac only lends its screen and its Python.
 
+    python tools/provision_drive.py --interactive          # what the launcher runs
     python tools/provision_drive.py /Volumes/MyDisk --name "Self-Cloud"
     python tools/provision_drive.py /Volumes/Self-Cloud --check
 
@@ -20,33 +21,48 @@ What it does, and nothing more:
                               Self-Cloud connector; JEFFEREY's data goes
                               under .selfcloud/jefferey/ and nowhere else
   2. MARKER — .selfcloud/selfcloud.json so every tool knows this drive is
-     the one, and where the life lives (see connector/home.py).
-  3. ICON — the Self-Cloud cloud as the drive's icon in Finder
-     (.VolumeIcon.icns from the real logo, plus the Finder custom-icon bit).
-  4. NAME — optionally renames the volume (macOS, via diskutil).
-  5. LAUNCHER — Self-Cloud/Start Self-Cloud.command: double-click on ANY Mac
+     the one, and where the life lives (see connector/home.py). Written
+     whole or not at all.
+  3. PAIRING — this Mac remembers the drive's id (~/.jefferey/drives.json):
+     JEFFEREY uses only drives the owner has said are his, and with his
+     drive away it is off — it never starts a second life on the laptop.
+  4. ICON — the Self-Cloud cloud as the drive's icon in Finder.
+  5. NAME — renames the volume only if the owner typed yes (macOS), and
+     never to a name another plugged-in drive already has.
+  6. LAUNCHER — Self-Cloud/Start Self-Cloud.command: double-click on ANY Mac
      and it points every tool at this drive and opens the wall.
+  7. YOUR MEMORIES — if JEFFEREY already kept a life on this Mac, and the
+     owner says yes, it is copied onto the drive, checked, and the Mac's
+     copy put aside (never deleted).
 
 It refuses to touch a drive that already holds a different Self-Cloud marker
-unless you say --force, and it never deletes or moves a single existing file.
-Existing user folders are read-only to it, always (the connector's rule 6.2,
-which is also ours).
+unless you say --force (which keeps the id, even from a damaged marker), and
+it never deletes or moves a single existing file. It writes nothing through
+a shortcut (a symbolic link): a tampered drive cannot make it overwrite a
+file somewhere else (I-55). Existing user folders are read-only to it,
+always (the connector's rule 6.2, which is also ours).
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import errno
+import hashlib
+import io
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
+import stat as _stat
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
+import answers  # noqa: E402
 import home  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -56,6 +72,11 @@ LOGO_CANDIDATES = [
     REPO / "docs" / "selfcloud-logo.png",
 ]
 FOLDERS = ("Self-Cloud", "originals", "library", ".selfcloud", ".selfcloud/jefferey")
+NAME = "Self-Cloud"
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+# Volumes that are never a drive someone means (macOS shows these in /Volumes).
+SYSTEM_NAMES = {"Macintosh HD", "Macintosh HD - Data", "Recovery", "Preboot",
+                "VM", "Update", "com.apple.TimeMachine.localsnapshots"}
 
 README = """SELF-CLOUD
 ==========
@@ -95,7 +116,8 @@ if [ ! -d "$CODE/tools" ]; then
     echo
     echo "  The software isn't on this drive yet. Once, with a network:"
     echo "    git clone https://github.com/lczako-eng/jeffrey-local-butler-ai \"$CODE\""
-    echo "    (cd \"$CODE\" && git checkout claude/substantiation-discussion-8dmu3c)"
+    echo "  Then, on your Mac, double-click 'Update JEFFEREY.command': it brings"
+    echo "  this copy to the same version as the one on the Mac."
     echo
     echo "Press return to close."; read -r _; exit 1
 fi
@@ -119,6 +141,111 @@ def ok(m): say(f"  ✓ {m}")
 def warn(m): say(f"  ! {m}")
 
 
+class Refused(Exception):
+    """Provisioning stopped, with a reason in plain words. Nothing on the
+    drive was deleted; what was already made is listed above it."""
+
+
+# ----------------------------------------------------------- safe writing
+def _lstat(p: Path):
+    try:
+        return os.lstat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
+def _write_new(path: Path, data: bytes, mode: int = 0o644) -> None:
+    """Write a file of ours on the drive: never through a link, never half.
+    A fresh temp file (O_CREAT|O_EXCL|O_NOFOLLOW) gets the bytes and its
+    mode, is flushed, then renamed over the old one — a rename replaces a
+    link itself, it never writes where the link points."""
+    st = _lstat(path)
+    if st is not None and (_stat.S_ISLNK(st.st_mode) or not _stat.S_ISREG(st.st_mode)):
+        raise Refused(f"There is a shortcut or a folder where JEFFEREY's file "
+                      f"'{path.name}' should be, so nothing was written there. Someone "
+                      f"may have tampered with this drive; ask someone you trust to look.")
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
+    try:
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fchmod(fd, mode)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def writable(volume: Path) -> bool:
+    """Can this drive be written to? (A Windows-formatted drive on a Mac, a
+    software installer, a locked card: no.)"""
+    try:
+        if os.statvfs(volume).f_flag & getattr(os, "ST_RDONLY", 1):
+            return False
+    except (OSError, AttributeError):
+        pass
+    return os.access(volume, os.W_OK)
+
+
+def _plain_oserror(e: OSError) -> str:
+    if e.errno == errno.EROFS:
+        return "the drive is read-only (it may be formatted for Windows, or locked)"
+    if e.errno in (errno.EACCES, errno.EPERM):
+        return "this Mac is not allowed to write to it"
+    if e.errno == errno.ENOSPC:
+        return "the drive is full"
+    if e.errno in (errno.ENOTDIR, errno.EEXIST):
+        return "a file is in the way where a folder should be"
+    return e.strerror or str(e)
+
+
+# ----------------------------------------------------------- the marker
+def read_existing(volume: Path) -> tuple[str, dict, str | None]:
+    """('none' | 'valid' | 'invalid' | 'link', marker, an id worth keeping)."""
+    marker = Path(volume) / home.MARKER
+    sc = _lstat(Path(volume) / ".selfcloud")
+    if sc is not None and _stat.S_ISLNK(sc.st_mode):
+        return "link", {}, None
+    st = _lstat(marker)
+    if st is None:
+        return "none", {}, salvage_id(volume, b"")
+    if _stat.S_ISLNK(st.st_mode):
+        return "link", {}, None
+    try:
+        raw = home._read_small(marker)
+    except OSError:
+        return "invalid", {}, salvage_id(volume, b"")
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return "invalid", {}, salvage_id(volume, raw)
+    if home.valid_marker(obj):
+        return "valid", obj, obj["id"]
+    return "invalid", obj if isinstance(obj, dict) else {}, salvage_id(volume, raw)
+
+
+def salvage_id(volume: Path, raw: bytes) -> str | None:
+    """The drive's id from a damaged marker, or from the README beside it, so
+    --force keeps it (records elsewhere are keyed to it)."""
+    m = re.search(rb'"id"\s*:\s*"([0-9a-f]{16})"', raw or b"")
+    if m:
+        return m.group(1).decode()
+    try:
+        text = home._read_small(Path(volume) / "Self-Cloud" / "README.txt").decode("utf-8", "replace")
+    except OSError:
+        return None
+    m = re.search(r"\bid ([0-9a-f]{16})\b", text)
+    return m.group(1) if m else None
+
+
 # ------------------------------------------------------------------- icon
 def find_logo() -> Path | None:
     for p in LOGO_CANDIDATES:
@@ -127,8 +254,9 @@ def find_logo() -> Path | None:
     return None
 
 
-def make_icns(logo: Path, out: Path, size: int = 1024) -> Path:
+def make_icns(logo: Path, out: Path | None = None, size: int = 1024) -> bytes:
     """The cloud, square, background keyed to transparent, as a Mac .icns.
+    Returns the bytes (and writes them to `out`, safely, if given).
 
     Pillow writes ICNS natively, so this needs no Xcode and runs anywhere.
     """
@@ -163,15 +291,18 @@ def make_icns(logo: Path, out: Path, size: int = 1024) -> Path:
         putdata(keyed)
 
     im = im.resize((size, size), Image.LANCZOS)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    im.save(out, format="ICNS")
-    return out
+    buf = io.BytesIO()
+    im.save(buf, format="ICNS")
+    data = buf.getvalue()
+    if out is not None:
+        _write_new(Path(out), data)
+    return data
 
 
-def set_volume_icon(volume: Path, icns: Path) -> bool:
+def set_volume_icon(volume: Path, icns: bytes) -> bool:
     """Put .VolumeIcon.icns at the root and flip Finder's custom-icon bit."""
     dest = volume / ".VolumeIcon.icns"
-    shutil.copyfile(icns, dest)
+    _write_new(dest, icns)
     if platform.system() != "Darwin":
         warn("Icon file placed; the Finder flag can only be set on a Mac.")
         return False
@@ -189,7 +320,7 @@ def set_volume_icon(volume: Path, icns: Path) -> bool:
             warn(f"Couldn't set the icon flag: {r.stderr.strip()[:120]}")
             return False
     try:                                          # hide the icon file itself
-        subprocess.run(["chflags", "hidden", str(dest)], capture_output=True)
+        subprocess.run(["chflags", "-h", "hidden", str(dest)], capture_output=True)
     except Exception:
         pass
     # Finder caches; a touch on the volume usually refreshes it.
@@ -197,43 +328,253 @@ def set_volume_icon(volume: Path, icns: Path) -> bool:
     return True
 
 
+# ----------------------------------------------------------- encryption
+def is_encrypted(volume: Path, device: str | None = None) -> bool | None:
+    """True / False on a Mac; None where we cannot tell. Checked, not assumed
+    — and by the drive's DEVICE when it is known, so a second drive with the
+    same name can never be checked in its place (I-42)."""
+    if platform.system() != "Darwin":
+        return None
+    return home.encrypted_from(home.disk_info(device or volume))
+
+
+def _mount_of(device: str) -> Path | None:
+    mp = home.disk_info(device).get("MountPoint")
+    return Path(mp) if mp else None
+
+
+# --------------------------------------------------------- your memories
+def home_life() -> list[Path]:
+    """What JEFFEREY kept of the owner's life on this Mac (never the venv,
+    the list of drives, or the door switch)."""
+    d = home.owner_dir()
+    try:
+        kids = sorted(d.iterdir())
+    except OSError:
+        return []
+    return [p for p in kids
+            if (p.name.startswith("conscience") or p.name.startswith("egress.jsonl"))
+            and not p.name.endswith(".lock") and not p.is_symlink()]
+
+
+def _sha_file(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _tree(p: Path) -> list[Path]:
+    if p.is_dir() and not p.is_symlink():
+        return [q for q in sorted(p.rglob("*")) if q.is_file() and not q.is_symlink()]
+    return [p] if p.is_file() and not p.is_symlink() else []
+
+
+def move_home_life(drive_root: Path, out=say) -> dict:
+    """Copy the life kept on this Mac onto the drive, check every byte, then
+    put the Mac's copy aside in ~/.jefferey/moved-to-self-cloud-<date>/ —
+    never delete it. Only when the drive has no life of its own yet: two
+    lives are never merged by guessing."""
+    src = home.owner_dir()
+    dst = Path(drive_root) / home.NAMESPACE
+    items = home_life()
+    if not (src / "conscience.json").is_file():
+        return {"moved": 0}
+    if (dst / "conscience.json").exists():
+        out("  ! Your drive already holds memories, and this Mac holds some too. Nothing")
+        out("    was moved or mixed: JEFFEREY will use the drive's. The Mac's copy stays")
+        out(f"    where it is ({src}); ask someone you trust to help you bring the two together.")
+        return {"moved": 0, "both": True}
+    for f in FOLDERS[3:]:
+        p = Path(drive_root) / f
+        st = _lstat(p)
+        if st is not None and _stat.S_ISLNK(st.st_mode):
+            raise Refused("JEFFEREY's folder on the drive is a shortcut; nothing was moved.")
+        if st is None:
+            home.guard(p)
+            p.mkdir(mode=0o700)
+    copied = []
+    for it in items:
+        target = dst / it.name
+        if os.path.lexists(target):
+            raise Refused(f"'{it.name}' is already on the drive; nothing was moved.")
+        if it.is_dir():
+            shutil.copytree(it, target, symlinks=False,
+                            ignore=lambda d, names: [n for n in names if (Path(d) / n).is_symlink()])
+        else:
+            shutil.copy2(it, target)
+        copied.append((it, target))
+    for a, b in copied:                   # every byte, before anything is put aside
+        fa, fb = _tree(a), _tree(b)
+        if len(fa) != len(fb) or any(_sha_file(x) != _sha_file(y) for x, y in zip(fa, fb)):
+            raise Refused("The copy on the drive did not match the Mac's, so the Mac's "
+                          "memories were left exactly where they are. Try again.")
+    aside = src / f"moved-to-self-cloud-{dt.date.today().isoformat()}"
+    n = 1
+    while os.path.lexists(aside):
+        n += 1
+        aside = src / f"moved-to-self-cloud-{dt.date.today().isoformat()}-{n}"
+    aside.mkdir(mode=0o700)
+    for a, _ in copied:
+        os.rename(a, aside / a.name)
+    out(f"  ✓ moved your memories onto the drive ({len(copied)} item(s), every byte checked)")
+    out(f"    The Mac's old copy is put aside in {aside}.")
+    out("    JEFFEREY never reads it again. Delete that folder once you have checked")
+    out("    the drive, if you want no copy of your life left on this Mac.")
+    return {"moved": len(copied), "aside": str(aside)}
+
+
 # --------------------------------------------------------------- provision
+def _precheck(volume: Path) -> None:
+    """Before anything is made: every path this writes is either absent or
+    the right kind of thing — never a shortcut. (A gift drive whose
+    'Start Self-Cloud.command' pointed at ~/.zshrc used to get it
+    overwritten, and a dangling marker link created a LaunchAgent.)"""
+    for f in FOLDERS:
+        st = _lstat(volume / f)
+        if st is None:
+            continue
+        if _stat.S_ISLNK(st.st_mode):
+            raise Refused(f"'{f}' on this drive is a shortcut to somewhere else, so "
+                          f"nothing was written. Someone may have tampered with this "
+                          f"drive; ask someone you trust to look at it.")
+        if not _stat.S_ISDIR(st.st_mode):
+            raise Refused(f"There is a file called '{f}' on this drive where a folder "
+                          f"should be, so nothing was changed. Move that file somewhere "
+                          f"else first.")
+    for rel in (home.MARKER, Path("Self-Cloud/README.txt"),
+                Path("Self-Cloud/Start Self-Cloud.command"), Path(".VolumeIcon.icns"),
+                Path(".selfcloud/jefferey/icon.icns")):
+        st = _lstat(volume / rel)
+        if st is not None and (_stat.S_ISLNK(st.st_mode) or not _stat.S_ISREG(st.st_mode)):
+            raise Refused(f"'{rel}' on this drive is a shortcut or a folder, so nothing "
+                          f"was written. Someone may have tampered with this drive; ask "
+                          f"someone you trust to look at it.")
+
+
 def provision(volume: Path, name: str, rename: bool, force: bool,
-              logo: Path | None) -> dict:
+              logo: Path | None, pair: bool = True, move_life: bool = False) -> dict:
+    """Make the drive a Self-Cloud drive. Raises Refused, in plain words,
+    when it cannot — a read-only or installer volume, a damaged marker
+    without --force, a shortcut where a file should be, a write that fails."""
     volume = Path(volume).expanduser()
-    if not volume.is_dir():
-        raise SystemExit(f"\n  Nothing mounted at {volume}.\n")
-    marker = volume / home.MARKER
-    existing = {}
-    if marker.exists():
-        try:
-            existing = json.loads(marker.read_text())
-        except Exception:
-            existing = {"corrupt": True}
-        if existing and not force:
-            say(f"\n  This drive is already a Self-Cloud drive "
-                f"('{existing.get('name', '?')}', id {existing.get('id', '?')}).")
-            say("  Nothing changed. Use --force to re-provision (keeps the id).\n")
-            return existing
+    if not volume.is_dir() or volume.is_symlink():
+        raise Refused(f"Nothing is mounted at {volume}.")
+    if not writable(volume):
+        raise Refused(f"'{volume.name}' cannot be written to — it may be read-only, a "
+                      f"software installer, or formatted for Windows — so nothing was "
+                      f"changed. A Self-Cloud drive must be one this Mac can write to "
+                      f"(formatted as APFS or Mac OS Extended in Disk Utility).")
+    state, existing, keep_id = read_existing(volume)
+    if state == "link":
+        raise Refused("The Self-Cloud marker on this drive is a shortcut to somewhere "
+                      "else, so nothing was written. Someone may have tampered with this "
+                      "drive; ask someone you trust to look at it.")
+    if state == "valid" and not force:
+        say(f"\n  This drive is already a Self-Cloud drive "
+            f"('{home.safe_name(existing.get('name'))}', id {existing['id']}).")
+        say("  Nothing changed. Use --force to re-provision (keeps the id).\n")
+        return existing
+    if state == "invalid" and not force:
+        raise Refused("This drive's Self-Cloud marker is damaged, so nothing was changed. "
+                      + (f"Its id was {keep_id}; " if keep_id else "")
+                      + "to repair it and keep the id, run this again with --force.")
 
+    _precheck(volume)
     say(f"\n  Provisioning {volume} as '{name}'\n")
+    try:
+        info = _lay_out(volume, name, existing, keep_id, logo)
+    except Refused:
+        raise
+    except OSError as e:
+        raise Refused(f"Setting up the drive stopped: {_plain_oserror(e)}. Nothing on it "
+                      f"was deleted; whatever was made before this is listed above. "
+                      f"Fix that, then double-click this again.") from None
 
+    # Name. A rename moves the mount point, so everything after it uses the
+    # drive's NEW place, found by its device — never by guessing parent/name,
+    # which with a second 'Self-Cloud' plugged in pointed at the other drive.
+    here = volume
+    disk = home.disk_info(volume)
+    device = disk.get("DeviceIdentifier")
+    if rename and platform.system() == "Darwin" and volume.name != name:
+        taken = volume.parent / name
+        if os.path.lexists(taken):
+            warn(f"another drive is already called '{name}', so this one keeps its name "
+                 f"'{volume.name}' — two drives with one name is how the wrong one gets "
+                 f"checked.")
+        else:
+            r = subprocess.run(["diskutil", "rename", str(device or volume), name],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                found = _mount_of(device) if device else None
+                if found is None:
+                    cand = volume.parent / name
+                    mk = home.read_marker(cand) if cand.is_dir() else None
+                    found = cand if mk and mk.get("id") == info["id"] else None
+                if found is None:
+                    warn("renamed, but JEFFEREY could not find where the drive is now; "
+                         "eject it and plug it back in")
+                    here = None
+                else:
+                    here = found
+                    ok(f"renamed the volume to '{name}' — it is now at {here}")
+            else:
+                warn(f"couldn't rename: {r.stderr.strip()[:120]}")
+    elif rename and platform.system() != "Darwin":
+        warn("renaming needs a Mac (diskutil)")
+
+    if pair:
+        try:
+            home.pair(here or volume, info, disk.get("VolumeUUID"))
+            ok("this Mac now knows the drive is yours: JEFFEREY will use it, and no "
+               "drive you have not said yes to")
+        except OSError as e:
+            warn(f"this Mac could not remember the drive ({_plain_oserror(e)}); run "
+                 f"python3 connector/home.py pair '{here or volume}'")
+    if move_life and here is not None:
+        move_home_life(here)
+
+    if here is not None:
+        say(f"\n  Done. Open {here}/Self-Cloud/ and double-click "
+            f"Start Self-Cloud.command.\n")
+    enc = is_encrypted(here or volume, device)
+    if enc is True:
+        ok("the drive is encrypted — unplugged, it reads as noise without "
+           "your passphrase")
+        say()
+    elif enc is False:
+        warn("this drive is NOT encrypted. Everything on it is readable by "
+             "whoever holds it.")
+        say("    Read ENCRYPT_THE_DRIVE.md in the Self-Cloud repo before you "
+            "put photographs on it.\n")
+    else:
+        warn("JEFFEREY could NOT verify that this drive is encrypted. Check it "
+             "yourself: Finder → right-click the drive — if it offers 'Encrypt', "
+             "it is not encrypted yet.\n")
+    return info
+
+
+def _lay_out(volume: Path, name: str, existing: dict, keep_id: str | None,
+             logo: Path | None) -> dict:
     # 1. layout — create only; never touch what is there
     for f in FOLDERS:
         p = volume / f
-        if not p.exists():
-            p.mkdir(parents=True)
+        if _lstat(p) is None:
+            p.mkdir(mode=0o700 if f == ".selfcloud/jefferey" else 0o755)
             ok(f"created {f}/")
         else:
             ok(f"kept    {f}/ (already there)")
 
-    # 2. marker
+    # 2. marker, written whole or not at all
+    now = dt.datetime.now().isoformat(timespec="seconds")
     info = {
-        "kind": "self-cloud-drive",
+        "kind": home.MARKER_KIND,
         "name": name,
-        "id": existing.get("id") or secrets.token_hex(8),
-        "created": existing.get("created") or dt.datetime.now().isoformat(timespec="seconds"),
-        "provisioned": dt.datetime.now().isoformat(timespec="seconds"),
+        "id": keep_id or secrets.token_hex(8),
+        "created": existing.get("created") if isinstance(existing.get("created"), str) else now,
+        "provisioned": now,
         "layout": {"owner_facing": "Self-Cloud/", "originals": "originals/",
                    "library": "library/", "machine": ".selfcloud/",
                    "jefferey": ".selfcloud/jefferey/"},
@@ -244,86 +585,56 @@ def provision(volume: Path, name: str, rename: bool, force: bool,
             "unplugged means gone: no cache, no queue, no shadow copy elsewhere",
         ],
     }
-    marker.write_text(json.dumps(info, indent=2))
-    ok("wrote .selfcloud/selfcloud.json")
+    _write_new(volume / home.MARKER, (json.dumps(info, indent=2) + "\n").encode())
+    ok("wrote .selfcloud/selfcloud.json" + (f" (kept the id {keep_id})" if keep_id else ""))
 
     # 3. owner-facing folder
-    (volume / "Self-Cloud" / "README.txt").write_text(
-        README.format(name=name, when=info["provisioned"][:10], id=info["id"]))
-    launcher = volume / "Self-Cloud" / "Start Self-Cloud.command"
-    launcher.write_text(LAUNCHER)
-    launcher.chmod(0o755)
+    _write_new(volume / "Self-Cloud" / "README.txt",
+               README.format(name=name, when=info["provisioned"][:10], id=info["id"]).encode())
+    _write_new(volume / "Self-Cloud" / "Start Self-Cloud.command", LAUNCHER.encode(), 0o755)
     ok("wrote Self-Cloud/README.txt and Start Self-Cloud.command")
 
     # 4. icon
     logo = logo or find_logo()
-    if logo:
-        icns = make_icns(logo, volume / ".selfcloud" / "jefferey" / "icon.icns")
-        if set_volume_icon(volume, icns):
-            ok(f"set the drive icon from {logo.name} — eject and re-mount to see it")
-        else:
-            ok(f"icon written from {logo.name} (flag needs a Mac)")
-    else:
+    if not logo:
         warn("no logo found to make the icon from")
-
-    # 5. name. A rename moves the mount point, so everything printed after it
-    # must use the NEW path — telling the owner to open a folder that no
-    # longer exists is how a working drive looks broken.
-    here = volume
-    if rename and platform.system() == "Darwin" and volume.name != name:
-        r = subprocess.run(["diskutil", "rename", str(volume), name],
-                           capture_output=True, text=True)
-        if r.returncode == 0:
-            moved = volume.parent / name
-            here = moved if moved.is_dir() else volume
-            ok(f"renamed the volume to '{name}' — it is now at {here}")
-        else:
-            warn(f"couldn't rename: {r.stderr.strip()[:120]}")
-    elif rename and platform.system() != "Darwin":
-        warn("renaming needs a Mac (diskutil)")
-
-    say(f"\n  Done. Open {here}/Self-Cloud/ and double-click "
-        f"Start Self-Cloud.command.\n")
-    enc = is_encrypted(here)
-    if enc is True:
-        ok("the drive is encrypted — unplugged, it reads as noise without "
-           "your passphrase")
-        say()
-    elif enc is False:
-        warn("this drive is NOT encrypted. Everything on it is readable by "
-             "whoever holds it.")
-        say(f"    Read ENCRYPT_THE_DRIVE.md in the Self-Cloud repo before you "
-            f"put photographs on it.\n")
+        return info
+    try:
+        icns = make_icns(logo, volume / ".selfcloud" / "jefferey" / "icon.icns")
+    except ImportError:
+        warn("the cloud icon needs the picture library (Pillow); the drive works without it")
+        return info
+    if set_volume_icon(volume, icns):
+        ok(f"set the drive icon from {logo.name} — eject and re-mount to see it")
+    else:
+        ok(f"icon written from {logo.name} (flag needs a Mac)")
     return info
 
 
-def is_encrypted(volume: Path) -> bool | None:
-    """True / False on a Mac; None where we cannot tell. Checked, not assumed:
-    an earlier version told the owner to go and encrypt a drive he had
-    encrypted the day before."""
-    if platform.system() != "Darwin":
-        return None
-    try:
-        r = subprocess.run(["diskutil", "info", str(volume)],
-                           capture_output=True, text=True, timeout=20)
-    except Exception:
-        return None
-    for line in r.stdout.splitlines():
-        key, _, val = line.strip().partition(":")
-        if key.strip() in ("FileVault", "Encrypted"):
-            if val.strip().lower().startswith("yes"):
-                return True
-    return False if r.returncode == 0 else None
-
-
+# ------------------------------------------------------------------ check
 def check(volume: Path) -> int:
     volume = Path(volume).expanduser()
-    marker = volume / home.MARKER
-    if not marker.exists():
+    state, info, keep_id = read_existing(volume)
+    if state == "none":
         say(f"\n  {volume} is not a Self-Cloud drive (no marker).\n")
         return 1
-    info = json.loads(marker.read_text())
-    say(f"\n  {info.get('name')}  ·  id {info.get('id')}  ·  provisioned {info.get('provisioned', '')[:10]}")
+    if state == "link":
+        say(f"\n  {volume}: the Self-Cloud marker is a shortcut to somewhere else. "
+            f"JEFFEREY will not use this drive.\n")
+        return 1
+    if state == "invalid":
+        say(f"\n  {volume}: the Self-Cloud marker is damaged, so JEFFEREY will not use "
+            f"this drive." + (f" Its id was {keep_id}." if keep_id else "")
+            + "\n  To repair it and keep the id: python3 tools/provision_drive.py "
+              f"'{volume}' --force\n")
+        return 1
+    say(f"\n  {home.safe_name(info.get('name'))}  ·  id {info.get('id')}  ·  "
+        f"provisioned {str(info.get('provisioned', ''))[:10]}")
+    try:
+        mine = info["id"] in home.pinned_ids()
+    except home.PairingDamaged:
+        mine = False
+    say(f"  {'✓' if mine else '·'} {'paired with this Mac' if mine else 'NOT paired with this Mac'}")
     for f in FOLDERS:
         say(f"  {'✓' if (volume / f).is_dir() else '✗'} {f}/")
     say(f"  {'✓' if (volume / '.VolumeIcon.icns').exists() else '✗'} .VolumeIcon.icns")
@@ -335,17 +646,181 @@ def check(volume: Path) -> int:
                      ("photo index", volume / home.NAMESPACE / "photo-index" / "index.sqlite"),
                      ("voice", volume / home.NAMESPACE / "voice")):
         say(f"  {'✓' if p.exists() else '·'} {label}")
+    enc = is_encrypted(volume)
+    say("  " + {True: "✓ encrypted", False: "! NOT encrypted",
+                None: "! could NOT verify encryption"}[enc])
     say()
+    return 0
+
+
+# ------------------------------------------------------- the launcher's questions
+def _why_not(v: Path) -> str | None:
+    """Why this volume is not offered as a drive to set up, or None."""
+    try:
+        if os.stat(v).st_dev == os.stat("/").st_dev:
+            return "the Mac's own disk"
+    except OSError:
+        return "it cannot be read"
+    info = home.disk_info(v)
+    if info.get("BusProtocol") == "Disk Image" or info.get("VirtualOrPhysical") == "Virtual":
+        return "a software installer (a disk image), not a drive"
+    if info.get("WritableVolume") is False or not writable(v):
+        return "it cannot be written to (read-only, or formatted for Windows)"
+    return None
+
+
+def list_drives(bases: list[str] | None = None) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """(drives someone could mean, [(volume, why it is not offered)])."""
+    offer, skipped = [], []
+    for base in bases or ["/Volumes"]:
+        try:
+            kids = sorted(Path(base).iterdir())
+        except OSError:
+            continue
+        for v in kids:
+            if v.is_symlink() or not v.is_dir() or v.name in SYSTEM_NAMES:
+                continue
+            why = _why_not(v)
+            (skipped.append((v, why)) if why else offer.append(v))
+    return offer, skipped
+
+
+def _clean_path(raw: str) -> str:
+    """What Finder puts in the window when a drive is dragged in."""
+    s = raw.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
+        s = s[1:-1]
+    return re.sub(r"\\(.)", r"\1", s)
+
+
+def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
+    """'Make this drive a Self-Cloud.command'. Asks, in plain words; a yes is
+    only ever typed (I-60, I-65): a closed window chooses nothing, renames
+    nothing, and moves nothing."""
+    drives, skipped = list_drives(bases)
+    out("")
+    if not drives:
+        out("  No drive that can be set up is plugged in. Plug it in and double-click this again.")
+        for v, why in skipped:
+            out(f"     (not offered: '{v.name}' — {why})")
+        return 1
+    out("  Which drive?")
+    for i, v in enumerate(drives, 1):
+        out(f"     {i}) {v.name}")
+    for v, why in skipped:
+        out(f"     (not offered: '{v.name}' — {why})")
+    out("")
+    one = len(drives) == 1
+    out(f"  Press return for '{drives[0].name}' — or type a number, a name, or drag one in."
+        if one else "  Type a number or a name, or drag a drive in from Finder, then press return.")
+    vol = None
+    for _ in range(8):
+        try:
+            raw = input_fn("  drive: ")
+        except (EOFError, KeyboardInterrupt):
+            out("\n  Nothing was changed.")
+            return 1
+        a = _clean_path(raw)
+        if not a and one:
+            vol = drives[0]
+        elif a.isdigit() and 1 <= int(a) <= len(drives):
+            vol = drives[int(a) - 1]
+        elif a:
+            p = Path(a) if a.startswith("/") else Path((bases or ["/Volumes"])[0]) / a
+            if not p.is_dir():
+                out(f"  Nothing is plugged in called '{a}' — try again.")
+                continue
+            why = _why_not(p)
+            if why:
+                out(f"  '{p.name}' cannot be used: {why}. Choose another.")
+                continue
+            vol = p
+        else:
+            out("  Type a number from the list, then press return.")
+            continue
+        break
+    if vol is None:
+        out("  Nothing was changed.")
+        return 1
+    out(f"  Using {vol}")
+
+    state, existing, keep_id = read_existing(vol)
+    force = False
+    if state == "valid":
+        out(f"\n  This drive is already a Self-Cloud drive "
+            f"('{home.safe_name(existing.get('name'))}', id {existing['id']}).")
+        try:
+            mine = existing["id"] in home.pinned_ids()
+        except home.PairingDamaged:
+            mine = False
+        if mine:
+            out("  This Mac already knows it is yours. Nothing to do.")
+            return 0
+        out("  If you bought it second-hand or it is someone else's, it may hold their life:")
+        out("  answer no, and JEFFEREY will not use it.")
+        if not answers.ask_yes_no("  Is this your own Self-Cloud drive? Type yes or no: ",
+                                  input_fn, out):
+            out("  Nothing was changed. JEFFEREY will not use this drive.")
+            return 1
+        try:
+            home.pair(vol, existing)
+        except OSError as e:
+            out(f"  ! This Mac could not remember the drive ({_plain_oserror(e)}).")
+            return 1
+        out("  ✓ This Mac now knows the drive is yours. Quit Claude completely and open")
+        out("    it again so it picks this up.")
+        if (home.owner_dir() / "conscience.json").is_file() and answers.ask_yes_no(
+                "  Your memories are on this Mac. Move them onto the drive? Type yes or no: ",
+                input_fn, out):
+            try:
+                move_home_life(vol, out)
+            except (Refused, OSError) as e:
+                out(f"  ! {e}")
+                return 1
+        return 0
+    if state == "link":
+        out("  The Self-Cloud marker on this drive is a shortcut to somewhere else, so")
+        out("  nothing was written. Someone may have tampered with it; ask someone you trust.")
+        return 1
+    if state == "invalid":
+        out("  This drive's Self-Cloud marker is damaged"
+            + (f" (its id was {keep_id})." if keep_id else "."))
+        if not answers.ask_yes_no("  Repair it, keeping its id? Type yes or no: ", input_fn, out):
+            out("  Nothing was changed.")
+            return 1
+        force = True
+
+    rename = False
+    if vol.name != NAME:
+        rename = answers.ask_yes_no(f"  Name it '{NAME}' in Finder too? Type yes or no: ",
+                                    input_fn, out)
+    move = False
+    if (home.owner_dir() / "conscience.json").is_file():
+        out("\n  JEFFEREY has been keeping your memories on this Mac. Moving them onto the")
+        out("  drive means they live there from now on; the Mac's copy is put aside, not")
+        out("  deleted, until you say so.")
+        move = answers.ask_yes_no("  Move them onto the drive? Type yes or no: ", input_fn, out)
+    try:
+        provision(vol, NAME, rename, force, None, pair=True, move_life=move)
+    except Refused as e:
+        out(f"\n  ! {e}\n")
+        return 1
+    out("  If the icon hasn't changed yet: eject the drive and plug it back in.")
+    out("  Then open the Self-Cloud folder on it and double-click Start Self-Cloud.")
     return 0
 
 
 # ---------------------------------------------------------------- selftest
 def selftest() -> int:
-    import struct
     import tempfile
     from PIL import Image
 
     td = Path(tempfile.mkdtemp(prefix="drive-"))
+    saved = {k: os.environ.get(k) for k in ("JEFFEREY_DRIVES", "SELFCLOUD_ROOT",
+                                             "JEFFEREY_CONSCIENCE_PATH", "SELFCLOUD_INDEX",
+                                             "SELFCLOUD_VOICE", "SELFCLOUD_DISCS",
+                                             "JEFFEREY_EGRESS", "JEFFEREY_DOOR")}
+    os.environ["JEFFEREY_DRIVES"] = str(td / "drives.json")     # never the real Mac's list
     try:
         vol = td / "FAKEDISK"
         vol.mkdir()
@@ -365,6 +840,7 @@ def selftest() -> int:
         m = json.loads((vol / home.MARKER).read_text())
         assert m["kind"] == "self-cloud-drive" and m["id"] == info["id"]
         assert m["layout"]["jefferey"] == ".selfcloud/jefferey/"
+        assert info["id"] in home.pinned_ids(), "provisioning did not pair the drive"
 
         # the icon is a real ICNS with transparency keyed from the background
         icns = vol / ".VolumeIcon.icns"
@@ -389,52 +865,76 @@ def selftest() -> int:
         # home.py finds the drive via SELFCLOUD_ROOT and puts the life on it
         home.reset_for_tests()
         os.environ["SELFCLOUD_ROOT"] = str(vol)
-        for k in ("JEFFEREY_CONSCIENCE_PATH", "SELFCLOUD_INDEX", "SELFCLOUD_VOICE", "SELFCLOUD_DISCS"):
+        for k in ("JEFFEREY_CONSCIENCE_PATH", "SELFCLOUD_INDEX", "SELFCLOUD_VOICE",
+                  "SELFCLOUD_DISCS", "JEFFEREY_EGRESS", "JEFFEREY_DOOR"):
             os.environ.pop(k, None)
         assert home.root() == vol
         assert home.conscience_path() == vol / ".selfcloud" / "jefferey" / "conscience.json"
         assert home.index_path() == vol / ".selfcloud" / "jefferey" / "photo-index"
         assert home.voice_path() == vol / ".selfcloud" / "jefferey" / "voice"
-        assert "Renamed" in home.describe()
+        assert "Renamed" in home.describe() and home.problem() is None
         # ...and an explicit env var still wins
         os.environ["SELFCLOUD_INDEX"] = "/tmp/elsewhere"
         assert home.index_path() == Path("/tmp/elsewhere")
         os.environ.pop("SELFCLOUD_INDEX")
-        # ...and with no drive, the old home-folder defaults hold
+        # ...and with the paired drive unplugged, the life is NOT moved to the
+        # home folder: JEFFEREY is off and says so. (Until October 2026 this
+        # test asserted the laptop fallback — the split brain of I-08.)
         home.reset_for_tests()
         os.environ["SELFCLOUD_ROOT"] = str(td / "unplugged")
         assert home.root() is None
-        assert home.conscience_path() == Path("~/.jefferey/conscience.json").expanduser()
+        assert "not plugged in" in (home.problem() or "")
+        assert not str(home.conscience_path()).startswith(str(Path.home()))
         os.environ.pop("SELFCLOUD_ROOT")
         home.reset_for_tests()
 
         print("\n  ✓ drive: layout created without touching user files, marker with a")
-        print("    stable id, real .icns with the background keyed clear, executable")
-        print("    launcher bound to its own drive, re-run is a no-op, --force keeps")
-        print("    the id, and home.py routes the conscience/index/voice onto the drive")
-        print("    when present and back to the home folder when not.\n")
+        print("    stable id, paired with this Mac, real .icns with the background keyed")
+        print("    clear, executable launcher bound to its own drive, re-run is a no-op,")
+        print("    --force keeps the id, and home.py routes the conscience/index/voice")
+        print("    onto the drive when present — and refuses, never the home folder,")
+        print("    when the paired drive is away.\n")
         return 0
     finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        home.reset_for_tests()
         shutil.rmtree(td, ignore_errors=True)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("volume", nargs="?", help="the mounted drive, e.g. /Volumes/MyDisk")
-    ap.add_argument("--name", default="Self-Cloud")
+    ap.add_argument("--name", default=NAME)
     ap.add_argument("--rename", action="store_true", help="rename the volume too (macOS)")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--logo", type=Path, help="a PNG to make the icon from")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--no-pair", action="store_true",
+                    help="do not tell this Mac the drive is yours")
+    ap.add_argument("--move-my-life", action="store_true",
+                    help="move the memories kept on this Mac onto the drive")
+    ap.add_argument("--interactive", action="store_true",
+                    help="ask which drive, in plain words (the launcher)")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    if a.interactive:
+        return interactive()
     if not a.volume:
         ap.error("which drive? e.g. /Volumes/MyDisk")
     if a.check:
         return check(Path(a.volume))
-    provision(Path(a.volume), a.name, a.rename, a.force, a.logo)
+    try:
+        provision(Path(a.volume), a.name, a.rename, a.force, a.logo,
+                  pair=not a.no_pair, move_life=a.move_my_life)
+    except Refused as e:
+        say(f"\n  ! {e}\n")
+        return 1
     return 0
 
 

@@ -61,6 +61,7 @@ except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
 import home
+from version import __version__
 
 # --------------------------------------------------------------- the allowlist
 # Per tool: the top-level fields that may leave. For a tool that returns a
@@ -294,7 +295,8 @@ RELEASE: dict[str, frozenset[str]] = {
     # this door's own report — counts and destinations, never the bodies
     "what_left_the_house": frozenset({"since", "sends", "refused",
                                       "by_destination", "door", "log_lives",
-                                      "secrets_used_on_forms", "to_see_everything"}),
+                                      "secrets_used_on_forms", "to_see_everything",
+                                      "version"}),
 }
 
 
@@ -1076,17 +1078,27 @@ def shut_reason() -> str | None:
     """Why the door is shut, or None when it is open. Shut by the owner — or
     unreachable, which counts as shut (I-12): a switch that cannot be read is
     never taken to mean 'open'. A folder that has never existed in this
-    process is a first run, not an unplugged drive."""
+    process is a first run, not an unplugged drive.
+
+    Since October 2026 (I-08) the door does not depend on where the life
+    happens to be: it is shut if ANY known switch says so — the drive's, the
+    one in the owner's own folder on this Mac, any of his drives plugged in —
+    and a Self-Cloud drive that is expected but not here is a shut door too,
+    with the reason in plain words."""
     if os.environ.get("JEFFEREY_OFFLINE") == "1":
         return SHUT
+    away = home.problem()
+    if away:
+        return away
+    for s in home.door_switches():
+        try:
+            os.lstat(s)                  # a link there counts: it was put there
+            return SHUT
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return UNREACHABLE           # cannot tell: treat as shut
     p = switch_path()
-    try:
-        os.stat(p)
-        return SHUT
-    except FileNotFoundError:
-        pass
-    except OSError:
-        return UNREACHABLE               # cannot tell: treat as shut
     try:
         os.stat(p.parent)
     except FileNotFoundError:
@@ -1103,7 +1115,7 @@ def is_shut() -> bool:
 
 
 def _drive_gone() -> bool:
-    """The Self-Cloud drive this process started on is no longer there."""
+    """A Self-Cloud drive this process was using is no longer there."""
     try:
         r = home.root()
         return bool(r) and not os.path.isdir(r)
@@ -1111,19 +1123,49 @@ def _drive_gone() -> bool:
         return False
 
 
+def shut_all() -> list[Path]:
+    """Shut the door everywhere it can be shut: every known switch is
+    written (never through a link), so the door stays shut whichever drive
+    or folder the next JEFFEREY looks in. Raises OSError if none could be."""
+    done: list[Path] = []
+    last: OSError | None = None
+    line = f"shut by the owner {_now()}\n".encode()
+    for p in home.door_switches():
+        try:
+            home.guard(p)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
+            done.append(p)
+        except OSError as e:
+            if os.path.lexists(p):       # a link put there still shuts it
+                done.append(p)
+            else:
+                last = e
+    if not done:
+        raise last or OSError("no switch could be written")
+    return done
+
+
 def shut() -> Path:
-    p = switch_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(f"shut by the owner {_now()}\n")
-    return p
+    return shut_all()[0]
 
 
 def open_() -> bool:
-    p = switch_path()
-    if p.exists():
-        p.unlink()
-        return True
-    return False
+    """Open the door: every known switch is removed (a link is removed, never
+    followed). True if any was there."""
+    was = False
+    for p in home.door_switches():
+        try:
+            os.unlink(p)
+            was = True
+        except FileNotFoundError:
+            pass
+    return was
 
 
 def _now() -> str:
@@ -1221,7 +1263,14 @@ def _write(entry: dict) -> None:
     is refused. A file that does not end in a line break (a power cut tore
     its last line) gets one first, so a torn line never swallows this one."""
     p = log_path()
+    if not os.environ.get("JEFFEREY_EGRESS") and home.problem():
+        # The log lives on a drive that is away (or not the owner's): nothing
+        # is written anywhere else — a refusal note on a stranger's stick, or
+        # a shadow log on the laptop, is a copy of the owner's words (I-08).
+        raise LogUnwritable(19, "the Self-Cloud drive is not available")
+    home.guard(p)
     p.parent.mkdir(parents=True, exist_ok=True)
+    entry.setdefault("v", __version__)
     line = (_dumps(entry) + "\n").encode()
     flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     with _Locked(p):
@@ -1296,7 +1345,7 @@ def matching(match) -> dict:
     """How many entries hold what `match` finds, and where they went.
     Reads only."""
     out = {"entries": 0, "engines": Counter(), "first": None, "last": None}
-    for e in entries():
+    for e in all_entries():
         hs, ha = _hits(e, match)
         if hs or ha:
             out["entries"] += 1
@@ -1309,12 +1358,22 @@ def matching(match) -> dict:
 
 
 def _rewrite(change) -> dict:
-    """Rewrite the log under its lock, atomically: `change(entry)` returns
-    True if it changed the entry in place. A torn line `change` is asked
-    about as {"torn": text}; True drops it. Returns how many."""
-    p = log_path()
+    """Rewrite every known log (the drive's, and one left on this Mac from a
+    time JEFFEREY ran without the drive — I-08), each under its lock and
+    atomically. `change(entry)` returns True if it changed the entry in
+    place. A torn line `change` is asked about as {"torn": text}; True drops
+    it. Returns how many."""
     out = {"entries": 0, "torn_lines_dropped": 0}
-    if not p.exists():
+    for p in home.egress_logs():
+        one = _rewrite_one(p, change)
+        out["entries"] += one["entries"]
+        out["torn_lines_dropped"] += one["torn_lines_dropped"]
+    return out
+
+
+def _rewrite_one(p: Path, change) -> dict:
+    out = {"entries": 0, "torn_lines_dropped": 0}
+    if not p.exists() or os.path.islink(p):
         return out
     with _Locked(p):
         lines = []
@@ -1412,6 +1471,7 @@ def set_keep(days: int | None) -> None:
     if not days:
         p.unlink(missing_ok=True)
         return
+    home.guard(p)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
                  0o600)
@@ -1857,12 +1917,13 @@ def door(register, as_result: bool = False):
 
 
 # ---------------------------------------------------------------- the report
-def entries(since: datetime | None = None) -> list[dict]:
-    p = log_path()
-    if not p.exists():
+def _read_log(p: Path, since: datetime | None = None) -> list[dict]:
+    try:
+        f = open(p, "rb")
+    except OSError:
         return []
     out = []
-    with p.open("rb") as f:
+    with f:
         for line in f:
             e = _parse_line(line)
             if e is None:
@@ -1870,6 +1931,29 @@ def entries(since: datetime | None = None) -> list[dict]:
             if since and e.get("t", "") < since.strftime("%Y-%m-%dT%H:%M:%SZ"):
                 continue
             out.append(e)
+    return out
+
+
+def entries(since: datetime | None = None) -> list[dict]:
+    """The log in use right now."""
+    p = log_path()
+    if not p.exists():
+        return []
+    return _read_log(p, since)
+
+
+def all_entries(since: datetime | None = None) -> list[dict]:
+    """Every known log, oldest first, each entry marked with where its log
+    lives ('_where': 'drive' or 'mac'). Before October 2026 the report read
+    only the log of wherever the life was that moment, so sends written on
+    the laptop while the drive was away never appeared (I-08)."""
+    out = []
+    for p in home.egress_logs():
+        w = home.where_of(p)
+        for e in _read_log(p, since):
+            e["_where"] = w
+            out.append(e)
+    out.sort(key=lambda e: str(e.get("t", "")))
     return out
 
 
@@ -1899,7 +1983,7 @@ def _kb(n: int) -> str:
 def summary(days: int = 7) -> dict:
     """Counts and destinations — safe to hand to the engine itself."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    es = entries(since)
+    es = all_entries(since)
     by: dict[tuple[str, str, str], dict] = {}
     refused = 0
     secrets_used = 0
@@ -1930,7 +2014,8 @@ def summary(days: int = 7) -> dict:
         "by_destination": dest,
         "secrets_used_on_forms": secrets_used,
         "door": "shut" if is_shut() else "open",
-        "log_lives": home.describe(),
+        "log_lives": home.describe_for_engine(),
+        "version": __version__,
         "to_see_everything": "double-click 'What left the house.command' — the "
                              "owner reads every send word for word, there",
     }
@@ -1939,11 +2024,29 @@ def summary(days: int = 7) -> dict:
 def report(days: int | None = 7, full: bool = False) -> str:
     """The owner's readable answer to 'what left the house?'"""
     since = (datetime.now(timezone.utc) - timedelta(days=days)) if days else None
-    es = entries(since)
+    es = all_entries(since)
     span = f"the last {days} days" if days else "all time"
-    lines = [f"WHAT LEFT THE HOUSE — {span}",
-             f"  the door is {'SHUT' if is_shut() else 'open'} · "
-             f"the log lives {home.describe()}", ""]
+    why = shut_reason()
+    here = home.locate().ok
+    lines = [f"WHAT LEFT THE HOUSE — {span}   (JEFFEREY {__version__})",
+             f"  the door is {'SHUT' if why else 'open'}"
+             + (f" · the log lives {home.describe()}" if here else "")]
+    if why and why not in (SHUT, UNREACHABLE):
+        lines.append(f"  JEFFEREY is off right now: {why}.")
+    if not here:
+        lines.append("  The record of what left the house lives on your Self-Cloud drive. Plug "
+                     "it in to see all of it; below is only what is kept on this Mac.")
+    logs = home.egress_logs()
+    if any(home.where_of(p) == "mac" for p in logs) and any(
+            home.where_of(p) == "drive" for p in logs):
+        mac = sum(1 for e in es if e.get("_where") == "mac")
+        lines.append(f"  ! {mac} of these were written down on this Mac's own disk, not on your "
+                     f"drive — from a time JEFFEREY ran without the drive. They are shown "
+                     f"here too, marked 'on this Mac'.")
+    enc = home.encryption_line()
+    if enc:
+        lines.append(f"  {enc}")
+    lines.append("")
     if not es:
         lines.append("  Nothing. No send has been made through the door" +
                      (" in this period." if days else " yet."))
@@ -1974,7 +2077,8 @@ def report(days: int | None = 7, full: bool = False) -> str:
         lines.append("EVERY SEND, WORD FOR WORD")
         for e in es:
             head = (f"{e['t']}  {e.get('kind')}  {e.get('tool') or ''}  → {e.get('engine')} "
-                    f"({_kb(int(e.get('bytes') or 0))})")
+                    f"({_kb(int(e.get('bytes') or 0))})"
+                    + ("   [on this Mac]" if e.get("_where") == "mac" and len(logs) > 1 else ""))
             lines.append("")
             lines.append(head)
             if e.get("asked"):
@@ -2220,12 +2324,121 @@ def selftest() -> int:
     return 0
 
 
+# ------------------------------------------------------------ the owner's menu
+def door_line() -> str:
+    """The state of the door, in large plain words, after every action."""
+    why = shut_reason()
+    if not why:
+        return "  The door is OPEN: JEFFEREY answers the AIs you use, and writes down every word."
+    if why in (SHUT, UNREACHABLE):
+        return "  The door is SHUT: nothing leaves JEFFEREY until you open it."
+    return f"  JEFFEREY is off: {why}."
+
+
+def _do_shut(out) -> int:
+    try:
+        done = shut_all()
+    except OSError as e:
+        out(f"  The door could NOT be shut ({e.strerror or e}). To stop everything now, "
+            f"quit Claude and unplug the drive.")
+        return 1
+    out("")
+    out("  ███  The door is SHUT. Nothing leaves JEFFEREY until you open it.  ███")
+    if len(done) > 1:
+        out(f"  (shut in {len(done)} places: on your drive and on this Mac, so it stays "
+            f"shut whichever one JEFFEREY looks at)")
+    return 0
+
+
+def _do_open(out) -> int:
+    was = open_()
+    why = shut_reason()
+    if why and why not in (SHUT, UNREACHABLE):
+        out(f"  Your switch is open, but JEFFEREY is still off: {why}.")
+        return 0
+    out("  The door is open." + ("" if was else "  (it already was)"))
+    return 0
+
+
+def _page(text: str, out) -> None:
+    import shutil
+    import subprocess
+    if sys.stdout.isatty() and shutil.which("less"):
+        out("  (Press q to come back.)")
+        try:
+            subprocess.run(["less", "-R"], input=text, text=True)
+            return
+        except OSError:
+            pass
+    out(text)
+
+
+MENU = """  What would you like to do? Type a word and press return:
+    shut     SHUT the door — nothing leaves until you open it    (fermer)
+    open     open the door again                                 (ouvrir)
+    [return] see every send, word for word                       (voir)
+    all      everything since the beginning                      (tout)
+    keep     keep each send word for word only for some days     (garder)
+    quit     close this window                                   (quitter)"""
+
+
+def menu(input_fn=input, out=print) -> int:
+    """'What left the house.command'. Words in English or French, read by
+    their first word; anything else is asked again (I-60: 'shut' used to
+    page the log and leave the door open). The door's state is printed
+    after every answer."""
+    import answers
+    out(report(7))
+    out("")
+    out(door_line())
+    out("")
+    out(MENU)
+    out("")
+    pick = answers.ask_choice("  > ", answers.DOOR, input_fn, out,
+                              hint="Type shut, open, all, keep or quit — or just press return.")
+    rc = 0
+    if pick == "shut":
+        rc = _do_shut(out)
+    elif pick == "open":
+        rc = _do_open(out)
+    elif pick == "see":
+        _page(report(7, full=True), out)
+    elif pick == "all":
+        _page(report(None, full=True), out)
+    elif pick == "keep":
+        now = keep_days()
+        out("  Each send is kept word for word "
+            + (f"for {now} days." if now else "for as long as the log exists."))
+        try:
+            v = input_fn("  How many days? (a number, or 'always') ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            v = ""
+        if v in ("always", "forever", "toujours"):
+            set_keep(None)
+            out("  Every send is kept word for word, for as long as the log exists.")
+        elif v.isdigit() and int(v) > 0 and answers.ask_yes_no(
+                f"  The words of every send older than {v} days are then let go for good "
+                f"(the date, where it went and its fingerprint stay). Type yes or no: ",
+                input_fn, out):
+            set_keep(int(v))
+            r = let_go(int(v))
+            out(f"  Each send is now kept word for word for {v} days. "
+                f"{r['entries']} older send(s) were let go just now.")
+        else:
+            out("  Nothing was changed.")
+    else:
+        out("  Nothing was changed.")
+    out("")
+    out(door_line())
+    return rc
+
+
 def main(argv: list[str]) -> int:
     import argparse
     ap = argparse.ArgumentParser(
         description="What left the house — JEFFEREY's egress log, in plain words.")
     ap.add_argument("what", nargs="?", default="report",
-                    choices=["report", "shut", "open", "status", "selftest", "keep"])
+                    choices=["report", "shut", "open", "status", "selftest", "keep", "menu"])
     ap.add_argument("days_to_keep", nargs="?", default=None,
                     help="with 'keep': how many days to keep each send word for "
                          "word, or 'always'")
@@ -2235,14 +2448,12 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     if a.what == "selftest":
         return selftest()
+    if a.what == "menu":
+        return menu()
     if a.what == "shut":
-        p = shut()
-        print(f"  The door is SHUT. Nothing leaves JEFFEREY until you open it.\n  ({p})")
-        return 0
+        return _do_shut(print)
     if a.what == "open":
-        was = open_()
-        print("  The door is open." + ("" if was else "  (it already was)"))
-        return 0
+        return _do_open(print)
     if a.what == "keep":
         v = (a.days_to_keep or "").strip().lower()
         if v in ("always", "forever", "off", "0"):
@@ -2266,6 +2477,8 @@ def main(argv: list[str]) -> int:
         return 0
     if a.what == "status":
         print(f"  door: {'SHUT' if is_shut() else 'open'} · log: {log_path()}")
+        for sw in home.door_switches():
+            print(f"    switch {'SHUT' if os.path.lexists(sw) else 'open'}: {sw}")
         return 0
     print(report(None if a.all else a.days, full=a.full))
     return 0

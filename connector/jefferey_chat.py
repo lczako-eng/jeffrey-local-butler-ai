@@ -58,7 +58,7 @@ from pathlib import Path
 os.umask(0o077)
 
 sys.path.insert(0, str(Path(__file__).parent))
-from conscience import Conscience, StoreProblem
+from conscience import Conscience, DriveNotHere, StoreProblem
 from representative import Representative
 from guardian import Guardian
 from life import Life
@@ -1724,13 +1724,17 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
 
     try:
         conscience.refresh()
+    except DriveNotHere as e:
+        print(f"\n  ⚠  {e.plain}\n")
     except StoreProblem as e:
         print(f"\n  ⚠  {e.for_owner()}\n")
         print("  Type /history to see the copies kept, and /restore <number> to "
               "put one back.\n")
     snap = conscience.owner_view()
     print(f"{BOLD}JEFFEREY{RESET} — Personal AI Shadow™")
-    print(f"{DIM}engine: {engine_line} · conscience: {snap['store_path']} (owned)")
+    import home
+    where = snap["store_path"] if home.locate().ok else "your Self-Cloud drive (not here)"
+    print(f"{DIM}engine: {engine_line} · conscience: {where} (owned)")
     print(
         f"{DIM}he knows: {len(snap['priorities'])} priorities · "
         f"{len(snap['facts'])} facts · {len(snap['active_goals'])} active goals · "

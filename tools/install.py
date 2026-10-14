@@ -16,6 +16,15 @@ what it did:
 It never touches your conscience file, never deletes anything, and always
 backs up a config before changing it.
 
+Since October 2026 it also: tells this Mac which Self-Cloud drive is yours
+(only with your yes) and writes that drive's id into Claude's config, so
+with the drive away JEFFEREY is off instead of starting a second life on
+the laptop (I-08, I-17); warns loudly about any other connection in Claude
+that can read your home folder or the drive (I-18); installs exactly the
+versions it was tested with, keeps the key you chose before, and refuses
+to wire Claude to a copy on a removable drive (I-21); and connects Claude
+Code for every folder, not just this one (I-69).
+
     python3 tools/install.py                # do it
     python3 tools/install.py --check        # just tell me what's wrong
     python3 tools/install.py --uninstall    # unhook from Claude, keep my data
@@ -36,9 +45,14 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 CONNECTOR = REPO / "connector"
+sys.path.insert(0, str(CONNECTOR))
+import answers  # noqa: E402  (standard library only: runs before the venv exists)
+import home  # noqa: E402
+from version import __version__  # noqa: E402
+
 HOME_DIR = Path.home() / ".jefferey"
 VENV = HOME_DIR / "venv"
-MIN_PY = (3, 10)
+MIN_PY = (3, 11)          # the pinned libraries (requirements.lock) need 3.11
 SERVER_KEY = "jefferey"
 
 # Where each host keeps its list of connected tools.
@@ -124,8 +138,12 @@ def build_venv(base: Path) -> bool:
         ok(f"Made Jefferey a private space at {VENV}")
 
     say(f"  {DIM}installing what he needs (this takes a minute)…{OFF}")
-    r = run([str(venv_python()), "-m", "pip", "install", "--quiet", "--upgrade",
-             "pip", "-r", str(CONNECTOR / "requirements.txt")])
+    # Exactly the versions the self-test passed with (requirements.lock), not
+    # whatever is newest today: an unpinned install once moved the MCP library
+    # to a release that hid every refusal's reason (I-21).
+    lock = CONNECTOR / "requirements.lock"
+    reqs = lock if lock.exists() else CONNECTOR / "requirements.txt"
+    r = run([str(venv_python()), "-m", "pip", "install", "--quiet", "-r", str(reqs)])
     if r.returncode != 0:
         bad("Install failed:\n" + (r.stderr.strip()[:800] or r.stdout.strip()[:800]))
         return False
@@ -140,15 +158,17 @@ def selftest_env(tmp: Path) -> dict:
     damaged memory showed up as 'his self-test did NOT pass', as if the
     program were broken.)"""
     env = dict(os.environ)
-    for k in ("SELFCLOUD_ROOT", "JEFFEREY_CLIENT", "JEFFEREY_OWNER_CONSOLE",
-              "JEFFEREY_OFFLINE", "JEFFEREY_ALLOW_RESET"):
+    for k in ("SELFCLOUD_ROOT", "SELFCLOUD_DRIVE_ID", "JEFFEREY_CLIENT",
+              "JEFFEREY_OWNER_CONSOLE", "JEFFEREY_OFFLINE", "JEFFEREY_ALLOW_RESET"):
         env.pop(k, None)
     env.update(JEFFEREY_CONSCIENCE_PATH=str(tmp / "conscience.json"),
                JEFFEREY_EGRESS=str(tmp / "egress.jsonl"),
                JEFFEREY_DOOR=str(tmp / "door-shut"),
                SELFCLOUD_INDEX=str(tmp / "photo-index"),
                SELFCLOUD_VOICE=str(tmp / "voice"),
-               SELFCLOUD_DISCS=str(tmp / "discs"))
+               SELFCLOUD_DISCS=str(tmp / "discs"),
+               JEFFEREY_DRIVES=str(tmp / "drives.json"),
+               JEFFEREY_FORMS_OUTBOX=str(tmp / "Filled forms"))
     return env
 
 
@@ -167,10 +187,22 @@ def memories_line(python: Path | None = None) -> int:
     return r.returncode
 
 
+IMPORT_CHECK = ("import sys; sys.path.insert(0, sys.argv[1]); "
+                "import jefferey_mcp, jefferey_http; print('the servers start')")
+
+
 def selftest() -> bool:
     with tempfile.TemporaryDirectory(prefix="jefferey-selftest-") as td:
         r = run([str(venv_python()), str(CONNECTOR / "jefferey_chat.py"), "--selftest"],
                 env=selftest_env(Path(td)))
+        if r.returncode == 0:
+            # The servers Claude and ChatGPT start, really imported — the
+            # self-test above only reads their source, and a library that
+            # changed under them once passed it and left Claude a dead server.
+            r2 = run([str(venv_python()), "-c", IMPORT_CHECK, str(CONNECTOR)],
+                     env=selftest_env(Path(td)))
+            if r2.returncode != 0:
+                r = r2
     if r.returncode != 0:
         bad("His self-test did NOT pass. Nothing has been connected to Claude.")
         tail = (r.stdout + r.stderr).strip().splitlines()[-25:]
@@ -185,14 +217,144 @@ def selftest() -> bool:
 
 
 # --------------------------------------------------------------- the wiring
-def server_entry(client: str) -> dict:
+def server_entry(client: str, drive_ids: list[str] | None = None) -> dict:
     # Never JEFFEREY_OWNER_CONSOLE: a host where a model drives the
     # conversation must never be able to widen anything, and the server now
     # refuses to start if it is set (October 2026, I-43). Widening is the
     # owner's typed /permit or /grant in 'Talk to JEFFEREY on this Mac'.
+    env = {"JEFFEREY_CLIENT": client}
+    if drive_ids:
+        # The owner's drive, pinned: with it away, JEFFEREY is off — it never
+        # starts a second life on the laptop (I-08).
+        env["SELFCLOUD_DRIVE_ID"] = ",".join(sorted(set(drive_ids)))
     return {"command": str(venv_python()),
             "args": [str(CONNECTOR / "jefferey_mcp.py")],
-            "env": {"JEFFEREY_CLIENT": client}}
+            "env": env}
+
+
+def _desktop_servers() -> dict:
+    cfg = CLAUDE_DESKTOP_CONFIG
+    try:
+        data = json.loads(cfg.read_text() or "{}") if cfg and cfg.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    return servers if isinstance(servers, dict) else {}
+
+
+def existing_client() -> str | None:
+    """The key Claude Desktop was given last time. A plain reinstall keeps
+    it: it used to hand Claude the caretaker key again, silently (I-21)."""
+    ent = _desktop_servers().get(SERVER_KEY)
+    env = ent.get("env") if isinstance(ent, dict) else None
+    c = env.get("JEFFEREY_CLIENT") if isinstance(env, dict) else None
+    return c.strip().lower() if isinstance(c, str) and c.strip() else None
+
+
+def existing_drive_ids() -> list[str]:
+    ent = _desktop_servers().get(SERVER_KEY)
+    env = ent.get("env") if isinstance(ent, dict) else None
+    raw = env.get("SELFCLOUD_DRIVE_ID", "") if isinstance(env, dict) else ""
+    import re
+    return [t for t in re.split(r"[\s,;]+", str(raw).lower()) if re.fullmatch(r"[0-9a-f]{16}", t)]
+
+
+# ------------------------------------------------------- the copy that runs
+def on_removable_drive(path: Path | None = None) -> bool:
+    """Is this copy of JEFFEREY on a drive that can be unplugged? Claude
+    wired to it dies the moment the drive is pulled (I-21)."""
+    p = Path(path or REPO).resolve()
+    for b in set(home.MOUNT_BASES) | {"/Volumes", "/media", "/run/media", "/mnt"}:
+        try:
+            p.relative_to(b)
+            return True
+        except ValueError:
+            pass
+    return any((q / home.MARKER).exists() for q in [p] + list(p.parents))
+
+
+# ------------------------------------------------ other connections in Claude
+def _sensitive() -> list[tuple[Path, str]]:
+    """Places no other connection should be able to read: where JEFFEREY's
+    memories and the record of what left the house live."""
+    out = []
+    for p, mk in home.marked_drives():
+        out.append((p, f"your Self-Cloud drive '{home.safe_name(mk.get('name'), p.name)}'"))
+    try:
+        for d in home.paired():
+            if d.get("mount"):
+                out.append((Path(d["mount"]), f"your Self-Cloud drive '{d.get('name', '')}'"))
+    except home.PairingDamaged:
+        pass
+    out.append((Path("/Volumes/Self-Cloud"), "your Self-Cloud drive"))
+    out.append((home.owner_dir(), "JEFFEREY's folder on this Mac (~/.jefferey)"))
+    out.append((Path.home() / ".selfcloud", "Self-Cloud's folder on this Mac (~/.selfcloud)"))
+    return out
+
+
+def _path_words(entry) -> list[str]:
+    words = []
+    if isinstance(entry, dict):
+        for a in entry.get("args") or []:
+            if isinstance(a, str):
+                words.append(a)
+        env = entry.get("env")
+        if isinstance(env, dict):
+            words += [v for v in env.values() if isinstance(v, str)]
+    return [w for w in words if w.startswith(("/", "~", "$HOME", "${HOME}"))]
+
+
+def exposures(servers: dict) -> list[tuple[str, str, str]]:
+    """(connection, the path it names, what that path holds) for every
+    other connection whose folders equal or contain the home folder, the
+    drive, or JEFFEREY's own folders — or sit inside them."""
+    found = []
+    targets = _sensitive()
+    for name, entry in servers.items():
+        if name == SERVER_KEY:
+            continue
+        for raw in _path_words(entry):
+            p = Path(os.path.normpath(os.path.expandvars(os.path.expanduser(raw))))
+            what = None
+            if Path.home().is_relative_to(p):
+                what = "your home folder, with JEFFEREY's folder in it"
+            for t, label in targets if what is None else ():
+                t = Path(os.path.normpath(t))
+                if p == t or t.is_relative_to(p) or p.is_relative_to(t):
+                    what = label
+                    break
+            if what:
+                found.append((name, raw, what))
+    return found
+
+
+def warn_exposures(servers: dict, offer: bool, input_fn=input) -> list[str]:
+    """Say it loudly. With the owner at the keyboard, offer to disconnect
+    each one (the backup of the config keeps it). Returns the names removed."""
+    gone = []
+    by: dict[str, list[tuple[str, str]]] = {}
+    for name, raw, what in exposures(servers):
+        by.setdefault(name, []).append((raw, what))
+    for name, rows in by.items():
+        say(f"\n  {RED}{BOLD}✗ WARNING:{OFF} the connection '{name}' in Claude can read — and change —")
+        for raw, what in rows:
+            say(f"      {what}  (it names {raw})")
+        say("    What it reads is NOT checked by JEFFEREY's door and NOT written down in")
+        say("    'What left the house'. It could even open the door you shut, or change what")
+        say("    JEFFEREY may do, by editing his files.")
+        if offer:
+            if answers.ask_yes_no(f"    Disconnect '{name}' from Claude? (The backup keeps it.) "
+                                  "Type yes or no: ", input_fn):
+                servers.pop(name, None)
+                gone.append(name)
+                ok(f"Disconnected '{name}'")
+            else:
+                say(f"    {DIM}Left as it is. You can remove it later in Claude → Settings → "
+                    f"Developer.{OFF}")
+        else:
+            say(f"    {DIM}To disconnect it: run the installer again and answer yes, or remove it"
+                f" in Claude → Settings → Developer.{OFF}")
+    return gone
 
 
 def known_clients() -> list[str]:
@@ -207,7 +369,8 @@ def known_clients() -> list[str]:
         sys.path.remove(str(CONNECTOR))
 
 
-def wire_claude_desktop(client: str) -> bool:
+def wire_claude_desktop(client: str, drive_ids: list[str] | None = None,
+                        offer: bool | None = None, input_fn=input) -> bool:
     cfg = CLAUDE_DESKTOP_CONFIG
     if cfg is None:
         warn("Unknown operating system — skipping Claude Desktop.")
@@ -229,24 +392,42 @@ def wire_claude_desktop(client: str) -> bool:
         ok(f"Backed up your existing config to {backup.name}")
 
     servers = data.setdefault("mcpServers", {})
+    servers[SERVER_KEY] = server_entry(client, drive_ids)
+    gone = warn_exposures(servers, sys.stdin.isatty() if offer is None else offer, input_fn)
     others = [k for k in servers if k != SERVER_KEY]
-    servers[SERVER_KEY] = server_entry(client)
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text(json.dumps(data, indent=2))
-    ok(f"Connected Jefferey to Claude Desktop as '{client}'")
+    ok(f"Connected Jefferey to Claude Desktop as '{client}'"
+       + (" — bound to your Self-Cloud drive" if drive_ids else ""))
     if others:
         ok(f"Left your other {len(others)} connection(s) alone: {', '.join(others)}")
+    if gone:
+        say(f"  {DIM}(the backup above still holds what was disconnected){OFF}")
     return True
 
 
-def wire_claude_code(client: str) -> bool:
+def claude_code_add_argv(client: str, drive_ids: list[str] | None = None) -> list[str]:
+    """`--scope user`: for every folder Claude Code opens in, not only the one
+    the installer happened to run from (I-69)."""
+    argv = ["claude", "mcp", "add", "--scope", "user", SERVER_KEY,
+            "--env", f"JEFFEREY_CLIENT={client}"]
+    if drive_ids:
+        argv += ["--env", "SELFCLOUD_DRIVE_ID=" + ",".join(sorted(set(drive_ids)))]
+    return argv + ["--", str(venv_python()), str(CONNECTOR / "jefferey_mcp.py")]
+
+
+def _claude_code_remove() -> None:
+    run(["claude", "mcp", "remove", "--scope", "user", SERVER_KEY])     # ignore failure
+    # an earlier installer added it for this folder only
+    run(["claude", "mcp", "remove", "--scope", "local", SERVER_KEY], cwd=str(REPO))
+
+
+def wire_claude_code(client: str, drive_ids: list[str] | None = None) -> bool:
     if not shutil.which("claude"):
         warn("Claude Code CLI not found — skipping it. (Optional.)")
         return False
-    run(["claude", "mcp", "remove", SERVER_KEY])          # ignore failure
-    r = run(["claude", "mcp", "add", SERVER_KEY,
-             "--env", f"JEFFEREY_CLIENT={client}",
-             "--", str(venv_python()), str(CONNECTOR / "jefferey_mcp.py")])
+    _claude_code_remove()
+    r = run(claude_code_add_argv(client, drive_ids))
     if r.returncode != 0:
         warn("Could not add to Claude Code: " + r.stderr.strip()[:200])
         return False
@@ -267,12 +448,82 @@ def unwire() -> None:
         else:
             ok("He wasn't connected to Claude Desktop")
     if shutil.which("claude"):
-        run(["claude", "mcp", "remove", SERVER_KEY])
+        _claude_code_remove()
         ok("Removed Jefferey from Claude Code")
     say()
-    say(f"  {BOLD}Your conscience was not touched.{OFF} It is still at "
-        f"{HOME_DIR / 'conscience.json'},")
+    say(f"  {BOLD}Your conscience was not touched.{OFF} It is still "
+        f"{where_words()},")
     say("  with its history beside it. Nothing you told him has been lost.")
+
+
+# ---------------------------------------------------------------- the drive
+def where_words() -> str:
+    """Where the memories are, for the owner — never a placeholder path."""
+    w = home.locate()
+    if w.ok:
+        return home.describe()
+    if w.why == "undecided":
+        return "not anywhere yet (run this again to choose your drive or this Mac)"
+    return "on your Self-Cloud drive (not plugged in right now)"
+
+
+def drive_step(offer: bool, input_fn=input) -> list[str]:
+    """Which Self-Cloud drive is the owner's. Only his typed yes pairs one —
+    a drive is never adopted because it carries a marker (I-17). Returns the
+    ids to pin in Claude's config."""
+    try:
+        recs = home.paired()
+    except home.PairingDamaged:
+        warn(f"The list of your drives ({home.pairing_path()}) is damaged; it is set "
+             "again below from the drives you say are yours.")
+        recs = []
+    ids = [d["id"] for d in recs] + [i for i in existing_drive_ids()
+                                     if i not in {d["id"] for d in recs}]
+    here = False
+    for p, mk in home.marked_drives():
+        name = home.safe_name(mk.get("name"), p.name)
+        if mk["id"] in ids:
+            ok(f"Your Self-Cloud drive '{name}' is plugged in, and this Mac knows it is yours")
+            here = True
+            continue
+        warn(f"A Self-Cloud drive is plugged in that this Mac does not know: '{name}' "
+             f"(id {mk['id']}, at {p}).")
+        if offer and answers.ask_yes_no("    Is it your own Self-Cloud drive? Type yes or no: ",
+                                        input_fn):
+            home.pair(p, mk)
+            ids.append(mk["id"])
+            here = True
+            ok(f"This Mac now knows '{name}' is yours")
+        else:
+            say(f"    {DIM}JEFFEREY will not use it. If it is yours, run this again in Terminal "
+                f"and answer yes, or:  python3 connector/home.py pair '{p}'{OFF}")
+    if not ids:
+        try:
+            chosen = bool((home._pairing() or {}).get("this_mac"))
+        except home.PairingDamaged:
+            chosen = False
+        if chosen or home.laptop_life():
+            say(f"  {DIM}No Self-Cloud drive is paired with this Mac, so JEFFEREY keeps your "
+                f"memories on this Mac (~/.jefferey){' as you chose' if chosen else ', as before'}."
+                f"\n  If you have a Self-Cloud drive, plug it in and run this again.{OFF}")
+        elif offer and not home.marked_drives():
+            # Laptop-only is his choice, never what happens because a drive
+            # was not plugged in when Claude started (I-08).
+            if answers.ask_yes_no("  Do you have a Self-Cloud drive for your memories? "
+                                  "Type yes or no: ", input_fn):
+                warn("Plug it in, then double-click this again (a new drive: double-click "
+                     "'Make this drive a Self-Cloud.command' first). Until then JEFFEREY "
+                     "stays off.")
+            else:
+                home.choose_this_mac()
+                ok("JEFFEREY will keep your memories on this Mac (~/.jefferey)")
+        else:
+            warn("JEFFEREY does not know yet where to keep your memories, so he stays off. "
+                 "Run this again in Terminal and answer the question about your drive.")
+    elif not here:
+        warn("Your Self-Cloud drive is not plugged in right now. JEFFEREY stays off until it "
+             "is — he never starts a second life on this Mac.")
+    return ids
 
 
 # ------------------------------------------------------------------- checks
@@ -284,8 +535,16 @@ def check_only() -> int:
         ok(f"Python {r.stdout.strip()} at {base}")
     else:
         python_help()
-    ok(f"Jefferey's code is at {REPO}") if CONNECTOR.exists() else bad(
+    ok(f"Jefferey's code is at {REPO} (version {__version__})") if CONNECTOR.exists() else bad(
         f"connector/ not found under {REPO}")
+    if on_removable_drive():
+        warn("This copy is on a removable drive. Claude should run the copy in your home "
+             "folder (~/JEFFEREY).")
+    for line in home.status_lines():
+        say(line)
+    enc = home.encryption_line()
+    if enc:
+        say(f"  {enc}")
     (ok if venv_python().exists() else warn)(
         f"Private space {'ready' if venv_python().exists() else 'not built yet'}"
         f" at {VENV}")
@@ -300,6 +559,7 @@ def check_only() -> int:
             ok(f"Connected to Claude Desktop, holding the '{client}' key")
         else:
             warn("Not connected to Claude Desktop yet")
+        warn_exposures(servers, offer=False)
     else:
         warn("Claude Desktop config not found")
     say()
@@ -312,13 +572,13 @@ def main() -> int:
     ap.add_argument("--check", action="store_true", help="report status, change nothing")
     ap.add_argument("--uninstall", action="store_true",
                     help="unhook from Claude; your conscience is kept")
-    ap.add_argument("--client", default="jefferey",
+    ap.add_argument("--client", default=None,
                     help="which Self-Cloud key this install holds "
-                         "(jefferey = the caretaker; claude-raw = a guest)")
+                         "(jefferey = the caretaker; claude-raw = a guest). "
+                         "Default: the one it held before, else jefferey")
     a = ap.parse_args()
-    a.client = (a.client or "").strip().lower()
 
-    say(f"\n{BOLD}JEFFEREY{OFF}  —  a Personal AI Shadow")
+    say(f"\n{BOLD}JEFFEREY{OFF} {__version__}  —  a Personal AI Shadow")
     say(f"{DIM}The intelligence is rented. The conscience is owned.{OFF}")
 
     if a.check:
@@ -327,6 +587,14 @@ def main() -> int:
         say(f"\n{BOLD}Unhooking Jefferey{OFF}")
         unwire()
         return 0
+    kept = existing_client()
+    a.client = (a.client or kept or "jefferey").strip().lower()
+    if on_removable_drive():
+        bad("This copy of JEFFEREY is on a removable drive. Claude wired to it would stop "
+            "the moment the drive is unplugged, and two copies drift apart.")
+        say(f"  {DIM}Double-click 'Install JEFFEREY.command' in the copy in your home folder "
+            f"(~/JEFFEREY) instead. 'Update JEFFEREY.command' keeps both copies the same.{OFF}")
+        return 1
     # A misspelled key name ('claude_raw') used to be accepted, and every
     # call in Claude then failed as a bare "Error executing tool" (I-64).
     if a.client not in known_clients():
@@ -335,7 +603,7 @@ def main() -> int:
         say(f"  {DIM}For example:  python3 tools/install.py --client claude-raw{OFF}")
         return 1
 
-    total = 4
+    total = 5
     step(1, total, "Checking this machine")
     base = find_python()
     if not base:
@@ -355,14 +623,18 @@ def main() -> int:
     if not selftest():
         return 1
 
-    step(4, total, "Connecting him to Claude")
-    desktop = wire_claude_desktop(a.client)
-    code = wire_claude_code(a.client)
+    step(4, total, "Your Self-Cloud drive")
+    drive_ids = drive_step(sys.stdin.isatty())
+
+    step(5, total, "Connecting him to Claude")
+    if kept and kept == a.client:
+        ok(f"Keeping the key Claude held before: '{a.client}'")
+    desktop = wire_claude_desktop(a.client, drive_ids)
+    code = wire_claude_code(a.client, drive_ids)
     if not (desktop or code):
         bad("Nothing was connected — install Claude Desktop, then run this again.")
         return 1
 
-    store = HOME_DIR / "conscience.json"
     say(f"\n{GREEN}{BOLD}Done.{OFF}\n")
     if desktop:
         say(f"  {BOLD}1.{OFF} Quit Claude Desktop completely and open it again.")
@@ -374,8 +646,8 @@ def main() -> int:
     say(f"  {BOLD}3.{OFF} Then just talk to him. Correct him when he's wrong —")
     say(f"     {DIM}that is literally how he learns you.{OFF}")
     say()
-    say(f"  Everything he remembers lives in one file you own:")
-    say(f"     {store}")
+    say(f"  Everything he remembers lives in one file you own,")
+    say(f"     {where_words()}")
     say(f"  {DIM}Plain text. Readable, editable, deletable, yours. Old versions are")
     say(f"   kept beside it in conscience.history/ in case anything goes wrong —")
     say(f"   double-click 'Restore my memories.command' to put one back.{OFF}")

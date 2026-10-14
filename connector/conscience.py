@@ -68,7 +68,12 @@ except ImportError:  # pragma: no cover - Windows
 import home
 import grounding
 import provenance
+from version import __version__, newer as _newer
 DEFAULT_STORE = home.conscience_path()   # on the drive if one is plugged in
+# The newest JEFFEREY that ever saved this life. A copy older than that
+# refuses to touch it (I-21): an old copy once stored a card number with
+# none of the newer protections.
+VERSION_KEY = "_jefferey_version"
 
 # ------------------------------------------------------------------ history
 # Copies of the store kept beside it, so a mistake or a power cut can be
@@ -150,6 +155,16 @@ class ConscienceSaveFailed(StoreProblem):
     """The drive refused the write (full, unplugged, read-only). Nothing
     changed — in memory either, so nothing is served as remembered that is
     not on the drive."""
+
+
+class DriveNotHere(StoreProblem):
+    """The owner's Self-Cloud drive is expected but is not here (or is not
+    his). Nothing is read from, or written to, anywhere else — and what this
+    process held in memory of the life is let go (I-08)."""
+
+
+class ConscienceTooNew(ConscienceCorrupt):
+    """The memories were last saved by a newer JEFFEREY than this copy."""
 
 
 class _Unreadable(ValueError):
@@ -255,9 +270,12 @@ def _sync_dir(d: Path) -> None:
 
 
 def _make_dir(d: Path) -> None:
-    """A folder only the owner's account can open (0700)."""
+    """A folder only the owner's account can open (0700). Never on a drive
+    that is not there: re-making a pulled drive's folders on the Mac's own
+    disk is how an empty second life used to begin (I-08)."""
     if d.is_dir():
         return
+    home.guard(d)
     d.parent.mkdir(parents=True, exist_ok=True)
     try:
         d.mkdir(mode=0o700)
@@ -639,6 +657,62 @@ class Conscience:
         self._unavailable: ConscienceCorrupt | None = None
         self._runtime_notices: dict[str, str] = {}
         self.access_log = AppendLog(self.path.with_name(self.path.stem + ".access.jsonl"))
+        # A store opened where home.py says the life lives follows it: when
+        # the drive goes, memory is let go; when it comes back — under any
+        # name — the store is opened there again (I-08).
+        self._follows_home = (self.path == Path(DEFAULT_STORE).expanduser()
+                              and not os.environ.get("JEFFEREY_CONSCIENCE_PATH"))
+        self._left = False
+        if self._follows_home:
+            home.watch(self._drive_left)
+
+    # ------------------------------------------------------ the drive comes and goes
+    def _forget_in_memory(self) -> None:
+        """Hold nothing of the life in this process (the same dict object, so
+        every module holding it sees the empty one)."""
+        self._replace_data(self._defaults())
+        self._clean = self._canon(self.data)
+        self._disk_sha, self._stat, self._rev_seen = None, None, 0
+
+    def _drive_left(self) -> None:
+        self._forget_in_memory()
+        self._left = True
+
+    def _relocate(self, path: Path) -> None:
+        """The life is somewhere else now (the drive came back under another
+        name, or was plugged in after this process started): open it there."""
+        self._forget_in_memory()
+        self.path = Path(path)
+        self.access_log = AppendLog(self.path.with_name(self.path.stem + ".access.jsonl"))
+        self._unavailable, self._runtime_notices, self._left = None, {}, False
+        self._tighten_modes()
+        try:
+            self._load()
+        except ConscienceCorrupt as exc:
+            self._unavailable = exc
+            raise
+
+    def _follow_home(self) -> bool:
+        """Before every call: is the life where this store is? Raises
+        DriveNotHere, in the owner's words, when it is nowhere."""
+        why = home.problem()
+        if why:
+            if not self._left:
+                self._drive_left()
+            raise DriveNotHere(why[0].upper() + why[1:] + ".")
+        want = home.conscience_path()
+        if want != self.path:
+            self._relocate(want)
+            return True
+        if self._left:
+            self._left = False
+            try:
+                self._load()
+            except ConscienceCorrupt as exc:
+                self._unavailable = exc
+                raise
+            return True
+        return False
 
     @classmethod
     def for_surface(cls, path: Path | str | None = None) -> "Conscience":
@@ -685,6 +759,8 @@ class Conscience:
         result — when the file has become unreadable: serving the old copy
         from memory would undo, and re-send, whatever the owner just deleted
         by hand."""
+        if self._follows_home and self._follow_home():
+            return True
         if self._unavailable is not None:
             try:
                 with self._lock():
@@ -982,6 +1058,7 @@ class Conscience:
                 it["id"] = cand
 
     def _adopt(self, raw: bytes, obj: dict, st: os.stat_result | None = None) -> None:
+        _check_version(obj, self.path)
         self._replace_data(obj)
         self._disk_sha = _sha(raw)
         self._clean = self._canon(self.data)
@@ -1283,6 +1360,9 @@ class Conscience:
             self._check_disk_unchanged()
         rev = self._next_rev()
         self.data["_rev"] = rev
+        need = self.data.get(VERSION_KEY)
+        if not isinstance(need, str) or _newer(__version__, need):
+            self.data[VERSION_KEY] = __version__
         payload = self._canon(self.data)
         _make_dir(self.path.parent)
         _write_atomic(self.path, payload)
@@ -1297,6 +1377,11 @@ class Conscience:
         it in memory too, and say why in plain words."""
         if self._unavailable is not None:
             raise self._unavailable
+        if self._follows_home:
+            why = home.problem()
+            if why:
+                self._rollback()
+                raise DriveNotHere(why[0].upper() + why[1:] + ".")
         self._ensure_ids()          # whatever was just added gets its id now
         if self._canon(self.data) == self._clean:
             return                  # nothing changed: no write, no copy, no rev
@@ -2745,6 +2830,19 @@ class Conscience:
 
 
 # ------------------------------------------------------------ the owner's view
+def _too_new_text(need: str) -> str:
+    return (f"Your memories were last saved by a newer JEFFEREY (version {need}) "
+            f"than this copy (version {__version__}), so this copy will not touch "
+            "them: it may not know how to keep them safe. Double-click 'Update "
+            "JEFFEREY.command', then try again. Nothing was changed.")
+
+
+def _check_version(obj: dict, where=None) -> None:
+    need = obj.get(VERSION_KEY) if isinstance(obj, dict) else None
+    if isinstance(need, str) and _newer(need, __version__):
+        raise ConscienceTooNew(_too_new_text(need), where)
+
+
 def health(path: Path | str | None = None) -> dict:
     """How the owner's memories are, in one plain line — for the installer and
     'install --check'. Reads only: it never recovers, writes or moves anything.
@@ -2787,6 +2885,10 @@ def health(path: Path | str | None = None) -> dict:
                 "a backup.")}
         return {"status": "needs_restoring",
                 "plain": "Your memories need attention. " + Conscience._fix_text(u)}
+    try:
+        _check_version(obj)
+    except ConscienceTooNew as e:
+        return {"status": "needs_update", "plain": "Your memories: " + e.plain}
     c.data = obj
     count = lambda k: len(obj[k]) if isinstance(obj.get(k), list) else 0  # noqa: E731
     line = (f"Your memories: OK — {count('facts')} facts, {count('memories')} "
@@ -2905,10 +3007,16 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     path = Path(a.path).expanduser() if a.path else DEFAULT_STORE
 
+    away = None if a.path else home.problem()
+    if away:
+        # Never "none yet" when the drive that holds them is simply away.
+        print("  Your memories: " + away + ".")
+        return 1
     if a.cmd in (None, "check"):
         h = health(path)
         print("  " + h["plain"])
-        return {"needs_restoring": 1, "will_recover": 2, "recovered": 2}.get(h["status"], 0)
+        return {"needs_restoring": 1, "will_recover": 2, "recovered": 2,
+                "needs_update": 1}.get(h["status"], 0)
 
     c = Conscience.for_surface(path)
     if a.cmd == "history":
@@ -2943,7 +3051,8 @@ def main(argv: list[str] | None = None) -> int:
             answer = input("  Put this copy back? Type yes and press return: ")
         except EOFError:
             answer = ""
-        if answer.strip().lower() not in ("y", "yes"):
+        import answers
+        if answers.yes_no(answer) is not True:
             print("  Nothing was changed.")
             return 1
     try:
