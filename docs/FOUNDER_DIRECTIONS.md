@@ -60,7 +60,10 @@ keyboard, the **first take is the consent sentence in the owner's own voice**
 and is kept with the rest, every take is a checksummed read-only file, and
 `delete` overwrites before it unlinks. The test asserts the file imports
 nothing that can reach a network. Playback — the voice *saying* anything — is
-not built and is a separate decision.
+not built and is a separate decision. Since October 2026 the consent is said
+again every sitting, ending in three random words; silent takes are refused;
+the name is required; and `delete` searches the drive and this Mac, never
+follows a link, and says what overwriting cannot reach (flash storage, backups).
 
 **Why it matters.** It is the emotional endpoint of the whole thesis: an AI
 that doesn't *answer* you in a stranger's voice, but *reminds* you in your

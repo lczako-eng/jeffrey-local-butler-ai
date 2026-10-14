@@ -96,7 +96,7 @@ TOOL_SCOPES: dict[str, str] = {
     "fill_pdf": "paperwork.write", "pdf_form_fields": "paperwork.write",
     "conscience_include": "facts.write", "conscience_exclude": "facts.write",
     "set_rule": "facts.write", "remove_rule": "facts.write",
-    "list_rules": "facts.read", "daily_brief": "facts.read",
+    "daily_brief": "facts.read",
     # goals and the opportunity engine. record_opportunity SAVES an item that
     # can open the owner's daily brief, so it is a write (it was goals.read,
     # and a plain guest session planted a fake fraud alert there — I-40).
@@ -113,6 +113,11 @@ TOOL_SCOPES: dict[str, str] = {
     "expect_charge": "money.write", "mark_cancelled": "money.write",
     "check_charge": "money.read", "review_statement": "money.read",
     "expected_charges": "money.read", "dispute_pack": "money.read",
+    # what an AI asked to add waits for the owner (I-47). Seeing it and
+    # withdrawing it are tools; CONFIRMING it is not — that is the owner's
+    # own /charges, at his keyboard.
+    "charge_changes_waiting": "money.read", "decline_charge_change": "money.write",
+    "name_for_charge": "money.write",
     # the life layer (who_am_i and tell_story use ceiling() instead)
     "add_person": "life.write", "add_memory": "life.write", "add_media": "life.write",
     "story_gaps": "life.read", "forget_life": "life.write",
@@ -125,8 +130,11 @@ TOOL_SCOPES: dict[str, str] = {
     "interview_progress": "life.read",
     # The owner's own rules about who may hear what. A REFUSAL that quotes
     # the rule is itself the disclosure — these were ungated and returned the
-    # most sensitive sentences in the system verbatim.
-    "check_disclosure": "facts.read", "guidance_for": "facts.read",
+    # most sensitive sentences in the system verbatim; then, under facts.read,
+    # every plain guest session read them all (I-11). Only the caretaker
+    # holds rules.read.
+    "list_rules": "rules.read",
+    "check_disclosure": "rules.read", "guidance_for": "rules.read",
     # Returns the owner's relevant priorities alongside the verdict, which is
     # the same payload the gated explain_basis refuses.
     "triage_message": "priorities.read",
@@ -135,6 +143,8 @@ TOOL_SCOPES: dict[str, str] = {
     # the album: asking about his photographs and keeping what he says
     "next_story_prompt": "life.read", "record_story": "life.write",
     "decline_story": "life.write", "story_progress": "life.read",
+    # 'not now': nothing decided, the moment goes to the back
+    "skip_story": "life.write",
     # secrets: names only, never values
     "vault_status": "vault.names",
     # the egress door's own report: counts and destinations

@@ -234,6 +234,10 @@ RELEASE: dict[str, frozenset[str]] = {
                                "charges_in_dispute", "amount_in_dispute",
                                "full_history", "how_to_use", "refunds_received",
                                "chargeback_deadline_estimate"}),
+    # what waits for the owner, and withdrawing it; confirming is not a tool
+    "charge_changes_waiting": frozenset({"id", "what", "asked_by", "asked_on", "why"}),
+    "decline_charge_change": frozenset({"merchant", "status"}),
+    "name_for_charge": frozenset({"merchant", "status", "proposal"}),
     # the representative reading their mail
     # what it touches and who sent it, in plain words (I-13)
     "triage_message": frozenset({"sender", "subject", "verdict", "interrupt",
@@ -275,11 +279,13 @@ RELEASE: dict[str, frozenset[str]] = {
                                      "remaining_at_this_depth", "locked_deeper",
                                      "by_domain", "trust"}),
     # the album
+    # a count, a place and dates — never the photographs' fingerprints (I-15)
     "next_story_prompt": frozenset({"moment_id", "label", "photos", "from", "to",
-                                    "show_on_the_wall", "photo_ids", "ask"}),
+                                    "show_on_the_wall", "ask"}),
     "record_story": frozenset({"kept", "moment", "memory", "pinned_to_photos",
                                "one_follow_up"}),
     "decline_story": frozenset({"declined", "moment_id"}),
+    "skip_story": frozenset({"skipped", "moment_id"}),
     "story_progress": frozenset({"indexed", "untold", "told", "declined", "stories"}),
     # their own rules about who may hear what
     "check_disclosure": frozenset({"allowed", "audience", "tags"}),

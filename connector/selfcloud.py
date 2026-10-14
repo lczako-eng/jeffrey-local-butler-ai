@@ -65,6 +65,10 @@ SCOPES = {
     # filled copy in the 'Filled forms' folder. It was 'facts.read', so every
     # plain guest session could write files anywhere.
     "paperwork.write": "may read PDF forms and save filled copies in the 'Filled forms' folder",
+    # October 2026 (I-11): the owner's own rules about who may hear what.
+    # They were readable under 'facts.read', so every plain guest session got
+    # them word for word ("Don't tell Karen about my PTSD").
+    "rules.read":      "his own rules about who may hear what (the caretaker only)",
 }
 
 # The caretaker preset as it was before act.request and keys.read existed.
@@ -78,7 +82,7 @@ _CARETAKER_V1 = frozenset({
 # ...and as it was before paperwork.write existed (forms were filled under
 # facts.read, which the guests held too — I-02).
 _CARETAKER_V2 = _CARETAKER_V1 | {"act.request", "keys.read"}
-GRANTS_VERSION = 3
+GRANTS_VERSION = 4
 
 # Keys whose every change the owner is told about, in the brief and status.
 WATCHED_KEYS = ("jefferey", "family", "executor")
@@ -105,7 +109,7 @@ PRESETS: dict[str, dict] = {
             "goals.read", "goals.write",
             "life.read", "life.write", "media.read", "family.read", "legacy.read",
             "money.read", "money.write", "vault.names",
-            "act.request", "keys.read", "paperwork.write",
+            "act.request", "keys.read", "paperwork.write", "rules.read",
         ],
         "why": "The one who represents the owner. Trusted with the life layer "
                "and the money — never with the secrets themselves.",
@@ -132,12 +136,14 @@ def migrate_grants(data: dict) -> bool:
     """Keep reading old stores (October 2026). The caretaker preset gained
     act.request and keys.read (v2), then paperwork.write (v3: filling forms
     left facts.read, so the caretaker keeps what it could already do and the
-    guests lose it). A stored 'jefferey' key that still holds the whole old
-    preset is the untouched default, so it gets them too — once, marked with
-    the version, so a scope the owner later removes is never put back. A key
-    the owner had narrowed is left exactly as he made it. Changes memory
-    only; the next real save keeps it (reading never writes). Returns True
-    when something changed."""
+    guests lose it), then rules.read (v4: his rules left facts.read the same
+    way — a caretaker key that could read facts could read his rules, so it
+    keeps that, however else he narrowed it). A stored 'jefferey' key that
+    still holds the whole old preset is the untouched default, so it gets
+    the v2/v3 scopes too — once, marked with the version, so a scope the
+    owner later removes is never put back. Otherwise a key the owner had
+    narrowed is left as he made it. Changes memory only; the next real save
+    keeps it (reading never writes). Returns True when something changed."""
     gs = data.get("selfcloud_grants")
     if not isinstance(gs, dict):
         return False
@@ -154,6 +160,8 @@ def migrate_grants(data: dict) -> bool:
         g["scopes"] = sorted(set(g["scopes"]) | {"act.request", "keys.read"})
     if v < 3 and _CARETAKER_V2 <= set(g["scopes"]):
         g["scopes"] = sorted(set(g["scopes"]) | {"paperwork.write"})
+    if v < 4 and "facts.read" in g["scopes"]:
+        g["scopes"] = sorted(set(g["scopes"]) | {"rules.read"})
     g["v"] = GRANTS_VERSION
     return True
 

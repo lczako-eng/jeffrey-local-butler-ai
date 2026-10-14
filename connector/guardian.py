@@ -45,9 +45,13 @@ What the October 2026 stress test changed, and why:
   unauthorized when the owner authorized it.
 * Nothing irreversible happens because an AI asked. The register decides
   which charges stay quiet, so an AI session can only PROPOSE an addition;
-  the owner confirms it with his own hands:
+  the owner confirms it with his own hands — /charges in 'Talk to JEFFEREY
+  on this Mac', 'Check my charges.command', or:
 
       python connector/guardian.py review
+
+  Engines may list what waits (charge_changes_waiting) and withdraw it
+  (decline_charge_change); confirming is offered to no engine.
 
   A cancellation makes JEFFEREY more watchful, never less, so it is recorded
   at once — and written in the action log with who asked for it.
@@ -533,7 +537,8 @@ _ACTIONS = {
     "dispute": (
         "Tell the user in plain words, offer to build a dispute_pack, and score it "
         "with record_opportunity (reduces_risk=True). Contacting the merchant or "
-        "the bank is an Act: authorize_action first."),
+        "the bank is an Act: authorize_action first — with no amount, since a "
+        "letter or a call costs nothing — then log_action."),
 }
 
 
@@ -888,7 +893,9 @@ class Guardian:
                                          f"record the cancellation under that name."}
             if entry is None:
                 # Never registered, but the user says they cancelled it — keep it
-                # anyway, so a charge that shows up later is caught.
+                # anyway, so a charge that shows up later is caught. Asked for
+                # by an AI, it never makes earlier charges look agreed: nothing
+                # becomes quieter because an AI asked (verify, I-47).
                 entry = {
                     "id": _ident("c-", f"{merchant}|{_stamp()}|{time.time_ns()}"),
                     "key": key, "merchant": str(merchant), "amount": 0.0,
@@ -897,6 +904,8 @@ class Guardian:
                     "cancelled_on": None, "amount_known": False, "aliases": [],
                     "updated": _stamp(), "v": 2,
                 }
+                if not self.owner_present():
+                    entry["asked_by_ai"] = _client()
                 self.c.data["expected_charges"].append(entry)
             entry["active"] = False
             entry["cancelled_on"] = iso
@@ -908,11 +917,13 @@ class Guardian:
             self._log(f"Charge register: {entry['merchant']} cancelled from {iso}",
                       "cancellation on file")
             self.c._save()
+            earlier = ("Earlier charges are checked like any place not in the register."
+                       if entry.get("asked_by_ai") and not entry.get("amount_known", True)
+                       else "Charges on or before that date are treated as normal.")
             return {"merchant": entry["merchant"], "marked_cancelled": 1,
                     "cancelled_on": iso, "matched_to": entry["merchant"],
                     "note": f"Any charge from {entry['merchant']} dated after {iso} will "
-                            f"be flagged. Charges on or before that date are treated as "
-                            f"normal."}
+                            f"be flagged. {earlier}"}
 
         return self._transaction(run)
 
@@ -986,7 +997,9 @@ class Guardian:
                        f"still mentioned, never kept quiet.")
         out["tell_the_user"] = (f"Say plainly that '{self._describe(p)}' is waiting for "
                                 f"them to confirm, and that nothing has been kept quiet. "
-                                f"Do not say it is registered.")
+                                f"To confirm it, they double-click 'Check my charges' on "
+                                f"their Mac (or type /charges in 'Talk to JEFFEREY on this "
+                                f"Mac'). Do not say it is registered.")
         return out
 
     def pending_changes(self) -> list[dict]:
@@ -1354,6 +1367,11 @@ class Guardian:
                          f"You cancelled {name} on {c_on} and they charged {_m(amt)} anyway "
                          f"on {d}.", False)
             if not entry.get("amount_known", True):
+                if entry.get("asked_by_ai"):
+                    # Only an AI said this place was ever theirs: before the
+                    # cancellation it is judged like any place not in the
+                    # register, never 'agreed'.
+                    return Guardian._judge(None, it, prior)
                 return V("expected", 0.0, 0.0,
                          f"{name} {_m(amt)} on {d}, on or before the cancellation date "
                          f"({c_on}). Nothing to do.", True)
@@ -1599,7 +1617,8 @@ class Guardian:
                          f"off the amount above. Mention it.")
         if letter:
             parts.append("Show the draft to the user. Sending is an Act — authorize_action on "
-                         "'correspondence', then log_action.")
+                         "'correspondence' (no amount: a letter costs nothing), then "
+                         "log_action.")
         if deadline and letter:
             parts.append(f"If {name} refuses, the next step is the card issuer's chargeback "
                          f"process. Card issuers often allow about 120 days from the charge: "

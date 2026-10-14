@@ -206,12 +206,18 @@ subscription and double-billing and it is an enormous amount of money quietly
 leaving people who never agreed to it.
 
 - `expect_charge` / `mark_cancelled` — the register of what the user actually
-  agreed to, and what they've cancelled.
+  agreed to, and what they've cancelled. From an AI, an addition waits for the
+  owner (`charge_changes_waiting` lists it, `decline_charge_change` withdraws
+  it, `name_for_charge` asks to treat a statement name as a known company);
+  only the owner confirms, at his keyboard (`/charges`, `Check my
+  charges.command`). No engine is offered a way to confirm.
 - `check_charge` / `review_statement` — every charge held against it.
-  Verdicts: `expected` (stay quiet), `amount_increased` (with the delta and
-  the annual cost), `unexpected_merchant`, `charged_after_cancel`,
-  `duplicate`. Statement names are normalized, so `GODADDY.COM 480-505-8855`
-  and `GoDaddy Inc` are the same company.
+  Eleven verdicts (see `guardian.py`): quiet ones (`expected`,
+  `amount_decreased`, `refund`), the informational `unexpected_merchant`, and
+  the alarms (`amount_increased`, `duplicate`, `unauthorized_renewal`,
+  `charged_after_cancel`, `possible_card_testing`, `possible_scam`,
+  `needs_date`). Statement names are normalized, so
+  `GODADDY.COM 480-505-8855` and `GoDaddy Inc` are the same company.
 - `dispute_pack` — what was authorized, every disputed charge, and how to
   write the demand, so the user is never the one digging through statements
   at 11pm.

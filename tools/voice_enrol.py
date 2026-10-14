@@ -73,6 +73,7 @@ import unicodedata
 import wave
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
+import answers  # noqa: E402
 import home  # noqa: E402
 
 VOICE_ROOT = home.voice_path()          # on the drive, if one is plugged in
@@ -307,7 +308,9 @@ def _secure_dir(p: Path, create: bool) -> None:
 
 def _tighten(d: Path) -> None:
     """Bring an older enrolment to owner-only modes, without following links:
-    takes 0400 (read-only originals), everything else 0600, the folder 0700."""
+    takes 0400 (read-only originals), everything else 0600, the folder 0700.
+    A file with another name elsewhere (a hard link) is left alone: its mode
+    is that other file's too, and it is not ours to change."""
     try:
         _secure_dir(d, create=False)
         with os.scandir(d) as it:
@@ -321,7 +324,8 @@ def _tighten(d: Path) -> None:
         except OSError:
             continue                  # a shortcut, or unreadable: leave it be
         try:
-            if stat.S_ISREG(os.fstat(fd).st_mode):
+            st = os.fstat(fd)
+            if stat.S_ISREG(st.st_mode) and st.st_nlink == 1:
                 take = nm.startswith("take-") and nm.endswith(".wav")
                 os.fchmod(fd, 0o400 if take else 0o600)
         except OSError:
@@ -684,10 +688,7 @@ def all_roots() -> list[Path]:
         add(Path(os.environ["SELFCLOUD_VOICE"]).expanduser())
     drives: list[Path] = []
     with contextlib.suppress(Exception):
-        r = home.root()
-        if r:
-            drives.append(r)
-        drives += [m for m in home._mounts() if (m / home.MARKER).is_file()]
+        drives = home.all_drives(any_marker=True)
     for dr in drives:
         add(dr / home.NAMESPACE / "voice")
     with contextlib.suppress(RuntimeError, KeyError):
@@ -766,6 +767,29 @@ def _reply(ask, prompt: str, eof: str = "") -> str:
         return (ask(prompt) or "").strip()
     except EOFError:
         return eof
+
+
+# What a person types at each prompt, read by connector/answers.py: in lower
+# case, by its first word, in English or French (I-60: 'skip' and 'quit'
+# started the microphone, and 'no' kept a take as consent). Anything else is
+# asked again; a closed window is 'quit'.
+_SKIP = frozenset({"s", "skip", "pass", "next", "passer", "suivant"})
+_QUIT = frozenset({"q", "quit", "exit", "stop", "leave", "quitter", "sortir", "fin",
+                   "arrete", "arreter"})
+_REDO = frozenset({"r", "redo", "again", "retry", "refaire", "encore", "recommencer"})
+BEFORE = {"start": frozenset({"", "start", "record", "go", "yes", "y", "ok", "oui"}),
+          "skip": _SKIP, "quit": _QUIT | answers.NO}
+AFTER = {"keep": frozenset({"", "k", "keep", "garde", "garder"}) | answers.YES,
+         "redo": _REDO | answers.NO, "skip": _SKIP, "quit": _QUIT}
+# The agreement is kept only on a yes the person typed: never an empty line.
+AFTER_CONSENT = {"keep": answers.YES, "redo": _REDO | answers.NO, "quit": _QUIT}
+
+
+def _choose(ask, prompt: str, table: dict, say, hint: str) -> str:
+    """One of `table`'s names, asked again until it is; 'quit' when the
+    window is closed or nothing usable is typed."""
+    got = answers.ask_choice(prompt, table, input_fn=ask, out=print, hint=hint)
+    return got or "quit"
 
 
 # ---------------------------------------------------------------- session
@@ -858,7 +882,7 @@ def _start(who, limit, recorder, quiet, ask, interactive) -> int:
                       f"voice here. {person} first agreed on {_when(first.get('at'))}. "
                       f"Only {person} may add to them."))
             ans = _reply(ask, f"  Are you {person} yourself? Type yes to carry on: ")
-            if ans.strip(" .!").lower() not in ("yes", "y"):
+            if answers.yes_no(ans) is not True:
                 return give_up(
                     "Not carried on. If you are someone else, please run this again "
                     "with your own name, so your voice is kept separately. Nothing "
@@ -881,10 +905,12 @@ def _start(who, limit, recorder, quiet, ask, interactive) -> int:
                     say(f"  │  {line}")
                 say("  └ return = start recording · s = skip · q = quit")
                 if interactive:
-                    ans = _reply(ask, "  > ", eof="q").lower()
-                    if ans == "q":
+                    # 'skip' and 'quit' never start the microphone (I-60)
+                    what = _choose(ask, "  > ", BEFORE, say,
+                                   "Press return to start, or type skip or quit.")
+                    if what == "quit":
                         return "quit", None
-                    if ans == "s":
+                    if what == "skip":
                         return "skipped", None
                     say("  ● recording — press return when you've finished")
                 samples = recorder(RATE)
@@ -907,15 +933,25 @@ def _start(who, limit, recorder, quiet, ask, interactive) -> int:
                 elif peak > 0.99:
                     note = "  (clipping — a little further from the mic)"
                 say(f"  {secs:.1f}s, level {rms:.3f}{note}")
-                if interactive:
-                    ans = _reply(ask, "  return = keep · r = redo · s = skip · q = quit > ",
-                                 eof="q").lower()
-                    if ans == "r":
-                        continue
-                    if ans == "s":
-                        return "skipped", None
-                    if ans == "q":
-                        return "quit", None
+                if interactive and consent:
+                    # The agreement is kept only on a typed yes (I-60: 'no'
+                    # kept it); an empty line asks again.
+                    what = _choose(ask, "  Keep this as your agreement? Type yes, or r to "
+                                        "record it again, or q to stop > ",
+                                   AFTER_CONSENT, say,
+                                   "Type yes to keep it, r to record it again, or q to stop.")
+                elif interactive:
+                    what = _choose(ask, "  return = keep · r = redo · s = skip · q = quit > ",
+                                   AFTER, say,
+                                   "Press return to keep it, or type redo, skip or quit.")
+                else:
+                    what = "keep"
+                if what == "redo":
+                    continue
+                if what == "skip":
+                    return "skipped", None
+                if what == "quit":
+                    return "quit", None
                 return "kept", samples
 
         def commit(samples, text: str, tag: str, **extra) -> dict:
@@ -1060,8 +1096,7 @@ def _status(who: str) -> int:
     if _is_link(d):
         raise Refused(f"The folder {d} is a shortcut to {_link_target(d)}, so "
                       "JEFFEREY will not read it.")
-    _tighten(d)
-    man = load_manifest(d)
+    man = load_manifest(d)          # status only reads: it changes nothing
     person = man.get("person") or name
     takes = man["takes"]
     total = sum(t.get("seconds", 0) for t in takes)
@@ -1499,6 +1534,13 @@ def main() -> int:
 
     if a.selftest:
         return selftest()
+    why = home.problem()
+    if why:
+        # The drive is away (or not yet known): recordings must not go
+        # anywhere else. Status and delete still look everywhere they can.
+        _tell(why[0].upper() + why[1:] + ".")
+        if a.cmd == "start":
+            return 2
     need_name = ("Please say whose voice this is, by name: "
                  "--who \"Your Name\". Nothing was done.")
     if a.cmd == "start":

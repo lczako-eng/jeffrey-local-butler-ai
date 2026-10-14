@@ -652,8 +652,9 @@ class ExpectIn(BaseModel):
 @door(app.post("/charges/expected", operation_id="expect_charge"))
 @gate("money.write")
 def expect_charge(e: ExpectIn) -> dict:
-    """Register a charge the user has actually agreed to. Anything not in
-    this register becomes a question later."""
+    """Ask to add a charge the user has actually agreed to. From you it WAITS
+    for the owner (status 'waiting_for_owner'): say it is waiting, never that
+    it is registered, unless the note says 'is in your register'."""
     return guard.expect_charge(e.merchant, e.amount, e.cadence,
                                e.authorized_recurring, e.note)
 
@@ -666,23 +667,31 @@ class CancelIn(BaseModel):
 @door(app.post("/charges/cancelled", operation_id="mark_cancelled"))
 @gate("money.write")
 def mark_cancelled(c: CancelIn) -> dict:
-    """Record that the user cancelled something — any charge after this date
-    is unauthorized."""
+    """Record that the user cancelled something, with the date (ISO) — any
+    charge dated after it is flagged. If marked_cancelled is 0, NOTHING is
+    being watched: ask what the note asks and send it again."""
     return guard.mark_cancelled(c.merchant, c.on)
 
 
 class ChargeIn(BaseModel):
     merchant: str
-    amount: float
-    date: str = ""
+    # '$18.63' or '1 234,56 $' as printed is read by the guardian, line by
+    # line, instead of refusing the whole statement
+    amount: float | str
+    date: str = Field(default="", description="as printed on the statement, ISO if you can")
+    ref: str = Field(default="", description="the statement line's reference, if any")
 
 
 @door(app.post("/charges/check", operation_id="check_charge"))
 @gate("money.read")
 def check_charge(c: ChargeIn) -> dict:
-    """Hold one charge up against what the user agreed to. Returns a verdict
-    in plain words with the dollars at stake."""
-    return guard.check_charge(c.merchant, c.amount, c.date)
+    """Hold one charge up against what the user agreed to. Checking the same
+    charge again never adds a duplicate. Quiet: expected, amount_decreased,
+    refund. unexpected_merchant is informational (offer a dispute only if
+    they say it is not theirs); needs_date: ask for the date;
+    possible_card_testing / possible_scam: the next step is the bank, on the
+    number on the card. The rest: say it plainly and offer a dispute_pack."""
+    return guard.check_charge(c.merchant, c.amount, c.date, ref=c.ref)
 
 
 class StatementIn(BaseModel):
@@ -692,15 +701,45 @@ class StatementIn(BaseModel):
 @door(app.post("/charges/review", operation_id="review_statement"))
 @gate("money.read")
 def review_statement(s: StatementIn) -> dict:
-    """Run a whole statement through at once and report the total at stake."""
+    """Run a whole statement through at once and report the summary and the
+    total at stake. If some lines could not be read, nothing was kept."""
     return guard.review_statement([c.model_dump() for c in s.charges])
 
 
 @door(app.get("/charges/expected", operation_id="expected_charges"))
 @gate("money.read")
 def expected_charges() -> list:
-    """What the user has agreed to pay, and what they've cancelled."""
+    """What the user has agreed to pay, and what they've cancelled. Entries
+    with status 'waiting_for_owner' are not in force yet."""
     return guard.expected_charges()
+
+
+@door(app.get("/charges/waiting", operation_id="charge_changes_waiting"))
+@gate("money.read")
+def charge_changes_waiting() -> list:
+    """Additions an AI asked for that wait for the owner. Only he confirms
+    them, at his own keyboard; you can only tell him they are waiting."""
+    return guard.pending_changes()
+
+
+@door(app.delete("/charges/waiting/{proposal_id}", operation_id="decline_charge_change"))
+@gate("money.write")
+def decline_charge_change(proposal_id: str) -> dict:
+    """Withdraw a waiting addition — when the user says it was a mistake."""
+    return guard.decline_change(proposal_id)
+
+
+class AliasIn(BaseModel):
+    descriptor: str = Field(description="the name as printed on the statement")
+    merchant: str = Field(description="the agreed payment it belongs to")
+
+
+@door(app.post("/charges/names", operation_id="name_for_charge"))
+@gate("money.write")
+def name_for_charge(a: AliasIn) -> dict:
+    """A statement name is one of their agreed payments. From you it waits
+    for the owner to confirm, like any addition."""
+    return guard.add_alias(a.descriptor, a.merchant)
 
 
 @door(app.get("/charges/dispute", operation_id="dispute_pack"))
@@ -845,7 +884,9 @@ class StoryIn(BaseModel):
 @gate("life.read")
 def next_story_prompt() -> dict:
     """ONE moment from their photographs nobody has asked about. Offer it at
-    most once per conversation; state only the facts it returns."""
+    most once per conversation; state only the facts it returns. 'Not yet'
+    means don't mention the album. Follow its 'rule' exactly. 'Not now' →
+    skip_story; 'rather not' → decline_story."""
     return album.next_prompt()
 
 
@@ -859,8 +900,15 @@ def record_story(s: StoryIn) -> dict:
 @door(app.delete("/album/{moment_id}", operation_id="decline_story"))
 @gate("life.write")
 def decline_story(moment_id: str) -> dict:
-    """They'd rather not. Final."""
+    """They'd rather not. Final for you; only the owner can reopen it."""
     return album.decline(moment_id)
+
+
+@door(app.post("/album/{moment_id}/skip", operation_id="skip_story"))
+@gate("life.write")
+def skip_story(moment_id: str) -> dict:
+    """Not now — the moment goes to the back of the album; nothing is decided."""
+    return album.skip(moment_id)
 
 
 @door(app.get("/album/progress", operation_id="story_progress"))
@@ -1005,21 +1053,21 @@ def remove_rule(rule_id_or_text: str = "", confirm: str = "") -> dict:
 
 
 @door(app.get("/rules", operation_id="list_rules"))
-@gate("facts.read")
+@gate("rules.read")
 def list_rules(kind: str = "") -> list:
     """Every standing rule the owner has written."""
     return rules.rules(kind)
 
 
 @door(app.get("/rules/check", operation_id="check_disclosure"))
-@gate("facts.read")
+@gate("rules.read")
 def check_disclosure(audience: str, tags: str) -> dict:
     """Before saying anything about the owner to anyone else. Silence is a no."""
     return rules.check_disclosure(audience, tags)
 
 
 @door(app.get("/rules/guidance", operation_id="guidance_for"))
-@gate("facts.read")
+@gate("rules.read")
 def guidance_for(tags: str, audience: str = "me") -> dict:
     """The owner's standing instructions that apply right now, verbatim."""
     return rules.guidance_for(tags, audience)

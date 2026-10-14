@@ -390,12 +390,17 @@ class OwnerOnlyAndOldDataKept(VoiceCase):
 
     def test_an_old_enrolment_keeps_working_and_is_brought_up_to_date(self):
         d, old = self._old_enrolment(speech())
+        before = {n: mode(d / n) for n in ("take-001.wav", "manifest.json")}
         self.assertEqual(self.status("laszlo"), 0)
         self.assertIn("recorded on September 16, 2026 (take-001.wav)", self.last)
+        # Integration: 'status' only reads — it changed modes before, even of
+        # a hard-linked file that was not a recording (verify, voice). The
+        # next sitting brings the folder up to owner-only modes instead.
+        self.assertEqual({n: mode(d / n) for n in before}, before)
+        self.assertEqual(self.enrol("laszlo", ask=YES), 0)
         self.assertEqual(mode(d), 0o700)
         self.assertEqual(mode(d / "take-001.wav"), 0o400)
         self.assertEqual(mode(d / "manifest.json"), 0o600)
-        self.assertEqual(self.enrol("laszlo", ask=YES), 0)
         man = self.manifest("laszlo")
         self.assertEqual(man["takes"][:3], [dict(t, **extra) for t, extra in zip(
             old["takes"], [{"kind": "consent"}, {"consent": "take-001.wav"},

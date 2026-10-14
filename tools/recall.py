@@ -293,6 +293,11 @@ def main(argv: list[str] | None = None) -> int:
     if not a.question:
         ap.error("ask something, e.g. \"vacation ten years ago in Cuba\"")
 
+    if not a.index:
+        why = home.problem()
+        if why:                      # the drive is away: say so plainly
+            print(f"\n  {why[0].upper() + why[1:]}.\n")
+            return 1
     where = Path(a.index).expanduser() if a.index else home.index_path()
     try:
         # A question never creates an index — not in the home folder, not

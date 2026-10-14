@@ -532,46 +532,87 @@ def forget_profile_field(field: str, confirm: str = "") -> dict:
 @gate("money.write")
 def expect_charge(merchant: str, amount: float, cadence: str = "monthly",
                   authorized_recurring: bool = True, note: str = "") -> dict:
-    """Register a charge the user has ACTUALLY agreed to (merchant, amount,
-    cadence, and whether they ever authorized recurring billing). Anything
-    not in this register becomes a question later, so build it up whenever
-    a subscription or bill comes up in conversation."""
+    """Ask to add a charge the user has ACTUALLY agreed to (merchant, amount,
+    cadence, and whether they ever authorized recurring billing) to their
+    list of agreed payments. From you it WAITS for the owner (status
+    'waiting_for_owner'): say it is waiting, never that it is registered,
+    unless the note says 'is in your register'. He confirms it himself, at
+    his own keyboard."""
     return guard.expect_charge(merchant, amount, cadence, authorized_recurring, note)
 
 
 @door(mcp.tool())
 @gate("money.write")
 def mark_cancelled(merchant: str, on: str = "") -> dict:
-    """The user cancelled something. Record it — any charge after this date
-    is unauthorized, and that is the kind that goes unnoticed for years."""
+    """The user cancelled something. Record it with the date they cancelled
+    (ISO, e.g. 2026-10-12) — any charge dated after it is flagged. If
+    marked_cancelled comes back 0, NOTHING is being watched: ask what the
+    note asks (which company, or the date) and call it again."""
     return guard.mark_cancelled(merchant, on)
 
 
 @door(mcp.tool())
 @gate("money.read")
-def check_charge(merchant: str, amount: float, date: str = "") -> dict:
-    """Hold one charge up against what the user agreed to. Returns a verdict:
-    expected / amount_increased / unexpected_merchant / charged_after_cancel /
-    duplicate, in plain words, with the dollars at stake. Anything that isn't
-    'expected' should be scored with record_opportunity (reduces_risk=True)
-    and said out loud."""
-    return guard.check_charge(merchant, amount, date)
+def check_charge(merchant: str, amount: float | str, date: str = "", ref: str = "") -> dict:
+    """Hold one charge up against what the user agreed to. Pass the date
+    printed on the statement (ISO, e.g. 2026-10-03) and the line's reference
+    if it has one. Checking the same charge again never adds a duplicate.
+    Quiet verdicts: expected, amount_decreased, refund. unexpected_merchant
+    is informational — most are ordinary purchases; offer a dispute only if
+    they say it is not theirs. needs_date: ask for the date.
+    possible_card_testing or possible_scam: tell them gently; the next step
+    is the bank, on the number on the back of the card. amount_increased,
+    duplicate, unauthorized_renewal, charged_after_cancel: say it plainly,
+    with the dollars at stake, and offer a dispute_pack."""
+    return guard.check_charge(merchant, amount, date, ref=ref)
 
 
 @door(mcp.tool())
 @gate("money.read")
 def review_statement(charges: list) -> dict:
     """Run a whole statement or transaction list through at once — each entry
-    {merchant, amount, date}. This is where people find the money that has
-    been quietly leaking for years. Report the total at stake."""
-    return guard.review_statement([dict(c) for c in charges])
+    {merchant, amount, date, ref}, with the dates as printed. This is where
+    people find the money that has been quietly leaking for years, and where
+    a same-day double bill shows. Report the summary and the total at stake;
+    if some lines could not be read, nothing was kept: fix them and send the
+    whole statement again."""
+    # Passed through as sent: the guardian reads every line and names the one
+    # it could not read (a line of text crashed dict() here before).
+    return guard.review_statement(list(charges))
 
 
 @door(mcp.tool())
 @gate("money.read")
 def expected_charges() -> list:
-    """What the user has agreed to pay, and what they've cancelled."""
+    """What the user has agreed to pay, and what they've cancelled. Entries
+    with status 'waiting_for_owner' are not in force yet."""
     return guard.expected_charges()
+
+
+@door(mcp.tool())
+@gate("money.read")
+def charge_changes_waiting() -> list:
+    """Additions to the list of agreed payments that an AI asked for and that
+    wait for the owner. Only he confirms them, at his own keyboard; you can
+    only tell him they are waiting."""
+    return guard.pending_changes()
+
+
+@door(mcp.tool())
+@gate("money.write")
+def decline_charge_change(proposal_id: str) -> dict:
+    """Withdraw a waiting addition (by its proposal id) — for when the user
+    says it was a mistake. Nothing becomes quieter by this."""
+    return guard.decline_change(proposal_id)
+
+
+@door(mcp.tool())
+@gate("money.write")
+def name_for_charge(descriptor: str, merchant: str) -> dict:
+    """The user says a statement name is one of their agreed payments ('NFLX
+    DIGITAL is my Netflix'). From you it waits for the owner to confirm,
+    like any addition."""
+    return guard.add_alias(descriptor, merchant)
 
 
 @door(mcp.tool())
@@ -697,7 +738,9 @@ def next_story_prompt() -> dict:
     """ONE moment from their photographs nobody has asked about — a count, a
     place, dates, and the question, phrased as a friend would. Offer it at
     most once per conversation, only when the moment is right. State only the
-    facts it returns; never guess what the pictures show. 'Rather not' →
+    facts it returns; never guess what the pictures show. It may answer 'Not
+    yet' while trust is being built: then don't mention the album. Follow its
+    'rule' exactly. 'Not now' → skip_story (or let it go); 'rather not' →
     decline_story, and never raise it again."""
     return album.next_prompt()
 
@@ -716,8 +759,17 @@ def record_story(moment_id: str, text: str, people: str = "", when: str = "",
 @door(mcp.tool())
 @gate("life.write")
 def decline_story(moment_id: str) -> dict:
-    """They'd rather not. Final — that moment is never offered again."""
+    """They'd rather not. Final for you — that moment is never offered again;
+    only the owner can reopen it, from his own terminal."""
     return album.decline(moment_id)
+
+
+@door(mcp.tool())
+@gate("life.write")
+def skip_story(moment_id: str) -> dict:
+    """Not now — the moment goes to the back of the album; nothing is
+    decided, and it comes round again much later."""
+    return album.skip(moment_id)
 
 
 @door(mcp.tool())
@@ -871,14 +923,14 @@ def remove_rule(rule_id_or_text: str = "", confirm: str = "") -> dict:
 
 
 @door(mcp.tool())
-@gate("facts.read")
+@gate("rules.read")
 def list_rules(kind: str = "") -> list:
     """Every standing rule the owner has written, in plain language."""
     return rules.rules(kind)
 
 
 @door(mcp.tool())
-@gate("facts.read")
+@gate("rules.read")
 def check_disclosure(audience: str, tags: str) -> dict:
     """Call BEFORE saying anything about the owner to anyone who is not them.
     A rule naming this audience beats a rule for 'anyone'; deny beats allow;
@@ -888,7 +940,7 @@ def check_disclosure(audience: str, tags: str) -> dict:
 
 
 @door(mcp.tool())
-@gate("facts.read")
+@gate("rules.read")
 def guidance_for(tags: str, audience: str = "me") -> dict:
     """The owner's standing instructions that apply right now: how to react
     when speaking WITH them about this, or how to speak ABOUT them to someone

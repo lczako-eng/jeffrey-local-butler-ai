@@ -36,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "connector"))
+import answers  # noqa: E402
 import home  # noqa: E402
 
 HOME = Path.home() / ".jefferey"
@@ -229,10 +230,10 @@ def want_lan(argv: list[str]) -> bool:
     say(f"\n  Would you also like to see this on a phone, tablet or TV in this house?")
     say(f"  {D}Type yes and press return, or just press return for this Mac only.{O}")
     try:
-        answer = input("  phone/TV? ").strip().lower()
+        answer = input("  phone/TV? ")
     except (EOFError, KeyboardInterrupt):
         answer = ""
-    return answer in ("y", "yes", "yes please", "ok", "sure")
+    return answers.yes_no(answer) is True        # 'oui' too; return is this Mac only
 
 
 def count_indexed() -> int:
@@ -248,7 +249,6 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     say(f"\n{B}Your life, on the screen{O}")
     say(f"{D}Everything below happens on this machine. Nothing is uploaded.{O}")
-    say(f"  {D}Life lives {home.describe()}.{O}")
     gone = drive_missing()
     if gone:
         bad(f"Your photographs were read onto the Self-Cloud drive '{gone}', "
@@ -256,6 +256,14 @@ def main(argv: list[str] | None = None) -> int:
         say(f"  {D}Plug it in, then double-click 'Show me my life' again. Nothing"
             f" was read\n   onto this Mac.{O}")
         return 1
+    why = home.problem()
+    if why:
+        # The drive is away, unknown, or one of two: the photographs are not
+        # read anywhere else (a laptop index would split the life in two).
+        bad(why[0].upper() + why[1:] + ".")
+        say(f"  {D}Nothing was read onto this Mac.{O}")
+        return 1
+    say(f"  {D}Life lives {home.describe()}.{O}")
 
     head("[1/4] Checking the pieces")
     need = missing(NEEDS)

@@ -131,19 +131,38 @@ parts (once, ~2 GB), then reads the photographs: dates, places, and what they
 look like. The first pass stops at 3,000 so you see it working in minutes; run
 it again for the rest. It always picks up where it left off.
 
-The wall opens in the browser: big pictures, one box to type or speak into.
-*"the vacation ten years ago in Cuba"* works, offline.
+The wall opens in the browser on this Mac: big pictures, one box to type into.
+*"the vacation ten years ago in Cuba"* works, offline. (A microphone button
+appears only where the browser understands speech on the device itself.) To
+see it on the phone or the TV, answer yes when it asks, then open the printed
+link once on each screen. **Hide** clears the screen; it also hides itself
+after ten minutes untouched.
+
+Keeping things off it, from your own terminal (`~/.jefferey/venv/bin/python`
+in front of each):
+
+| Type | It means |
+|---|---|
+| `tools/photo_index.py forget <photo or folder>` | that photo never shows again |
+| `connector/reminisce.py keep-off-wall Kandahar` | never on the wall |
+| `connector/reminisce.py never-ask Afghanistan` | the album never asks about it |
+| `connector/reminisce.py list`, then `reopen <id>` | undo a "rather not" — only you can |
 
 ---
 
 ## 5. Your voice
 
 Double-click **`Record my voice.command`**. About twenty minutes of reading
-sentences aloud, in your own room. The first thing it records is you saying
-you agree. Recordings go on the drive, read-only, checksummed; deleting them
-is real deletion. Nothing is cloned or played back as you yet — that is a
-separate decision, made later, with the local model, and never on a phone or
-a door intercom.
+sentences aloud, in your own room. It asks for your name: type it, it is
+never guessed. Each sitting starts with you reading one sentence saying you
+agree, ending in three words that change every time. When you carry on
+another day it asks "Are you …?" Type yes. Recordings go on the drive,
+read-only, checksummed. To delete, run `tools/voice_enrol.py --who "Your Name"
+delete` and type your name: it removes the copies on the drive and on this
+Mac, and tells you plainly what overwriting cannot reach (flash storage, Time
+Machine). Nothing is cloned or played back as you yet — that is a separate
+decision, made later, with the local model, and never on a phone or a door
+intercom.
 
 ---
 
@@ -182,6 +201,13 @@ plugged in — and nowhere else. Your original is never changed. A secret from
 your vault goes only into the box that asks for it, and *What left the house*
 lists every time one was used. Boxes that sign or say "I certify" are left for
 you, unless you type `/permit paperwork act` yourself.
+
+### Charges
+
+JEFFEREY watches your card statements against your list of agreed payments.
+When an AI asks to add something to that list, it waits for you: double-click
+**`Check my charges.command`** (or type `/charges` in *Talk to JEFFEREY on
+this Mac*) and type yes or no for each one.
 
 ### Forgetting, and bringing back
 
@@ -231,6 +257,7 @@ nothing changes until you type `yes`:
 | `/permit correspondence act` | he may send letters for you — nothing that costs money |
 | `/permit paperwork act` | he may fill the boxes on a form that sign or certify for you |
 | `/permit groceries recommend` | back to bringing you options; you decide |
+| `/charges` | payments an AI asked to add to your agreed list: yes or no |
 | `/keys`, `/grant family`, `/scope remove family media.read`, `/revoke gpt-raw` | who holds a key, and changing it |
 
 Moving money, gift cards, crypto, phone calls in your voice and the doors are
@@ -266,6 +293,7 @@ to a plain Claude or ChatGPT. Only you let more people see something:
 | `What left the house.command` | the egress log, in plain words; type `shut` (or `fermer`) / `open` | no |
 | `Restore my memories.command` | see the copies of your memories JEFFEREY keeps, and put one back | no |
 | `Forget or bring back.command` | OK a big forget an AI asked for, put back something removed, or erase words for good | no |
+| `Check my charges.command` | yes or no to payments an AI asked to add to your agreed list | no |
 | `Talk to JEFFEREY on this Mac.command` | JEFFEREY riding Hermes on your own Mac, same conscience | one-time download; then no |
 | on the drive: `Self-Cloud/Start Self-Cloud.command` | the same as *Show me my life*, bound to that drive, on any Mac | no |
 

@@ -344,6 +344,34 @@ def marked_drives() -> list[tuple[Path, dict]]:
     return out
 
 
+def all_drives(any_marker: bool = False) -> list[Path]:
+    """Every Self-Cloud drive plugged in, the one in use first — paired or
+    not. For FINDING things (a voice to delete everywhere), never for
+    choosing where to write. `any_marker` also counts a volume whose marker
+    is not a real one (a drive made before October 2026)."""
+    out: list[Path] = []
+    try:
+        r = root()
+    except Exception:
+        r = None
+    if r is not None:
+        out.append(r)
+    explicit = os.environ.get("SELFCLOUD_ROOT")
+    if explicit:
+        p = Path(explicit).expanduser()
+        if p.is_dir() and (read_marker(p) or (any_marker and (p / MARKER).is_file())):
+            out.append(p)
+    for m in _mounts():
+        if read_marker(m) or (any_marker and (m / MARKER).is_file()):
+            out.append(m)
+    seen, uniq = set(), []
+    for p in out:
+        if str(p) not in seen:
+            seen.add(str(p))
+            uniq.append(p)
+    return uniq
+
+
 def _volume_uuid(root: Path) -> str | None:
     """The volume's own UUID (macOS), once per mount. None where unknown."""
     if platform.system() != "Darwin":

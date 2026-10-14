@@ -76,6 +76,16 @@ UNREACHABLE = ("The pictures can't be reached right now. Is the Self-Cloud "
                "drive plugged in and the computer awake?")
 SOMETHING_WRONG = ("Something went wrong reading the pictures. The details are "
                    "in the window on the computer that runs this screen.")
+# When the owner's choices about what may be shown cannot be read at all, the
+# wall shows nothing rather than everything (verify, I-53: declined photos
+# came back on the screen when the memory file was damaged).
+CLOSED = ("The pictures can't be shown just now: the list of what the owner "
+          "keeps private could not be read. Nothing is shown until it can. "
+          "Double-click 'Restore my memories' on the computer to fix it.")
+
+
+class _Closed(Exception):
+    """The owner's hide decisions are unreadable: show nothing."""
 
 
 # ------------------------------------------------------------------- data
@@ -110,20 +120,46 @@ def _embedder():
         return STATE["embedder"]
 
 
+def _read_store(p: Path) -> dict | None:
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
 def _conscience_data() -> dict | None:
     """The owner's conscience, read and never written. The wall only needs
-    his decisions: what he declined, what he keeps off the wall, his rules."""
+    his decisions: what he declined, what he keeps off the wall, his rules.
+    If the file cannot be read, the newest safety copy JEFFEREY keeps beside
+    it is used; if none can be read either, None — and the wall shows
+    nothing (fail closed)."""
     p = Path(STATE.get("conscience_path") or home.conscience_path()).expanduser()
     if not p.exists():
         return {}
+    data = _read_store(p)
+    if data is not None:
+        return data
+    hist = p.parent / (p.stem + ".history")
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        if not STATE.get("warned_conscience"):
-            STATE["warned_conscience"] = True
-            print(f"  ! Could not read {p}. The wall still hides what the photo "
-                  f"index knows was declined.", file=sys.stderr)
-        return None
+        copies = sorted((c for d in (hist, hist / "pinned") if d.is_dir()
+                         for c in d.glob("*.json")),
+                        key=lambda c: c.stat().st_mtime, reverse=True)
+    except OSError:
+        copies = []
+    for c in copies:
+        data = _read_store(c)
+        if data is not None:
+            if not STATE.get("warned_conscience"):
+                STATE["warned_conscience"] = True
+                print(f"  ! Could not read {p}. The wall uses the safety copy "
+                      f"{c.name} to know what to hide.", file=sys.stderr)
+            return data
+    if not STATE.get("warned_conscience"):
+        STATE["warned_conscience"] = True
+        print(f"  ! Could not read {p}, nor any safety copy of it, so the wall shows "
+              f"nothing until it can.", file=sys.stderr)
+    return None
 
 
 def _hidden():
@@ -139,7 +175,10 @@ def _hidden():
         if cached and cached[0] == stamp and time.time() - cached[1] < HIDDEN_TTL:
             return cached[2]
         from reminisce import wall_rules
-        value = wall_rules(STATE["index_path"], _conscience_data())
+        data = _conscience_data()
+        hidden, rem = wall_rules(STATE["index_path"], data)
+        hidden["closed"] = data is None
+        value = (hidden, rem)
         STATE["hidden"] = (stamp, time.time(), value)
         return value
 
@@ -160,7 +199,7 @@ def allowed(sha: str, place, country, taken_at, automatic: bool) -> bool:
     for 'on this day' (shown without anyone asking), never a subject his
     rules say not to raise unprompted."""
     hidden, rem = _hidden()
-    if sha in hidden["shas"]:
+    if hidden.get("closed") or sha in hidden["shas"]:
         return False
     tags = _photo_tags(rem, place, country, taken_at)
     if tags & hidden["off_wall"]:
@@ -181,6 +220,8 @@ def known_places() -> set[str]:
 
 
 def search(question: str, top: int = 120) -> dict:
+    if _hidden()[0].get("closed"):
+        raise _Closed()
     import recall
     q = recall.parse(question, known_places())
     emb = _embedder() if q.semantic else None
@@ -201,6 +242,8 @@ def search(question: str, top: int = 120) -> dict:
 def on_this_day(top: int = 120) -> dict:
     """The question nobody thinks to ask — asked only when someone presses
     the button."""
+    if _hidden()[0].get("closed"):
+        raise _Closed()
     today = dt.date.today()
     idx = _index()
     rows = list(idx.db.execute(
@@ -545,11 +588,26 @@ class Wall(BaseHTTPRequestHandler):
                 self._send(404, b"no", "text/plain")
         except BrokenPipeError:
             pass
+        except _Closed:                    # his hide decisions are unreadable
+            self._json({"error": CLOSED}, 503)
         except FileNotFoundError:          # no index here (the drive is unplugged?)
             self._json({"error": UNREACHABLE}, 503)
         except Exception:                  # a plain sentence on screen; details here
+            if not _reachable():
+                # The drive went away while the wall was up: SQLite says 'disk
+                # I/O error', but the person in front of the TV needs this.
+                self._json({"error": UNREACHABLE}, 503)
+                return
             traceback.print_exc()
             self._json({"error": SOMETHING_WRONG}, 500)
+
+
+def _reachable() -> bool:
+    """Is the photo index still there (the drive still plugged in)?"""
+    try:
+        return (Path(STATE.get("index_path") or "") / "index.sqlite").is_file()
+    except OSError:
+        return False
 
 
 def lan_ip() -> str:
@@ -589,7 +647,7 @@ def link(host: str = "127.0.0.1") -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--index", default=str(home.index_path()))
+    ap.add_argument("--index", default=None)
     ap.add_argument("--port", type=int, default=8378)
     ap.add_argument("--lan", action="store_true",
                     help="let the phone and the TV reach it (asks for a passcode)")
@@ -597,6 +655,12 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     if a.selftest:
         return selftest()
+    if a.index is None:
+        why = home.problem()
+        if why:                      # the drive is away: say so, never a laptop wall
+            print(f"\n  {why[0].upper() + why[1:]}.\n")
+            return 1
+        a.index = str(home.index_path())
 
     from photo_index import NoIndex, PhotoIndex
     try:

@@ -397,6 +397,11 @@ class Life:
     def _moment_out(m: dict) -> dict:
         o = {k: x for k, x in m.items()
              if k not in ("source", "requested_visibility", "visibility_changed", "status")}
+        if isinstance(o.get("photos"), list):
+            # The photographs' fingerprints are no use to an engine and look
+            # like numbers to the door (I-15): a count goes out instead. An
+            # older store keeps its list on disk until the album moves it.
+            o["photos"] = len(o["photos"])
         if provenance.pending(m):
             o["unconfirmed"] = True
         if "verbatim" in m and not m["verbatim"]:

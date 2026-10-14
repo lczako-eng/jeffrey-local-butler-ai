@@ -654,7 +654,9 @@ class PhotoFingerprintsAreNotSecrets(EgressTest):
         self.assertEqual(r["each"], [None] * len(ids))
         self.assertEqual(r["rel"]["moments"][0]["photos"], ids)
         self.assertNotIn("kept_home", r["rel"])
-        self.assertEqual(r["prompt"]["photo_ids"], ids)
+        # Integration: the album no longer sends fingerprints at all (I-15,
+        # album side), so next_story_prompt's allowlist no longer names them.
+        self.assertNotIn("photo_ids", r["prompt"])
         self.assertEqual(r["random"], 0)
 
     def test_who_am_i_and_tell_story_work_with_a_story_pinned_to_those_photos(self):
@@ -669,7 +671,10 @@ class PhotoFingerprintsAreNotSecrets(EgressTest):
         """, JEFFEREY_CLIENT="jefferey")
         self.assertFalse(r["who"].get("refused"), r["who"])
         self.assertFalse(r["story"].get("refused"), r["story"])
-        self.assertEqual(r["who"]["moments"][0]["photos"], ids)
+        # Integration: an older memory's fingerprint list reaches the engine
+        # as a count (I-15) — and stays whole on disk.
+        self.assertEqual(r["who"]["moments"][0]["photos"], len(ids))
+        self.assertNotIn(ids[0], json.dumps(r))
         self.assertNotIn("social insurance", json.dumps(r))
 
 

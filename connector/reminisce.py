@@ -45,8 +45,8 @@ Rules, because this is the most intimate thing the system does:
 This reads the photo index built by tools/photo_index.py and writes to the
 conscience through life.py. It runs by itself from a terminal, and through
 tools on every JEFFEREY surface: next_story_prompt / record_story /
-decline_story / story_progress. (Reminisce.skip, for "not now", is ready for
-the surfaces to offer; until then a moment left unanswered rests a week.)
+decline_story / skip_story / story_progress. 'Not now' (skip_story) sends a
+moment to the back; a moment offered and never answered rests a week.
 
 The owner's own terminal can also keep subjects out of the album and off the
 wall, and — only there, by his own hands — open a declined moment again:
@@ -73,6 +73,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import home
+# Where the photo index was when this module was imported. Kept for older
+# callers; a Reminisce made without a path asks home.py every time instead,
+# so a running album follows a drive plugged in (or renamed) after it started.
 DEFAULT_INDEX = home.index_path()
 MERGE_GAP_DAYS = 14   # same country, photos within two weeks = one trip
 MIN_PHOTOS = 3        # fewer than this is not a moment worth an interruption
@@ -201,16 +204,26 @@ class _DataOnly:
 class Reminisce:
     """Finds untold moments in the photographs and keeps what he says."""
 
-    def __init__(self, conscience, life, index_path: Path | str = DEFAULT_INDEX):
+    def __init__(self, conscience, life, index_path: Path | str | None = None):
         self.c = conscience
         self.life = life
-        self.index_path = Path(index_path).expanduser()
+        # None: wherever home.py says the photographs are, asked on every
+        # call — the drive may be plugged in after JEFFEREY started.
+        self._fixed = Path(index_path).expanduser() if index_path is not None else None
         # One SQLite connection per thread: every surface answers from more
         # than one thread, and a connection shared between them broke
         # record_story and decline_story after any two calls overlapped.
         self._local = threading.local()
         self._lock = threading.RLock()
-        self._schema_ready = False
+        self._schema_ready: set[str] = set()
+
+    @property
+    def index_path(self) -> Path:
+        return self._fixed if self._fixed is not None else home.index_path()
+
+    @index_path.setter
+    def index_path(self, value) -> None:
+        self._fixed = Path(value).expanduser()
 
     # ------------------------------------------------------------ storage
     @property
@@ -219,20 +232,27 @@ class Reminisce:
 
     @property
     def db(self) -> sqlite3.Connection:
+        where = self.index_path
         con = getattr(self._local, "con", None)
-        if con is not None:
+        if con is not None and getattr(self._local, "where", None) == where:
             return con
-        p = self.index_path / "index.sqlite"
+        if con is not None:                 # the drive moved: let the old one go
+            try:
+                con.close()
+            except Exception:
+                pass
+            self._local.con = None
+        p = where / "index.sqlite"
         if not p.is_file():
             raise FileNotFoundError(
-                f"No photographs have been read yet at {self.index_path}. "
+                f"No photographs have been read yet at {where}. "
                 f"Double-click 'Show me my life' to read them (or plug in the "
                 f"Self-Cloud drive, if they were read onto it).")
         con = sqlite3.connect(p, timeout=DB_TIMEOUT)
         con.isolation_level = "IMMEDIATE"   # take the write lock up front
-        self._local.con = con
+        self._local.con, self._local.where = con, where
         with self._lock:
-            if not self._schema_ready:
+            if str(where) not in self._schema_ready:
                 # The moments table is a CACHE of the clustering, beside the
                 # photos it describes. What he decided — told, declined —
                 # lives in his conscience (see _album), so a rebuilt index
@@ -255,7 +275,7 @@ class Reminisce:
                     except sqlite3.OperationalError:
                         pass                      # already there
                 con.commit()
-                self._schema_ready = True
+                self._schema_ready.add(str(where))
         return con
 
     # -------------------------------------------------- his decisions, kept
@@ -587,9 +607,9 @@ class Reminisce:
             self.db.execute("UPDATE moments SET asked_at=? WHERE id=?", (_now(), mid))
             self.db.commit()
         rule = ("One question, asked the way a friend would while looking at the "
-                "pictures. Keep their words exactly. 'Not now' is fine — let it "
-                "go; it comes round again much later. 'Rather not' is final — "
-                "call decline_story and never raise it again.")
+                "pictures. Keep their words exactly. 'Not now' is fine — call "
+                "skip_story or just let it go; it comes round again much later. "
+                "'Rather not' is final — call decline_story and never raise it again.")
         if pick["why"]:
             rule += (" This may be a painful one. Ask only if they seem ready, "
                      "make 'not now' easy, and ask nothing about how it feels.")
@@ -618,9 +638,41 @@ class Reminisce:
                 "from": r[3], "to": r[4], "shas": json.loads(r[5] or "[]"),
                 "status": r[6]}
 
+    def _elsewhere(self, row: dict, text: str) -> list[str]:
+        """Places the story names that the photographs know about, when it
+        names none of this moment's own: a Kabul story offered for the
+        Budapest pictures (stress test album#5) is about somewhere else."""
+        def named(word: str) -> bool:
+            return bool(re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text, re.I))
+        own = {str(x).strip().lower() for x in [row.get("country"), *(row.get("places") or [])]
+               if str(x or "").strip()}
+        if any(named(w) for w in own):
+            return []
+        known: set[str] = set()
+        for country, places in self.db.execute(
+                "SELECT country, places FROM moments WHERE present=1"):
+            for w in [country, *json.loads(places or "[]")]:
+                if str(w or "").strip():
+                    known.add(str(w).strip().lower())
+        return sorted(w for w in known - own if len(w) >= 3 and named(w))
+
+    @staticmethod
+    def _kept_note(memory: dict, where_pinned: str) -> str:
+        """What really happened, said plainly (I-25, I-26)."""
+        how = ("Kept in their words" if memory.get("verbatim", True) else
+               "Kept as a summary in the AI's words, not his; he can check it with /pending")
+        who = ("privately" if memory.get("visibility", "private") == "private"
+               else f"for {memory.get('visibility')}")
+        note = f"{how}, {who}, {where_pinned}."
+        if memory.get("requested_visibility") and memory.get("note"):
+            note += " " + str(memory["note"])
+        return note
+
     def record(self, moment_id: str, text: str, people: str = "",
                when: str = "", visibility: str = "private") -> dict:
-        """Keep what he said, verbatim, pinned to that moment."""
+        """Keep what he said, verbatim, pinned to that moment — unless what he
+        said is plainly about somewhere else: then it is kept, unpinned, and
+        the moment is left for another day."""
         if not self.available:
             return {"error": "no photographs are indexed yet, so there is no "
                              "moment to pin this to"}
@@ -637,6 +689,21 @@ class Reminisce:
                 return {"error": "nothing to keep — the story is empty"}
             if visibility not in VISIBILITY:
                 return {"error": f"visibility must be one of: {', '.join(VISIBILITY)}"}
+            elsewhere = self._elsewhere(row, text)
+            if elsewhere:
+                # His words are kept (nothing he said is lost), but not pinned
+                # to pictures they are not about, and the moment stays untold.
+                memory = self.life.add_memory(text, when=when, people=people,
+                                              tags=",".join(elsewhere),
+                                              visibility=visibility)
+                shown = {k: v for k, v in memory.items() if k != "photos"}
+                return {"kept": True, "moment": row["label"], "memory": shown,
+                        "pinned_to_photos": 0, "one_follow_up": "",
+                        "note": self._kept_note(
+                            memory, f"but NOT pinned to the pictures from {row['label']}: "
+                                    f"it speaks of {', '.join(w.title() for w in elsewhere)}")
+                                + " Ask him, gently, which pictures it belongs to; the "
+                                  "album will ask about these ones another time."}
             _tags, why = self.tags_for(row["country"], row["places"], row["from"], row["to"])
             # The moment, with every photograph it covers, is kept in the
             # album's state; the memory carries the moment's id. The memory
@@ -666,8 +733,8 @@ class Reminisce:
         return {"kept": True, "moment": row["label"], "memory": shown,
                 "pinned_to_photos": len(row["shas"]),
                 "one_follow_up": follow,
-                "note": "Kept in their words, privately, pinned to those pictures. "
-                        "Ask the follow-up only if the moment is right; never two."}
+                "note": self._kept_note(memory, "pinned to those pictures")
+                        + " Ask the follow-up only if the moment is right; never two."}
 
     def decline(self, moment_id: str) -> dict:
         """'Rather not.' Final. Never offered again — kept in his conscience
@@ -959,11 +1026,19 @@ def selftest() -> int:
 
 
 def _owner_cli(argv: list[str]) -> int:
-    from conscience import Conscience
+    from conscience import Conscience, StoreProblem
     from life import Life
     import access
     from selfcloud import SelfCloud
-    _c = Conscience()
+    why = home.problem()
+    if why:                        # the drive is away: say so, change nothing
+        print(f"\n  {why[0].upper() + why[1:]}.\n")
+        return 1
+    try:
+        _c = Conscience()
+    except StoreProblem as e:
+        print(f"\n  {e.for_owner()}\n")
+        return 1
     access.bind(SelfCloud(_c), "jefferey", announce=False)
     rem = Reminisce(_c, Life(_c))
     if argv and argv[0] in ("never-ask", "keep-off-wall"):

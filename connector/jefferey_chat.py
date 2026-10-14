@@ -33,6 +33,7 @@ In-chat commands:
     /confirm CODE yes, that is right (or /confirm all)
     /share CODE family|legacy|engines   let more people see something
     /legacy       what you meant for after: /legacy open executor, /legacy seal
+    /charges      payments an AI asked to add to your agreed list: yes or no
     /keys         every key to your Self-Cloud
     /grant NAME [SCOPES]   give out a key        (you are asked first)
     /scope add|remove NAME SCOPE                 (you are asked first)
@@ -544,10 +545,12 @@ TOOLS = [
     {
         "name": "expect_charge",
         "description": (
-            "Register a charge the user has ACTUALLY agreed to — merchant, "
+            "Ask to add a charge the user has ACTUALLY agreed to — merchant, "
             "amount, cadence, and whether they ever authorized recurring "
-            "billing. Build this register whenever a bill or subscription "
-            "comes up; anything not in it becomes a question later."
+            "billing — to their list of agreed payments. From you it WAITS for "
+            "the owner (status 'waiting_for_owner'): say it is waiting, never "
+            "that it is registered, unless the note says 'is in your register'. "
+            "He confirms it himself (/charges, at his keyboard)."
         ),
         "input_schema": {
             "type": "object",
@@ -564,8 +567,11 @@ TOOLS = [
     {
         "name": "mark_cancelled",
         "description": (
-            "The user cancelled something. Record it — any charge after this "
-            "date is unauthorized, and that kind goes unnoticed for years."
+            "The user cancelled something. Record it with the date they "
+            "cancelled (ISO, e.g. 2026-10-12) — any charge dated after it is "
+            "flagged. If marked_cancelled comes back 0, NOTHING is being "
+            "watched: ask what the note asks (which company, or the date) and "
+            "call it again."
         ),
         "input_schema": {
             "type": "object",
@@ -576,18 +582,25 @@ TOOLS = [
     {
         "name": "check_charge",
         "description": (
-            "Hold one charge up against what the user agreed to. Verdicts: "
-            "expected / amount_increased / unexpected_merchant / "
-            "charged_after_cancel / duplicate — in plain words, with the "
-            "dollars at stake. Anything but 'expected' should be scored with "
-            "record_opportunity (reduces_risk=True) and said out loud."
+            "Hold one charge up against what the user agreed to. Pass the date "
+            "printed on the statement (ISO, e.g. 2026-10-03). Checking the same "
+            "charge again never adds a duplicate. Quiet verdicts: expected, "
+            "amount_decreased, refund. unexpected_merchant is informational — "
+            "most are ordinary purchases; offer a dispute only if they say it "
+            "is not theirs. needs_date: ask for the date. possible_card_testing "
+            "or possible_scam: tell them gently; the next step is the bank, on "
+            "the number on the back of the card. amount_increased, duplicate, "
+            "unauthorized_renewal, charged_after_cancel: say it plainly, with "
+            "the dollars at stake, and offer a dispute_pack."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "merchant": {"type": "string"},
-                "amount": {"type": "number"},
+                "amount": {"type": ["number", "string"]},
                 "date": {"type": "string"},
+                "ref": {"type": "string",
+                        "description": "the statement line's reference, if it has one"},
             },
             "required": ["merchant", "amount"],
         },
@@ -596,8 +609,11 @@ TOOLS = [
         "name": "review_statement",
         "description": (
             "Run a whole statement through at once — a list of "
-            "{merchant, amount, date}. This is where people find money that "
-            "has been leaking for years. Report the total at stake."
+            "{merchant, amount, date, ref}, with the dates as printed. This is "
+            "where people find money that has been leaking for years, and "
+            "where a same-day double bill shows. Report the summary and the "
+            "total at stake; if some lines could not be read, nothing was kept: "
+            "fix those lines and send the whole statement again."
         ),
         "input_schema": {
             "type": "object",
@@ -608,14 +624,50 @@ TOOLS = [
                         "type": "object",
                         "properties": {
                             "merchant": {"type": "string"},
-                            "amount": {"type": "number"},
+                            "amount": {"type": ["number", "string"]},
                             "date": {"type": "string"},
+                            "ref": {"type": "string"},
                         },
                         "required": ["merchant", "amount"],
                     },
                 }
             },
             "required": ["charges"],
+        },
+    },
+    {
+        "name": "charge_changes_waiting",
+        "description": (
+            "Additions to the list of agreed payments that an AI asked for and "
+            "that wait for the owner. Only he confirms them, at his own "
+            "keyboard (/charges); you can only tell him they are waiting."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "decline_charge_change",
+        "description": (
+            "Withdraw a waiting addition (by its proposal id) — for when the "
+            "user says it was a mistake. Nothing becomes quieter by this."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"proposal_id": {"type": "string"}},
+            "required": ["proposal_id"],
+        },
+    },
+    {
+        "name": "name_for_charge",
+        "description": (
+            "The user says a statement name is one of their agreed payments "
+            "('NFLX DIGITAL is my Netflix'). From you it waits for the owner "
+            "to confirm, like any addition."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"descriptor": {"type": "string"},
+                           "merchant": {"type": "string"}},
+            "required": ["descriptor", "merchant"],
         },
     },
     {
@@ -860,7 +912,18 @@ TOOLS = [
     },
     {
         "name": "decline_story",
-        "description": "They'd rather not. Final — never offered again.",
+        "description": ("They'd rather not. Final for you — never offered again; only "
+                        "the owner can reopen it, from his own terminal."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"moment_id": {"type": "string"}},
+            "required": ["moment_id"],
+        },
+    },
+    {
+        "name": "skip_story",
+        "description": ("Not now — the moment goes to the back of the album; nothing "
+                        "is decided, and it comes round again much later."),
         "input_schema": {
             "type": "object",
             "properties": {"moment_id": {"type": "string"}},
@@ -1067,6 +1130,15 @@ def _check_args(name: str, args: dict) -> str | None:
         if spec is None or val is None:
             continue
         want = spec.get("type")
+        if isinstance(want, list):                 # e.g. an amount as 18.63 or '$18.63'
+            fits = [w for w in want if w in _JSON_TYPES
+                    and isinstance(val, _JSON_TYPES[w])
+                    and not (isinstance(val, bool) and w != "boolean")]
+            if not fits:
+                return f"'{key}' should be {' or '.join(_SAID_AS.get(w, w) for w in want)}."
+            if isinstance(val, float) and not math.isfinite(val):
+                return f"'{key}' is not a real number."
+            continue
         ok = _JSON_TYPES.get(want)
         if ok is None:
             continue
@@ -1216,11 +1288,20 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
     if name == "mark_cancelled":
         return guard.mark_cancelled(args["merchant"], args.get("on", ""))
     if name == "check_charge":
-        return guard.check_charge(args["merchant"], args["amount"], args.get("date", ""))
+        return guard.check_charge(args["merchant"], args["amount"], args.get("date", ""),
+                                  ref=str(args.get("ref") or ""))
     if name == "review_statement":
-        return guard.review_statement([dict(x) for x in args["charges"]])
+        # Passed through as sent: the guardian reads every line and says which
+        # one it could not read (a line of text crashed dict() here before).
+        return guard.review_statement(list(args["charges"]))
     if name == "expected_charges":
         return guard.expected_charges()
+    if name == "charge_changes_waiting":
+        return guard.pending_changes()
+    if name == "decline_charge_change":
+        return guard.decline_change(str(args["proposal_id"]))
+    if name == "name_for_charge":
+        return guard.add_alias(args["descriptor"], args["merchant"])
     if name == "dispute_pack":
         return guard.dispute_pack(args["merchant"])
     if name == "add_person":
@@ -1269,6 +1350,8 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
                             args.get("when", ""), args.get("visibility", "private"))
     if name == "decline_story":
         return album.decline(args["moment_id"])
+    if name == "skip_story":
+        return album.skip(args["moment_id"])
     if name == "story_progress":
         return album.progress()
     if name == "next_question":
@@ -1372,10 +1455,29 @@ _TRACE = {
     ),
     "get_profile": lambda a, r: "reading your profile",
     "forget_profile_field": lambda a, r: _forget_trace(r, "profile detail(s)"),
+    # what really happened, never what was asked for (I-47, I-39)
     "expect_charge": lambda a, r: (
-        f"registered: {a.get('merchant')} ${a.get('amount')} {a.get('cadence','monthly')}"
+        f"asked to add (waiting for you — /charges): {a.get('merchant')} ${a.get('amount')} "
+        f"{a.get('cadence', 'monthly')}" if r.get("status") == "waiting_for_owner" else
+        f"not added: {r.get('error')}" if r.get("error") else
+        f"registered: {r.get('merchant', a.get('merchant'))} ${r.get('amount', a.get('amount'))} "
+        f"{r.get('cadence', a.get('cadence', 'monthly'))}"
     ),
-    "mark_cancelled": lambda a, r: f"cancelled on file: {a.get('merchant')} ({r.get('cancelled_on')})",
+    "mark_cancelled": lambda a, r: (
+        f"cancellation NOT recorded: {a.get('merchant')} (needs a name or a date)"
+        if not r.get("marked_cancelled") else
+        f"cancelled on file: {r.get('merchant')} (from {r.get('cancelled_on')})"),
+    "charge_changes_waiting": lambda a, r: (
+        f"{len(r) if isinstance(r, list) else 0} change(s) to your agreed payments wait "
+        f"for you — type /charges"),
+    "decline_charge_change": lambda a, r: (
+        f"withdrawn: {r.get('merchant')}" if r.get("status") == "declined"
+        else f"nothing withdrawn: {r.get('error')}"),
+    "name_for_charge": lambda a, r: (
+        f"asked to treat '{a.get('descriptor')}' as {r.get('merchant')} (waiting for you — "
+        f"/charges)" if r.get("status") == "waiting_for_owner" else
+        f"'{a.get('descriptor')}' counts as {r.get('merchant')}" if r.get("status") == "registered"
+        else f"name not added: {r.get('error') or r.get('note')}"),
     "check_charge": lambda a, r: (
         f"charge [{r.get('verdict')}]: {a.get('merchant')} ${a.get('amount')}"
         + (f" · ${r.get('recoverable')} at stake" if r.get("recoverable") else "")
@@ -1434,13 +1536,17 @@ _TRACE = {
     # 'his words' only when they were (I-25: a local model's paraphrase was
     # announced as 'kept his words')
     "record_story": lambda a, r: (
-        (f"kept his words, pinned to {r.get('pinned_to_photos')} photos"
-         if (r.get("memory") or {}).get("verbatim") else
-         f"kept a summary in the AI's words — not his exact words — pinned to "
-         f"{r.get('pinned_to_photos')} photos (/pending to check it)")
+        ("kept his words" if (r.get("memory") or {}).get("verbatim") else
+         "kept a summary in the AI's words — not his exact words (/pending to check it)")
+        + (f", pinned to {r.get('pinned_to_photos')} photos" if r.get("pinned_to_photos")
+           else " — not pinned to those photos: it is about somewhere else")
         if r.get("kept") else f"not kept: {r.get('error')}"
     ),
-    "decline_story": lambda a, r: "he'd rather not — never again",
+    "decline_story": lambda a, r: (
+        "he'd rather not — never again (only you can reopen it)" if r.get("declined")
+        else f"album: {r.get('error')}"),
+    "skip_story": lambda a, r: (
+        "not now — it'll come round again" if r.get("skipped") else f"album: {r.get('error')}"),
     "story_progress": lambda a, r: (
         f"album: {r.get('told')} told, {r.get('untold')} untold, {r.get('declined')} declined"
         if r.get("indexed") else "album: no photos indexed yet"
@@ -1783,6 +1889,14 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         print(f"{DIM}{len(snap['waiting_for_you'])} thing(s) an AI wrote down wait for "
               f"your OK — type /pending to see them{RESET}")
 
+    try:
+        waiting_charges = guard.pending_changes()
+    except Exception:
+        waiting_charges = []
+    if waiting_charges:
+        print(f"{DIM}{len(waiting_charges)} change(s) to your list of agreed payments wait "
+              f"for you — type /charges to see them{RESET}")
+
     print(f"{DIM}egress: {'SHUT — nothing will leave' if egress.is_shut() else 'open'} · "
           f"log: {egress.log_path()}{RESET}")
     for n in snap.get("notices", []):
@@ -1803,7 +1917,7 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
 
     print(f"{DIM}/conscience shows the store · /egress shows what left the house · "
           f"/removed shows what was forgotten · /secrets moves a secret into your "
-          f"vault · /permissions and /keys show what "
+          f"vault · /charges shows payments an AI asked to add · /permissions and /keys show what "
           f"each AI may do (you change it with /permit, /grant, /scope, /revoke) · "
           f"/quit leaves (he keeps what he learned){RESET}\n")
     while True:
@@ -1837,6 +1951,9 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
             continue
         if user.lower().split(" ", 1)[0] in _LIFE_COMMANDS:
             owner_life(user)          # the owner's hands only; never a model tool
+            continue
+        if user.lower().split(" ", 1)[0] == "/charges":
+            owner_charges(user)       # the owner's hands only; never a model tool
             continue
         try:
             history.append({"role": "user", "content": egress.release_text("you_said", user)})
@@ -2181,6 +2298,36 @@ def owner_command(command: str, answer=input, tty: bool | None = None) -> dict |
     return None
 
 
+def owner_charges(command: str, answer=input, tty: bool | None = None) -> dict | None:
+    """/charges — typed by the OWNER at this terminal. What an AI asked to
+    add to his list of agreed payments waits for him (I-47): adding makes
+    JEFFEREY quieter about a company, so it is never done because an AI
+    asked. Here he says yes or no to each one, at his own keyboard; only a
+    yes he typed is confirmed, inside access.owner_console(). Deliberately
+    not a tool: confirm_change is offered to no engine."""
+    try:
+        conscience.refresh()
+    except StoreProblem as e:
+        print(f"  {e.for_owner()}")
+        return None
+    if tty is None:
+        try:
+            tty = sys.stdin.isatty()
+        except Exception:
+            tty = False
+    if not tty:
+        print("  This can only be done by you, typing at the keyboard of this Mac. "
+              "Nothing was changed.")
+        return None
+    import guardian as _guardian
+    try:
+        _guardian.review_at_the_keyboard(guard, input_fn=answer)
+    except StoreProblem as e:
+        print(f"  {e.for_owner()}")
+        return None
+    return {"waiting": guard.pending_changes()}
+
+
 def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | None:
     """/pending, /confirm, /share, /legacy — typed by the OWNER at this
     terminal. Deliberately not tools: what an AI wrote down becomes his only
@@ -2438,6 +2585,9 @@ def selftest() -> None:
                 "review_statement": {"charges": [{"merchant": "Netflix", "amount": 16.49}]},
                 "expected_charges": {},
                 "dispute_pack": {"merchant": "Netflix"},
+                "charge_changes_waiting": {},
+                "decline_charge_change": {"proposal_id": "p-nothing-waits"},
+                "name_for_charge": {"descriptor": "NFLX DIGITAL", "merchant": "Netflix"},
                 "add_person": {"name": "Karen", "relationship": "wife"},
                 "update_person": {"person_id": "nobody-has-this-id", "notes": "x"},
                 "set_visibility": {"ids": ["nobody-has-this-id"], "visibility": "private"},
@@ -2456,6 +2606,7 @@ def selftest() -> None:
                 "next_story_prompt": {},
                 "record_story": {"moment_id": "none", "text": "x"},
                 "decline_story": {"moment_id": "none"},
+                "skip_story": {"moment_id": "none"},
                 "story_progress": {},
                 "next_question": {},
                 "record_answer": {"question_id": "how_address", "answer": "Laszlo"},
@@ -2770,6 +2921,8 @@ def selftest() -> None:
                                                 "authorized_recurring": "false"})
         assert asked.get("status") == "waiting_for_owner", asked
         assert asked.get("authorized_recurring") is False, asked   # 'false' is false
+        assert asked["proposal"] in [w["id"] for w in dispatch_tool("charge_changes_waiting", {})]
+        assert "confirm_charge_change" not in _TOOL_NAMES, "confirming is the owner's"
         with access.owner_console():
             assert guard.confirm_change(asked["proposal"])["status"] == "confirmed"
         guard.mark_cancelled("Adobe Creative Cloud", on="2026-08-15")
