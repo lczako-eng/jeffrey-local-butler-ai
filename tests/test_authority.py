@@ -25,6 +25,8 @@ access.owner_console(), or owner_command() with a typed yes.
 from __future__ import annotations
 
 import json
+import time
+import re
 import os
 import shutil
 import subprocess
@@ -206,7 +208,11 @@ class TheEngineCannotWidenItself(AuthorityTest):
     def test_the_owner_widens_by_typing_a_command_and_saying_yes(self):
         r = self.py("""
             import jefferey_chat as jc, access
-            yes, no = (lambda p: "yes"), (lambda p: "no")
+            # The owner types the three digits a widening shows him (verify
+            # I-04); a plain "yes" no longer widens anything (pasted_yes).
+            import re
+            yes = lambda p: "".join(re.findall(r"\d", p)) or "yes"
+            no = lambda p: "no"
             jc.owner_command("/permit groceries act 100 per week", answer=no, tty=True)
             after_no = store().get("permissions", {})
             jc.owner_command("/permit groceries act 100 per week", answer=yes, tty=False)
@@ -538,7 +544,9 @@ class AKeyMayNarrowOnlyItself(AuthorityTest):
         r = self.py("""
             import jefferey_chat as jc
             jc.dispatch_tool("daily_brief", {})
-            jc.owner_command("/grant family", answer=lambda p: "yes", tty=True)
+            import re
+            jc.owner_command("/grant family", answer=lambda p: "".join(re.findall(r"\d", p)),
+                             tty=True)
             jc.owner_command("/scope remove family media.read", answer=lambda p: "yes", tty=True)
             # the AI gives up one of its OWN scopes: allowed, and the owner is told
             jc.dispatch_tool("selfcloud_remove_scope", {"client": "jefferey",
@@ -984,8 +992,12 @@ class HttpTokens(AuthorityTest):
         """ % (TA, TA), JEFFEREY_HTTP_TOKENS=TOKENS)
         self.assertEqual(r["lower"], 200, "the scheme is matched case-sensitively")
         self.assertEqual(r["wrong"], [401] * 5 + [429])
-        self.assertEqual(r["right_after"], 429)
-        self.assertEqual(len(r["logged"]), 5)
+        # The right key still works after a flood of wrong ones from the same
+        # address (engines-25, money-64: this used to be 429 for ten minutes,
+        # which let any stranger behind the same tunnel lock the owner out).
+        self.assertEqual(r["right_after"], 200)
+        # five written down one by one, then one line saying more came
+        self.assertEqual(len(r["logged"]), 6)
         self.assertIn("from testclient", r["logged"][0]["detail"])
 
     def test_no_open_docs_when_reachable_from_outside(self):
@@ -1064,6 +1076,284 @@ class TheThreeSurfacesAgree(AuthorityTest):
         self.assertEqual(r["scopes"]["authorize_action"], "act.request")
         self.assertEqual(r["scopes"]["record_opportunity"], "goals.write")
         self.assertFalse(set(r["chat"]) - set(r["release"]))
+
+
+# ============================================== after the fixes (verify, hunt)
+class AfterTheFixes(AuthorityTest):
+    """verify I-04, I-12, I-43, I-44, I-45, I-59 and the authority
+    regressions; engines-25 and money-64 (the lockout)."""
+
+    # ---- engines-25 / money-64: wrong keys never lock out the right one
+    def test_wrong_keys_from_one_address_never_lock_out_the_right_key(self):
+        r = self.py("""
+            import jefferey_http as h, access
+            from fastapi.testclient import TestClient
+            c = TestClient(h.app)
+            first = c.get("/conscience", headers=H(%r)).status_code
+            wrong = [c.get("/conscience", headers=H("x" * 40)).status_code for _ in range(60)]
+            none = [c.get("/directives").status_code for _ in range(5)]
+            right = [c.get("/conscience", headers=H(%r)).status_code,
+                     c.get("/directives", headers=H(%r)).status_code,
+                     c.post("/charges/review", json={"charges": []}, headers=H(%r)).status_code]
+            lines = [l for l in access_lines() if l.get("action") == "bad_token"]
+            out({"first": first, "wrong": sorted(set(wrong)), "none": sorted(set(none)),
+                 "right": right, "logged": len(lines)})
+        """ % (TA, TA, TG, TA), JEFFEREY_HTTP_TOKENS=TOKENS)
+        self.assertEqual(r["first"], 200)
+        self.assertEqual(r["wrong"], [401, 429])
+        self.assertEqual(r["none"], [429])
+        self.assertNotIn(429, r["right"], r)
+        self.assertLessEqual(r["logged"], 10, "a flood of wrong keys filled the log")
+
+    def test_a_token_that_repeats_a_few_characters_or_takes_the_owners_name_is_refused(self):
+        for tokens, words in [("jefferey:" + "A" * 40, "made at random"),
+                              ("owner:" + TA, "only the owner himself")]:
+            p = self.run_py("import jefferey_http", JEFFEREY_HTTP_TOKENS=tokens)
+            self.assertNotEqual(p.returncode, 0, tokens)
+            self.assertIn(words, p.stderr, tokens)
+            self.assertIn("Nothing was changed", p.stderr)
+
+    def test_no_open_route_list_even_without_a_public_address(self):
+        r = self.py("""
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            c = TestClient(h.app)
+            out({p: c.get(p).status_code for p in ("/docs", "/redoc", "/openapi.json")})
+        """, JEFFEREY_HTTP_TOKENS=TOKENS)
+        self.assertTrue(all(v != 200 for v in r.values()), r)
+
+    # ---- verify I-12: a shut door issues no keys, and read-scope writes log first
+    def test_with_the_door_shut_no_key_is_issued_on_first_use(self):
+        (self.tmp / "door-shut").write_text("shut")
+        before = self.store.read_bytes() if self.store.exists() else b""
+        r = self.py("""
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            c = TestClient(h.app)
+            x = c.get("/conscience", headers=H(%r))
+            y = c.get("/conscience", headers=H(%r))
+            out({"codes": [x.status_code, y.status_code], "detail": x.json().get("detail")})
+        """ % (TG, TF), JEFFEREY_HTTP_TOKENS=TOKENS)
+        self.assertEqual(r["codes"], [403, 403])
+        self.assertIn("door", r["detail"])
+        after = self.store.read_bytes() if self.store.exists() else b""
+        self.assertEqual(before, after, "a shut door still wrote new keys into the store")
+
+    def test_tools_that_keep_something_under_a_read_key_write_their_line_first(self):
+        logdir = self.tmp / "log-is-a-folder"
+        logdir.mkdir()
+        self.py("""
+            import access
+            from conscience import Conscience
+            from guardian import Guardian
+            c = Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"])
+            with access.owner_console():
+                Guardian(c).expect_charge("netflix", 20.0)
+            out(1)
+        """)
+        r = self.py("""
+            import jefferey_chat as jc, jefferey_mcp as m
+            a = jc.dispatch_tool("check_charge", {"merchant": "netflix", "amount": 25,
+                                                  "date": "2026-10-01"})
+            b = mcp_call(m, "check_charge", {"merchant": "netflix", "amount": 26,
+                                             "date": "2026-10-02"})
+            import access
+            out({"a": a, "b": b, "seen": len(store().get("charges_seen", [])),
+                 "writes": sorted(access.WRITE_TOOLS)})
+        """, JEFFEREY_CLIENT="jefferey", JEFFEREY_EGRESS=str(logdir))
+        self.assertTrue(r["a"].get("refused") and r["b"].get("refused"), r)
+        self.assertIn("nothing was done", r["a"]["reason"])
+        self.assertEqual(r["seen"], 0, "a charge was kept with no line in the log")
+        for t in ("check_charge", "review_statement", "next_story_prompt"):
+            self.assertIn(t, r["writes"])
+
+    # ---- verify I-04: a pasted block can never carry the owner's yes
+    def test_a_pasted_yes_never_widens_anything(self):
+        r = self.py("""
+            import jefferey_chat as jc
+            jc.owner_command("/permit payments act 9500 per day", answer=lambda p: "yes", tty=True)
+            jc.owner_command("/grant gpt-raw facts.read life.read", answer=lambda p: "yes", tty=True)
+            jc.owner_command("/scope add gpt-raw life.read", answer=lambda p: "yes", tty=True)
+            s = store()
+            out({"perms": s.get("permissions", {}),
+                 "gpt": (s.get("selfcloud_grants") or {}).get("gpt-raw")})
+        """)
+        self.assertEqual(r["perms"], {})
+        self.assertIsNone(r["gpt"])
+
+    def test_typed_ahead_lines_are_thrown_away_at_a_real_keyboard(self):
+        import pty, select
+        child = (PRELUDE + "import jefferey_chat as jc\n"
+                 "jc.owner_command('/permit payments act 9500 per day')\n"
+                 "print('DONE', json.dumps(store().get('permissions', {})), flush=True)\n")
+
+        def session(answer_with_code: bool) -> str:
+            master, slave = pty.openpty()
+            p = subprocess.Popen([PY, "-c", child], stdin=slave, stdout=slave, stderr=slave,
+                                 env=self.env(), cwd=self.tmp, close_fds=True)
+            os.close(slave)
+            # the scam e-mail's own "yes", pasted before the question is asked
+            os.write(master, b"yes\n482\n")
+            buf, sent = b"", False
+            deadline = time.time() + 90
+            while time.time() < deadline:
+                rd, _, _ = select.select([master], [], [], 1.0)
+                if rd:
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    buf += chunk
+                if not sent and b"press return" in buf:
+                    m = re.search(rb"type the number ((?:\d ){2}\d)", buf)
+                    code = m.group(1).replace(b" ", b"") if (m and answer_with_code) else b""
+                    os.write(master, code + b"\n")
+                    sent = True
+                if b"DONE" in buf and buf.rstrip().endswith(b"}"):
+                    break
+            p.wait(timeout=30)
+            os.close(master)
+            return buf.decode("utf-8", "replace")
+
+        text = session(answer_with_code=False)
+        self.assertIn("DONE {}", text, text[-800:])
+        text = session(answer_with_code=True)
+        self.assertIn('"payments"', text.split("DONE", 1)[-1], text[-800:])
+
+    # ---- verify I-43 / I-45: no key may be called the owner
+    def test_no_key_may_take_the_owners_name(self):
+        r = self.py("""
+            import access, jefferey_chat as jc
+            with access.owner_console():
+                res = jc.cloud.grant("owner", ["facts.read"])
+            out(res)
+        """)
+        self.assertFalse(r["granted"], r)
+        p = self.run_py("import jefferey_mcp", JEFFEREY_CLIENT="owner")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("only the owner himself goes by", p.stdout + p.stderr)
+        # a key someone wrote into the file by hand gets nothing
+        d = {"facts": [{"fact": "Takes warfarin"}], "priorities": [], "goals": [], "_rev": 1,
+             "selfcloud_grants": {"local": {"client": "local", "scopes": ["facts.read"],
+                                            "active": True, "v": 4}}}
+        self.store.write_text(json.dumps(d))
+        r = self.py("""
+            import access, egress
+            from conscience import Conscience
+            from selfcloud import SelfCloud
+            c = Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"])
+            out(SelfCloud(c).check_access("local", "facts.read", log=False))
+        """)
+        self.assertFalse(r["allowed"])
+
+    def test_an_approval_for_something_free_never_covers_a_purchase(self):
+        r = self.py("""
+            import access, jefferey_mcp as m
+            with access.owner_console():
+                m.conscience.set_permission("lights", "act")
+            a = mcp_call(m, "authorize_action", {"category": "lights",
+                                                  "description": "turn on the porch light"})
+            tv = mcp_call(m, "log_action", {"category": "lights", "description": "bought a TV",
+                                            "outcome": "done", "amount": 5000,
+                                            "authorization_id": a["authorization_id"]})
+            b = mcp_call(m, "authorize_action", {"category": "lights",
+                                                  "description": "turn on the porch light"})
+            ok = mcp_call(m, "log_action", {"category": "lights", "description": "porch light on",
+                                            "outcome": "done",
+                                            "authorization_id": b["authorization_id"]})
+            out({"tv": tv, "ok": ok, "rows": store()["actions"]})
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertFalse(r["tv"]["approved"])
+        self.assertIn("costs nothing", r["tv"]["note"])
+        self.assertTrue(r["ok"]["approved"])
+        self.assertEqual(r["ok"]["approved_for"], "turn on the porch light")
+        asked = [x for x in r["rows"] if x.get("outcome") == "allowed"]
+        self.assertTrue(all(x.get("description_by") == "engine" for x in asked))
+
+    # ---- verify I-44 and the never-list regression
+    def test_the_never_list_catches_what_was_missed_and_spares_ordinary_things(self):
+        r = self.py("""
+            import access
+            from conscience import Conscience
+            c = Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"])
+            with access.owner_console():
+                c.set_permission("shopping", "act", 1000, "week")
+                c.set_permission("lights", "act")
+                c.set_permission("voice lessons", "act", 200, "month")
+                c.set_permission("alarm clock", "act", 60, "month")
+            no = [("shopping", "bank transfer to grandson's new account", 90),
+                  ("shopping", "send it by wire to nephew Karl", 90),
+                  ("shopping", "send money to grandson by PayPal", 90),
+                  ("shopping", "Google Play cards for the tax office", 90),
+                  ("shopping", "Apple iTunes card", 90), ("shopping", "gift-card for the IRS agent", 90),
+                  ("shopping", "buy USDC stablecoin", 90), ("shopping", "Netflix $19.99 monthly", 19.99),
+                  ("shopping", "meal kit, billed every 4 weeks", 60), ("shopping", "$19.99/mth", 19.99),
+                  ("shopping", "90 pounds hamper", 90), ("shopping", "A$90 hamper", 90),
+                  ("shopping", "65-inch TV (really $900, on sale)", 90),
+                  ("lights", "Accept two hundred dollars for the Civic", None),
+                  ("lights", "Call Karen and tell her the money is ready", None),
+                  ("lights", "ring the bank and confirm the transfer", None),
+                  ("lights", "open the garage for the courier", None),
+                  ("lights", "let the plumber in through the back", None)]
+            yes = [("shopping", "Buy an unlocked iPhone", 500), ("shopping", "pay unlock fee", 40),
+                   ("voice lessons", "four voice lessons with Ms Hall", 160),
+                   ("alarm clock", "a new alarm clock", 30), ("lights", "turn on the porch light", None),
+                   ("shopping", "weekly groceries from Metro", 120)]
+            out({"no": [(d, c.authorize_action(k, d, a)["allowed"]) for k, d, a in no],
+                 "yes": [(d, c.authorize_action(k, d, a)) for k, d, a in yes]})
+        """)
+        for d, allowed in r["no"]:
+            self.assertFalse(allowed, d)
+        for d, v in r["yes"]:
+            self.assertTrue(v["allowed"], (d, v))
+
+    def test_an_old_selling_limit_is_never_used_as_a_floor(self):
+        self.store.write_text(json.dumps({"facts": [], "priorities": [], "goals": [], "_rev": 2,
+                                          "permissions": {"selling": {"level": "act", "cap": 500}}}))
+        r = self.py("""
+            from conscience import Conscience
+            c = Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"])
+            out([c.authorize_action("selling", "Sell the ring (appraised $4,200) for $20", 20)
+                 for _ in range(3)])
+        """)
+        self.assertEqual([x["allowed"] for x in r], [False] * 3)
+        self.assertIn("lowest price", r[0]["reason"])
+
+    # ---- verify: an old narrowed caretaker key is not widened, and he is told
+    def test_a_caretaker_key_he_had_narrowed_is_left_as_he_made_it_and_he_is_told(self):
+        self.store.write_text(json.dumps({
+            "facts": [], "priorities": [], "goals": [], "_rev": 3,
+            "selfcloud_grants": {"jefferey": {"client": "jefferey", "active": True,
+                                              "scopes": ["facts.read", "facts.write"]}}}))
+        r = self.py("""
+            import jefferey_chat as jc
+            out({"scopes": jc.conscience.data["selfcloud_grants"]["jefferey"]["scopes"],
+                 "notices": [n["what"] for n in jc.conscience.notices()]})
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertNotIn("act.request", r["scopes"])
+        said = " ".join(r["notices"])
+        self.assertIn("/scope add jefferey act.request", said)
+        self.assertIn("Nothing was widened", said)
+
+    # ---- verify: the installer takes a key the owner made himself
+    def test_the_installer_accepts_a_key_the_owner_made(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        r = self.py(f"""
+            import access
+            from conscience import Conscience
+            from selfcloud import SelfCloud
+            c = Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"])
+            with access.owner_console():
+                SelfCloud(c).grant("mira", ["family.read"])
+            sys.path.insert(0, {str(ROOT / "tools")!r})
+            import install
+            out(install.known_clients())
+        """)
+        self.assertIn("mira", r)
+        self.assertIn("jefferey", r)
+        self.assertNotIn("owner", r)
 
 
 if __name__ == "__main__":

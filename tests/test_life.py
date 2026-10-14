@@ -67,7 +67,9 @@ def http():
     import jefferey_http as h
     from fastapi.testclient import TestClient
     return h, TestClient(h.app)
-yes = lambda prompt: "yes"
+# The owner at his keyboard: a widening asks for the three digits it shows
+# (verify I-04 — a pasted 'yes' never counts); anything else, a yes.
+yes = lambda prompt: "".join(__import__("re").findall(r"\\d", prompt)) or "yes"
 """
 
 # A fake OpenAI-compatible local model on 127.0.0.1 that answers with the
@@ -892,6 +894,40 @@ class ValuesDoNotFlipCheaply(LifeTest):
         self.assertEqual(r[5][1:3], [3, 3])
         self.assertEqual(r[6][1:3], [4, 3])
         self.assertTrue(r[6][3])
+
+
+# ============================================== after the fixes (verify, hunt)
+class WordsInEveryLanguage(LifeTest):
+    """learning-30 (hunt) and the two-letter regression (verify): whole-word
+    grounding read a Chinese sentence as one word and dropped anything under
+    three letters, so Chinese, Japanese, emoji, 'TV' and 'AC' found nothing."""
+
+    def test_chinese_japanese_emoji_and_two_letter_subjects_are_found(self):
+        r = self.py("""
+            import jefferey_chat as jc, access
+            d = jc.dispatch_tool
+            for t in ["我女儿喜欢画画", "Grandpa's favourite 🎣 spot is Lac Leamy",
+                      "妈妈住在多伦多", "東京の思い出", "Vater wohnt in München",
+                      "We bought a new TV in May", "The AC broke in July"]:
+                d("remember_fact", {"fact": t, "category": "multi"})
+            found = {q: len(d("explain_basis", {"topic": q}).get("facts", []))
+                     for q in ["女儿", "🎣", "多伦多", "東京", "München", "Vater", "TV", "AC"]}
+            with access.owner_console():
+                sp = d("set_priority", {"context": "旅行", "higher": "直飞", "lower": "省钱"})
+                rc = d("record_correction", {"context": "旅行", "what_was_suggested": "省钱",
+                                             "what_user_chose": "直飞",
+                                             "value_protected": "直飞",
+                                             "value_traded_away": "省钱"})
+            pf = d("priorities_for", {"context": "旅行"})
+            out({"found": found, "sp": sp, "rc": rc, "pf": pf,
+                 "art": len(d("explain_basis", {"topic": "art"}).get("facts", []))})
+        """)
+        for q, n in r["found"].items():
+            self.assertEqual(n, 1, q)
+        self.assertFalse(r["sp"].get("refused"), r["sp"])
+        self.assertFalse(r["rc"].get("refused"), r["rc"])
+        self.assertTrue(r["pf"], "priorities_for('旅行') found nothing")
+        self.assertEqual(r["art"], 0, "'art' must still not ground 'heart' or 'party'")
 
 
 if __name__ == "__main__":

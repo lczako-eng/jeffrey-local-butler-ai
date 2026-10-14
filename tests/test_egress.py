@@ -827,5 +827,201 @@ class TheLogIsWrittenWholeOrNotAtAll(EgressTest):
         self.assertEqual(r["logged"], ["system_prompt"])
 
 
+# ============================================== after the fixes (verify, hunt)
+class AfterTheFixes(EgressTest):
+    """verify I-07, I-14, I-15, I-58 and the egress regressions."""
+
+    OLD_HOUSE_NOTES = ["Garage code 4821, gate 2580", "PIN 4821 for the Visa, 1234 for the debit",
+                       "Door code 4821 (old one was 1234)",
+                       "Le code de l'alarme est 4821, appeler le 613 555 0199"]
+
+    def test_an_old_house_code_note_never_blacks_out_the_whole_answer(self):
+        # verify I-07 (3), I-15 (1), regression: the '[hidden: … lock code]'
+        # mark itself read as words announced the next number, and release()
+        # refused who_am_i, tell_story and GET /conscience whole.
+        self.py("""
+            seed(os.environ["JEFFEREY_CONSCIENCE_PATH"], facts=%r, memories=[(
+                "When we moved in 1998 the garage code was 4821 and the gate 2580, Anna laughed",
+                ())])
+            out(1)
+        """ % self.OLD_HOUSE_NOTES)
+        r = self.py("""
+            import jefferey_mcp as m
+            who = mcp_call(m, "who_am_i")
+            story = mcp_call(m, "tell_story")
+            con = mcp_call(m, "get_conscience")
+            os.environ["JEFFEREY_HTTP_TOKENS"] = %r
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            g = TestClient(h.app).get("/conscience", headers=H(%r))
+            out({"who": who, "story": story, "con": con, "gpt": [g.status_code, g.json()]})
+        """ % (TOKENS, TG), JEFFEREY_CLIENT="jefferey")
+        for k in ("who", "story", "con"):
+            self.assertFalse(r[k].get("refused"), (k, r[k]))
+        self.assertEqual(r["gpt"][0], 200, r["gpt"])
+        sent = json.dumps(r)
+        for code in ("4821", "2580"):
+            self.assertNotIn(code, sent)
+        self.assertIn("Anna laughed", sent)
+        self.assertIn("for the debit", sent)
+        sys.path.insert(0, str(CONNECTOR))
+        import egress
+        masked, _ = egress.mask_text(self.OLD_HOUSE_NOTES[3])
+        self.assertIn("613 555 0199", masked, "a phone number is not a code")
+        self.assertNotIn("4821", masked)
+        self.assertIsNone(egress.looks_secret(masked))
+
+    def test_a_code_in_a_scams_subject_never_switches_off_its_verdict(self):
+        # verify I-14 (1): the hidden mark re-triggered the scan on the next
+        # number, and the whole verdict was refused on every surface.
+        cases = [("Visa Security", "Your PIN 4821 4821 is locked",
+                  "URGENT: your account is suspended. Buy two Google Play cards and send "
+                  "the codes immediately. Do not tell your bank."),
+                 ("Alarm code 1234 ref 5678", "Refund pending",
+                  "Your refund is pending. Buy two Google Play cards and send the codes. "
+                  "Act now, do not tell your bank."),
+                 ("Desjardins", "Votre NIP 4321, dossier 8765",
+                  "URGENT: votre compte est suspendu. Achetez des cartes Google Play.")]
+        r = self.py("""
+            cases = %r
+            import jefferey_chat as jc, jefferey_mcp as m
+            os.environ["JEFFEREY_HTTP_TOKENS"] = %r
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            c = TestClient(h.app)
+            res = []
+            for s, sub, body in cases:
+                a = {"sender": s, "subject": sub, "body": body}
+                res.append([jc.dispatch_tool("triage_message", a), mcp_call(m, "triage_message", a),
+                            c.post("/triage", json=a, headers=H(%r)).json()])
+            out(res)
+        """ % (cases, TOKENS, TA), JEFFEREY_CLIENT="jefferey")
+        for row in r:
+            for v in row:
+                self.assertFalse(v.get("refused"), v)
+                self.assertEqual(v.get("verdict"), "likely_scam", v)
+                self.assertNotIn("4821", json.dumps(v))
+
+    def test_a_value_refused_for_its_label_is_never_written_in_the_record(self):
+        # verify I-07 (2), I-58 (3): refused, then written word for word, twice.
+        r = self.py("""
+            import jefferey_chat as jc
+            d = jc.dispatch_tool
+            out([d("set_profile_field", {"field": f, "value": v}).get("stored")
+                 for f, v in [("bank login", "laszlo / Hunter22!"), ("alarm code", "4821"),
+                              ("passport", "AB123456"), ("Mother's maiden", "Kovacsne")]])
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertEqual(r, [False] * 4)
+        log = self.log_text()
+        for v in ("Hunter22", "4821", "AB123456", "Kovacsne"):
+            self.assertNotIn(v, log)
+
+    def test_a_key_question_cannot_carry_a_secret_into_the_access_log(self):
+        # verify I-14 (2): selfcloud_check_access was let through as a 'read',
+        # and wrote 'jefferey: password: Soleil2024Zq' into the access log.
+        r = self.py("""
+            import jefferey_mcp as m
+            out(mcp_call(m, "selfcloud_check_access", {"client": "jefferey",
+                                                       "scope": "password: Soleil2024Zq"}))
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertTrue(r.get("refused"), r)
+        for p in self.tmp.rglob("*.jsonl"):
+            self.assertNotIn("Soleil2024Zq", p.read_text(), p)
+
+    def test_ordinary_notes_pass_the_door(self):
+        # the regression list: each was stored and sent by the parent commit
+        notes = ["Dr. Patel put me on a combination pill, 250 mg twice a day",
+                 "Is a combination of 2 Tylenol 500 mg ok?", "I changed my password on 2026-10-14",
+                 "The door code changed on 2026-09-01, Maria has the new one",
+                 "Keypad batteries replaced 2026-09-01", "Transit fare is 3.70",
+                 "OC Transpo transit pass costs 128 a month", "The institution has 300 beds",
+                 "Hydro account 123456789 is in my name", "He gave me his Legion pin 1985"]
+        r = self.py("""
+            import jefferey_chat as jc
+            out([jc.dispatch_tool("remember_fact", {"fact": n}).get("fact") for n in %r])
+        """ % notes, JEFFEREY_CLIENT="jefferey")
+        self.assertEqual(r, notes)
+
+    def test_secrets_written_the_way_people_say_them_are_caught(self):
+        said = ["The code for the front door is 4821", "The code to the garage is 4821",
+                "the door code at the new house is 4821", "Alarm: 7731", "Front door: 4821",
+                "the alarm is 4821", "ATM code 4821", "Buzzer 2580",
+                "le code de ma carte est 4321", "Mon code bancaire est 4321",
+                "Le NIP de ma carte Desjardins, je l'oublie toujours, c'est 4321",
+                "PIN: 48 21", "my PIN is 4 8 2 1", "My bank login is laszlo / Hunter22!",
+                "Desjardins: user laszlo, pass Soleil2024", "hasło: Tulipe2024",
+                "Mot de passe de ma banque: soleil"]
+        r = self.py("""
+            import jefferey_mcp as m
+            out([mcp_call(m, "remember_fact", {"fact": t}).get("refused") for t in %r])
+        """ % said, JEFFEREY_CLIENT="jefferey")
+        for t, refused in zip(said, r):
+            self.assertTrue(refused, t)
+        self.assertEqual(json.loads(self.store_text() or '{"facts": []}').get("facts", []), [])
+
+    def test_other_names_for_identity_documents_stay_out_and_a_plate_does_not(self):
+        r = self.py("""
+            import jefferey_chat as jc
+            d = jc.dispatch_tool
+            names = ["Travel document number", "Document number", "ID number", "Photo ID",
+                     "Pasaporte", "Reisepass", "Driving permit", "Health #", "Birthplace",
+                     "Born in", "First pet's name", "Memorable word", "Mother's maiden",
+                     "Maiden", "City of birth", "Country of birth", "Mother's family name"]
+            refused = {n: d("set_profile_field", {"field": n, "value": "GA123456"}).get("stored")
+                       for n in names}
+            plate = d("set_profile_field", {"field": "Licence plate", "value": "CBDA 123"})
+            out({"refused": refused, "plate": plate})
+        """, JEFFEREY_CLIENT="jefferey")
+        for n, stored in r["refused"].items():
+            self.assertFalse(stored, n)
+        self.assertTrue(r["plate"].get("stored"), r["plate"])
+
+    def test_old_profile_keys_written_as_one_word_stay_home(self):
+        r = self.py("""
+            seed(os.environ["JEFFEREY_CONSCIENCE_PATH"], profile={
+                "passportno": "GA123456", "mothers_maiden": "Kovacs",
+                "document_number": "X1234567", "postal_code": "K1A 0B1"})
+            import jefferey_mcp as m
+            out(mcp_call(m, "get_profile"))
+        """, JEFFEREY_CLIENT="claude-raw")
+        sent = json.dumps(r)
+        for v in ("GA123456", "Kovacs", "X1234567"):
+            self.assertNotIn(v, sent)
+
+    def test_ordinary_mail_is_not_called_suspicious(self):
+        # verify I-14 (3): a Hydro bill, an Aeroplan statement and a bank's
+        # eStatement were 'suspicious', with "a real bank never asks for it".
+        mail = [("Hydro Ottawa", "Your bill is ready",
+                 "Your bill for account 1234567 is ready. Amount due $84.12 by Nov 1."),
+                ("Aeroplan", "Points",
+                 "Hi Laszlo, your Aeroplan number 123456782 earned 500 points this month."),
+                ("RBC", "Statement", "Your eStatement for chequing account 12345-1234567 is "
+                                     "now available in online banking."),
+                ("Shoppers", "Rx ready", "Your prescription Rx 4532015 is ready for pickup. "
+                                         "Combination pill 250 mg.")]
+        r = self.py("""
+            import jefferey_chat as jc
+            out([jc.dispatch_tool("triage_message", {"sender": s, "subject": t, "body": b})
+                 for s, t, b in %r])
+        """ % mail, JEFFEREY_CLIENT="jefferey")
+        for (s, _, _), v in zip(mail, r):
+            self.assertNotIn(v.get("verdict"), ("suspicious", "likely_scam"), (s, v))
+            self.assertNotIn("never asks for it", json.dumps(v), s)
+
+    def test_a_pasted_secret_with_the_door_shut_says_the_door_is_shut(self):
+        (self.tmp / "door-shut").write_text("shut")
+        r = self.py("""
+            import jefferey_chat as jc, io, contextlib
+            jc.make_client = lambda: None
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                jc.chat(once="Interac: your security code is 551203. If you did not request "
+                             "it, call 1-833-555-0100 immediately and read us the code.")
+            out(buf.getvalue())
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertIn("door is shut", r)
+        self.assertIn("very likely a scam", r)
+
+
 if __name__ == "__main__":
     unittest.main()

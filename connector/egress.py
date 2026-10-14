@@ -87,7 +87,7 @@ COMMON = frozenset({"error", "note", "rule", "reason", "refused", "tool",
 READS_ONLY = frozenset({
     "triage_message", "draft_guidance", "score_opportunity", "explain_basis",
     "priorities_for", "check_disclosure", "guidance_for", "fill_form",
-    "pdf_form_fields", "tell_story", "selfcloud_check_access", "check_draft",
+    "pdf_form_fields", "tell_story", "check_draft",
     # the first step of a removal keeps nothing of what was asked: the log
     # keeps only a fingerprint (FINGERPRINT_ARGS), the pending code only ids
     "forget", "forget_life", "close_goal", "conscience_exclude", "remove_rule",
@@ -107,7 +107,7 @@ FORGET = frozenset({"step", "would_remove", "would_change", "count", "kinds",
 # sha256 fingerprint of these arguments, never the words.
 FINGERPRINT_ARGS: dict[str, tuple[str, ...]] = {
     "forget": ("contains",), "forget_life": ("contains",),
-    "close_goal": ("contains",), "resolve_opportunity": ("contains",),
+    "close_goal": ("contains",), "resolve_opportunity": ("contains", "outcome"),
     "conscience_exclude": ("contains",), "remove_rule": ("rule_id_or_text",),
     "forget_profile_field": ("field",),
 }
@@ -173,7 +173,7 @@ RELEASE: dict[str, frozenset[str]] = {
     # given only to the connection that asked for it, never in the log view
     "action_log": frozenset({"category", "description", "amount", "currency",
                              "outcome", "added", "ts", "by", "surface", "source",
-                             "approved"}),
+                             "approved", "approved_for", "description_by", "note"}),
     "conscience_include": frozenset({"id", "ref", "added"}),
     "conscience_exclude": FORGET | {"excluded"},
     "set_rule": frozenset({"id", "kind", "tags", "audience", "allow",
@@ -207,7 +207,7 @@ RELEASE: dict[str, frozenset[str]] = {
                                    "authorization_id", "expires"}),
     "log_action": frozenset({"category", "description", "amount", "outcome",
                              "added", "ts", "authorization_id", "approved", "by",
-                             "surface", "source"}),
+                             "surface", "source", "note", "approved_for"}),
     # money
     # From an AI an addition to the agreed list waits for the owner: 'status'
     # says so and 'proposal' names it (I-47). The matcher says which entry a
@@ -370,7 +370,11 @@ _ORDER = (APIKEY, PASSWORD, CODE, SSN, CARD, SIN, BANK, HEALTH, LICENCE, PASSPOR
 # ---- normalising: one spelling for what can be written many ways
 _FOLD = {**dict.fromkeys(map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
                                   "\ufe58\ufe63\uff0d"), "-"),
-         **dict.fromkeys(map(ord, "\u2018\u2019\u201a\u201b\u2032\u02bc`\u00b4"), "'")}
+         **dict.fromkeys(map(ord, "\u2018\u2019\u201a\u201b\u2032\u02bc`\u00b4"), "'"),
+         # letters NFKD does not take apart ('hasło' is Polish for password)
+         ord("ł"): "l", ord("Ł"): "L", ord("đ"): "d", ord("Đ"): "D", ord("ø"): "o",
+         ord("Ø"): "O", ord("ß"): "ss", ord("æ"): "ae", ord("Æ"): "AE", ord("œ"): "oe",
+         ord("Œ"): "OE", ord("ı"): "i"}
 
 
 def _fold_char(ch: str) -> str:
@@ -440,7 +444,14 @@ _PIN_WORDS = _rx(
     r"one" + r"[\s\-]*time" + _S + r"(?:code|pin|passcode)",
     r"code" + _S + r"a" + _S + r"usage" + _S + r"unique", r"otp", r"2fa" + _S + r"code",
     r"auth(?:entication|orization)?" + _S + r"code",
-    r"wi[\s\-]?fi" + _S + r"(?:code|key|pin)")
+    r"wi[\s\-]?fi" + _S + r"(?:code|key|pin)",
+    # 'the code for the front door', 'the code to the garage' (verify I-07)
+    r"code" + _S + r"(?:for|to|of|on)" + _S + r"(?:(?:the|my|our|his|her)" + _S + r")?"
+    r"(?:(?:front|back|side|main|new|old)" + _S + r")?(?:door|garage|gate|alarm|house"
+    r"|building|lock" + r"[\s\-]*box|safe|apartment|condo|keypad|cottage)",
+    r"(?:atm|bank|card|debit|visa|mastercard)" + _S + r"(?:code|pin)",
+    r"code" + _S + r"(?:de|d')\s*(?:(?:ma|la|mon|sa|ta|notre)" + _S + r")?carte",
+    r"code" + _S + r"(?:bancaire|guichet|de" + _S + r"guichet)")
 # Words that only count when the value follows at once ("wifi: BlueHouse20").
 _WEAK_WORDS = _rx(r"wi[\s\-]?fi", r"network" + _S + r"key",
                   r"cle" + _S + r"(?:wi[\s\-]?fi|reseau|de" + _S + r"securite)")
@@ -485,6 +496,37 @@ _BEFORE = re.compile(
     r"(?:^|\s)(?P<v>[^\s]+)\s+(?:is|was|est|c'est|=|:)\s+(?:(?:my|the|our|his|her|your|mon|ma|"
     r"mes|le|la|notre|votre|son|sa|leur)\s+)?$", re.I)
 _MAX_GAP = 5
+_MAX_GAP_FAR = 10
+# Words that say whose a password is ('the password FOR MY bank').
+_WHOSE = frozenset("for of to at on my our his her de du des d' ma mon mes sa son la le".split())
+_SPACED = re.compile(r"(\d{1,4})(?:[ \t](\d{1,4})){1,7}(?![\d])")
+
+
+def _spaced_pin(n: str, at: int) -> int | None:
+    """'PIN: 48 21', 'my PIN is 4 8 2 1': digits typed with spaces between.
+    The end of the whole PIN, or None (one group alone is read as usual)."""
+    m = _SPACED.match(n, at)
+    if not m or " " not in m.group() and "\t" not in m.group():
+        return None
+    digits = re.sub(r"\D", "", m.group())
+    if not 4 <= len(digits) <= 8 or _PHONE_AT.match(n, at):
+        return None
+    if _UNIT_AFTER.match(n, m.end()):
+        return None
+    return m.end()
+_DATE_SHAPE = re.compile(r"(?:19|20)\d\d[-/.](?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12]\d|3[01])"
+                         r"|(?:0?[1-9]|[12]\d|3[01])[-/.](?:0?[1-9]|[12]\d|3[01])[-/.](?:19|20)\d\d")
+# A number followed by one of these is a dose, a size, a price or a count —
+# 'a combination pill, 250 mg' is medicine, not a safe's combination (verify).
+_UNIT_AFTER = re.compile(r"\s?(?:mg|mcg|µg|ug|ml|cc|g|gr|kg|lbs?|oz|iu|units?|mmol|mm|cm|km"
+                         r"|m|ft|in|%|\$|dollars?|cad|usd|eur|beds?|people|persons?|pills?"
+                         r"|tablets?|capsules?|caps|doses?|times?|years?|ans|yrs?|days?|jours?"
+                         r"|hours?|hrs?|h|minutes?|mins?|km/h|kph|mph|calories|kcal|sq)\b", re.I)
+# A 'pin' that is a thing one wears or collects ('his Legion pin 1985').
+_NOT_A_PIN_BEFORE = frozenset("lapel legion enamel hat badge collector collectible "
+                              "collectors bowling safety hair push rolling sewing drawing "
+                              "lucky souvenir olympic campaign flag novelty tie brooch "
+                              "medal service veterans".split())
 
 
 def _ndigits(s: str) -> int:
@@ -497,6 +539,8 @@ def _is_value(fam: str, raw: str, conn: bool, gap: int, prev: str,
     v = raw.lstrip(_LEAD + "-").rstrip(_TRAIL)
     if not v:
         return False
+    if _DATE_SHAPE.fullmatch(v):
+        return False          # 'changed my password on 2026-10-14' is a day, not a code
     d = _ndigits(v)
     if fam in ("pin", "code"):
         if not _PIN_VALUE.fullmatch(v) or prev in _LABEL:
@@ -528,8 +572,44 @@ def _trim(n: str, s: int, e: int) -> tuple[int, int]:
     return s, e
 
 
-def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
+# 'Alarm: 7731', 'Front door: 4821', 'the alarm is 4821', 'Buzzer 2580': a
+# part of the house that says its number is saying its code (verify I-07).
+_HOUSE_SAYS = re.compile(
+    r"(?<![^\W_])(?:alarm|alarme|(?:front|back|side|garage|patio|main)[\s\-]+door|door"
+    r"|garage|gate|lock[\s\-]*box|keypad|safe|portail|porte|cadenas)"
+    r"\s*(?::|=|\s(?:is|was|est|c'est|:)|-)\s*(?P<v>[#*]?\d{3,8}[#*]?)(?![\d\w.,]\d)", re.I)
+_HOUSE_BARE = re.compile(r"(?<![^\W_])(?:buzzer|intercom|interphone)\s*[:=]?\s*"
+                         r"(?P<v>[#*]?\d{3,8}[#*]?)(?![\d])", re.I)
+_STREET_AFTER = re.compile(r"\s+(?:[A-Z][a-z]+\s+)?(?:st|street|ave|avenue|rd|road|rue|blvd"
+                           r"|boulevard|dr|drive|lane|ln|way|cres|crescent|crt|court|chemin"
+                           r"|place|pl|terrace|hwy)\b", re.I)
+# A login written with its password: 'bank login is laszlo / Hunter22!',
+# 'user laszlo, pass Soleil2024'.
+_CREDS = re.compile(
+    r"(?<![^\W_])(?:log[\s\-]?in|user(?:[\s\-]?name)?|identifiant|usager|utilisateur)"
+    r"\s*(?:is|:|=|est)?\s*[^\s,/;]+\s*(?:[,/;]|and|et)\s*(?:(?:pass(?:word)?|pw|pwd|mdp"
+    r"|mot\s+de\s+passe)\s*(?:is|:|=|est)?\s*)?(?P<v>[^\s,;]{4,})", re.I)
+
+
+def _house_hits(n: str) -> list[tuple[int, int, str]]:
     out = []
+    for rx in (_HOUSE_SAYS, _HOUSE_BARE):
+        for m in rx.finditer(n):
+            v = m.group("v")
+            if _YEAR.fullmatch(v) or _UNIT_AFTER.match(n, m.end("v")) \
+                    or _STREET_AFTER.match(n, m.end("v")) or _PHONE_AT.match(n, m.start("v")):
+                continue
+            out.append((m.start("v"), m.end("v"), CODE))
+    for m in _CREDS.finditer(n):
+        v = m.group("v").rstrip(_TRAIL)
+        if any(c.isdigit() for c in v) or any(c in "!@#$%^&*" for c in v) or (
+                m.group(0).lower().find("pass") != -1 and len(v) >= 4):
+            out.append((m.start("v"), m.start("v") + len(v), PASSWORD))
+    return out
+
+
+def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
+    out = _house_hits(n)
     for m in _KW.finditer(n):
         fam = m.lastgroup
         what = PASSWORD if fam in ("pw", "weak") else CODE
@@ -537,8 +617,13 @@ def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
             before = re.findall(r"[a-z]+", n[max(0, m.start() - 20):m.start()].lower())
             if before and before[-1] in _NOT_A_SECRET_CODE:
                 continue
+        if fam == "pin" and m.group().lower() in ("pin", "pins"):
+            before = re.findall(r"[a-z]+", n[max(0, m.start() - 24):m.start()].lower())
+            if before and before[-1] in _NOT_A_PIN_BEFORE:
+                continue
         # the value after the word: "PIN 4821", "mot de passe Desjardins est Soleil24"
         conn, says, gap, prev, last = False, False, 0, "", m.end()
+        just_said, linked = False, False
         for t in _TOK.finditer(n, m.end(), min(len(n), m.end() + 200)):
             between = n[last:t.start()]
             if "\n" in between and (gap or "\n\n" in between):
@@ -547,9 +632,24 @@ def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
             low = raw.lower()
             if low in _CONNECT:
                 conn, says, last = True, low in _SAYS, t.end()
+                # what stood before 'is' was not the value's label: 'the door
+                # code at the new house is 4821' is a code, not a house number
+                just_said, prev = low in _SAYS, ""
                 continue
-            if _is_value(fam, raw, conn, gap, prev, says):
+            # a plain-word password right after 'is' or ':', when the words
+            # before it said whose ('Mot de passe de ma banque: soleil')
+            plain_ok = (fam == "pw" and just_said and linked and gap <= _MAX_GAP)
+            spaced = _spaced_pin(n, t.start()) if fam == "pin" and (gap == 0 or just_said) else None
+            if spaced:
+                out.append((*_trim(n, t.start(), spaced), what))
+                break
+            if ((gap <= _MAX_GAP or just_said)
+                    and _is_value(fam, raw, conn, 0 if plain_ok else gap, prev, says)
+                    and not (fam in ("pin", "code", "pw") and _ndigits(raw)
+                             and _UNIT_AFTER.match(n, t.end()))):
                 end = t.end()
+                if fam in ("pin", "code"):
+                    out += _more_codes(n, t.end(), what)
                 if fam in ("pw", "weak") and raw[-1:] not in ".,;!?\"'":
                     # a passphrase can be several words: hide to the end of the clause
                     for k, u in enumerate(_TOK.finditer(n, end, min(len(n), end + 120))):
@@ -561,7 +661,14 @@ def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
                 out.append((*_trim(n, t.start(), end), what))
                 break
             gap += 1
-            if gap > _MAX_GAP or raw[-1:] in ".!?;":
+            just_said = False
+            if low.strip(_LEAD + _TRAIL) in _WHOSE:
+                linked = True
+            # A PIN or password word holds its value a little further off when
+            # 'is' or 'c'est' comes just before it ("Le NIP de ma carte
+            # Desjardins, je l'oublie toujours, c'est 4321").
+            far = fam in ("pin", "pw") and gap <= _MAX_GAP_FAR
+            if (gap > _MAX_GAP and not far) or raw[-1:] in ".!?;":
                 break
             prev, last = low.strip(_LEAD + _TRAIL), t.end()
         # ...or before it: "4821 is my PIN", "Soleil2024 est mon mot de passe"
@@ -573,6 +680,41 @@ def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
                 if _ndigits(core) >= (3 if fam == "pin" else 1) and _is_value(fam, v, True, 0, ""):
                     s = max(0, m.start() - 80) + b.start("v")
                     out.append((*_trim(n, s, s + len(v)), what))
+    return out
+
+
+_NOT_A_CODE_BEFORE = frozenset("ref reference dossier file case order no number num "
+                                "invoice account compte tel phone telephone call appeler "
+                                "since depuis".split())
+_PHONE_AT = re.compile(r"\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}(?!\d)")
+
+
+def _more_codes(n: str, start: int, what: str) -> list[tuple[int, int, str]]:
+    """After a code's value, the other codes of the same list in the same
+    clause: 'Garage code 4821, gate 2580', 'PIN 4821 for the Visa, 1234 for
+    the debit', 'Door code 4821 (old one was 1234)'. A reference number, a
+    phone number, a year or an amount of money is not one."""
+    out, gap, prev = [], 0, ""
+    for t in _TOK.finditer(n, start, min(len(n), start + 160)):
+        if "\n" in n[start:t.start()]:
+            break
+        raw = t.group()
+        v = raw.lstrip(_LEAD + "-").rstrip(_TRAIL)
+        if (_PIN_VALUE.fullmatch(v) and prev not in _LABEL
+                and prev not in _NOT_A_CODE_BEFORE and not _YEAR.fullmatch(v)
+                and not _PHONE_AT.match(n, t.start() + raw.find(v))
+                and not _MONEY_BEFORE.search(n[max(0, t.start() - 2):t.start()])
+                and not _MONEY_AFTER.match(n, t.end()) and not _UNIT_AFTER.match(n, t.end())
+                and not _DATE_SHAPE.fullmatch(v)):
+            out.append((*_trim(n, t.start(), t.end()), what))
+            gap, start = 0, t.end()
+        else:
+            gap += 1
+            if gap > 3:
+                break
+        if raw[-1:] in ".!?;" or (_PIN_VALUE.fullmatch(v) and _PHONE_AT.match(n, t.start())):
+            break
+        prev = raw.lower().strip(_LEAD + _TRAIL)
     return out
 
 
@@ -590,7 +732,9 @@ _SSN_CTX = re.compile(r"(?<![^\W_])(?:s\.?\s?s\.?\s?n\.?|social\s+security)(?![^
 _REF_CTX = re.compile(r"(?:(?<![^\W_])(?:orders?|ref|reference|tracking|track|confirmation"
                       r"|invoice|transaction|receipt|parcel|package|shipment|colis|commande"
                       r"|suivi|facture|booking|reservation|ticket|case|claim|policy|member"
-                      r"|membership|serial|imei|iccid|barcode|upc|isbn|no|num|n°|nº)(?![^\W_])"
+                      r"|membership|serial|imei|iccid|barcode|upc|isbn|no|num|n°|nº"
+                      r"|aeroplan|airmiles|air\s+miles|points|rewards|loyalty|optimum|scene"
+                      r"|petro|costco|library|patient|student|employee|customer|client)(?![^\W_])"
                       r"(?:\W{1,3}(?:number|no|num|n°|nº|#))?|#)\W{0,3}$", re.I)
 
 
@@ -701,10 +845,24 @@ def _iban_ok(s: str) -> bool:
         return False
 
 
+_BANK_AT_ONCE = re.compile(r"(?i)(?:transit|institution|inst|folio)\b")
+_NOT_A_BANK = frozenset("hydro bell rogers telus videotron fido koodo virgin freedom shaw "
+                        "cogeco enbridge gas electric electricity water phone internet cable "
+                        "aeroplan loyalty optimum scene airmiles miles costco member library "
+                        "netflix amazon customer client utility utilities billing insurance "
+                        "pharmacy rx hospital patient school student transit presto ttc "
+                        "parking toll bill billing invoice".split())
+
+
 def _id_hits(n: str) -> list[tuple[int, int, str]]:
     out = []
     for what, rx in _ID_WORDS.items():
         for m in rx.finditer(n):
+            if what == BANK:
+                before = re.findall(r"[a-z]+", n[max(0, m.start() - 30):m.start()].lower())
+                if set(before[-3:]) & _NOT_A_BANK:
+                    continue            # 'Hydro account 123456789' is a bill, not a bank
+            at_once = what == BANK and bool(_BANK_AT_ONCE.match(m.group()))
             gap, start, end, digits, chunk = 0, None, None, 0, ""
             for t in _TOK.finditer(n, m.end(), min(len(n), m.end() + 80)):
                 raw = t.group()
@@ -714,12 +872,14 @@ def _id_hits(n: str) -> list[tuple[int, int, str]]:
                         continue
                     if not any(c.isdigit() for c in v):
                         gap += 1
-                        if gap > 3 or raw[-1:] in ".!?;" or v.lower() in _ID_BREAK:
-                            break
+                        if (gap > 3 or raw[-1:] in ".!?;" or v.lower() in _ID_BREAK
+                                or at_once):
+                            break       # 'transit pass costs 128' is a fare, not a transit no.
                         continue
                     if ("$" in raw or "%" in raw or re.search(r"\d,\d{3}", v)
+                            or re.fullmatch(r"\d+\.\d{2}", v) or _UNIT_AFTER.match(n, t.end())
                             or _DATE_OR_PHONE.fullmatch(v)):
-                        break                     # money, a date or a phone number
+                        break                     # money, a date, a count or a phone number
                     start = t.start()
                 elif not (v == raw and (re.fullmatch(r"[A-Za-z0-9\-]{0,5}\d[A-Za-z0-9\-]{0,5}", v)
                                         or (what == HEALTH and re.fullmatch(r"[A-Za-z]{2}", v)))):
@@ -774,11 +934,32 @@ def _key_hits(n: str) -> list[tuple[int, int, str]]:
 _HEXID = re.compile(r"(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{20,}")
 
 
+# A mark JEFFEREY put in place of something hidden. It is never scanned, and
+# nothing reaches across it: the mark says "a PIN or a door, alarm or lock
+# code", and read as words it announced the next number — so one old note
+# ('Garage code 4821, gate 2580') blacked out 'who am I' and 'tell my story'
+# whole, and a scam's subject line ('Your PIN 4821 4821 is locked') switched
+# off its own verdict (verify I-07, I-14, I-15).
+_MARK = re.compile(r"\[hidden(?::[^\[\]]{0,120})?\]")
+
+
 def find_secrets(text: str) -> list[tuple[int, int, str]]:
     """Every secret-shaped span in `text`: (start, end, what), in the
     original text's positions, overlapping spans merged, in order."""
     if not isinstance(text, str) or len(text) < 6 or _HEXID.fullmatch(text):
         return []                      # a sha256 or other long hex id: never a secret
+    if "[hidden" in text:
+        out, last = [], 0
+        for m in _MARK.finditer(text):
+            out += [(a + last, b + last, w) for a, b, w in _find(text[last:m.start()])]
+            last = m.end()
+        return out + [(a + last, b + last, w) for a, b, w in _find(text[last:])]
+    return _find(text)
+
+
+def _find(text: str) -> list[tuple[int, int, str]]:
+    if len(text) < 3:
+        return []
     n, src = _normalise(text)
     hits = _key_hits(n) + _keyword_hits(n) + _number_hits(n) + _id_hits(n)
     if not hits:
@@ -1222,12 +1403,46 @@ def _describe(asked, tool: str | None = None) -> str:
         for k in FINGERPRINT_ARGS[tool]:
             if isinstance(asked.get(k), str) and asked[k]:
                 asked[k] = f"[not written down; {fingerprint(asked[k])}]"
+    if isinstance(asked, dict):
+        asked = _hide_labelled(asked)
     asked, _ = mask(asked)
     try:
         s = _dumps(asked)
     except Exception:
         s = str(asked)
     return s if len(s) <= ASKED_CAP else s[:ASKED_CAP] + "…"
+
+
+# Set by representative.py when it loads (it imports this module, so not the
+# other way round): does a form's or the profile's label ask for a kind of
+# detail that is never kept (a passport, a login, a maiden name)?
+LABEL_IS_SENSITIVE = None
+
+
+def _hide_labelled(asked: dict) -> dict:
+    """A value handed in under a label of its own ({'field': 'passport',
+    'value': 'AB123456'}) is judged beside that label, not beside the word
+    'value' — so a value refused for its label is never written down in the
+    record either (verify I-07, I-58: 'bank login' 'laszlo / Hunter22!',
+    'alarm code' '4821' and 'passport' 'AB123456' were each refused, then
+    written word for word in the record, twice)."""
+    label = next((asked[k] for k in ("field", "label", "name", "box")
+                  if isinstance(asked.get(k), str) and asked[k].strip()), None)
+    if label is None or "value" not in asked:
+        return asked
+    v = asked["value"]
+    if not (isinstance(v, str) or _is_number(v)) or not str(v).strip():
+        return asked
+    hidden = bool(_pair_secret(label, v) or looks_secret(f"{label}: {v}"))
+    if not hidden and LABEL_IS_SENSITIVE is not None:
+        try:
+            hidden = bool(LABEL_IS_SENSITIVE(label))
+        except Exception:
+            hidden = False
+    if hidden:
+        asked = dict(asked)
+        asked["value"] = f"[not written down: a kind of detail never kept; {fingerprint(str(v))}]"
+    return asked
 
 
 # ------------------------------------------------------------------- the log
@@ -1342,13 +1557,34 @@ def _strings(obj):
             yield from _strings(v)
 
 
+_ESC = re.compile(r"\\(u[0-9a-fA-F]{4}|.)", re.S)
+_ESC_CHAR = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f"}
+
+
+def _unescape(s: str) -> str:
+    """A record cut off at its size limit is no longer whole JSON, so it is
+    read as text — with its escapes turned back into what they stand for.
+    Read raw, a name at the start of a line sat right after the letter 'n' of
+    '\\n' and was never found as a whole word (verify I-16: 'erase Karen'
+    said done while 'Karen made coffee' stayed in the record)."""
+    def one(m):
+        x = m.group(1)
+        if x.startswith("u") and len(x) == 5:
+            try:
+                return chr(int(x[1:], 16))
+            except ValueError:
+                return m.group(0)
+        return _ESC_CHAR.get(x, x)
+    return _ESC.sub(one, s)
+
+
 def _text_hits(s, match) -> bool:
     if not isinstance(s, str) or not s:
         return False
     try:
         obj = json.loads(s)
     except ValueError:
-        return bool(match(s))
+        return bool(match(s)) or bool(match(_unescape(s)))
     return any(match(x) for x in _strings(obj))
 
 

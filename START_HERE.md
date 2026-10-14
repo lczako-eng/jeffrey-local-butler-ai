@@ -216,7 +216,8 @@ go; nothing goes until you say yes. A small thing (up to three, of one kind)
 goes on your word in the chat. Anything bigger — or forgetting a person, with
 their moments — needs your own hands: the AI tells you a short code;
 double-click **`Forget or bring back.command`** and type `ok` and the number
-(or the code). The same window lists everything removed in the last three
+(or the code); it shows you the list once more, and you type yes. The same
+window lists everything removed in the last three
 months — `back` and the number puts it back — and can **erase** words
 everywhere, for good: from your memories, the copies, and the record of what
 was sent. Erasing cannot be undone. What an AI company already received, it
@@ -247,7 +248,10 @@ any model name Ollama has.
 
 No AI can raise this — not Claude, not ChatGPT, not the one on your Mac. You
 type it yourself in this window, JEFFEREY reads it back in plain words, and
-nothing changes until you type `yes`:
+nothing changes until you answer. To give more (raise a permission, give or
+widen a key, confirm or share), he shows three numbers — type them and press
+return. Nothing pasted counts, so a message someone sends you can never say
+yes for you:
 
 | Type | It means |
 |---|---|

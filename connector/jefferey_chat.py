@@ -1991,6 +1991,11 @@ def kept_home_paste(text: str, e: EgressRefused) -> dict | None:
         return None
     print(f"\n  That stayed on this Mac: it holds what looks like {why}, so nothing "
           f"of it was sent to the AI.")
+    if egress.is_shut():
+        # Said plainly too: with the door shut nothing leaves at all, not
+        # only what holds a secret (verify I-14).
+        print("  The door is shut as well, so nothing at all is sent to any AI until you "
+              "open it again.")
     print("  Never read a password, a PIN, a code or a card number to anyone who calls, "
           "texts or emails you — not even someone who says they are your bank.")
     if len(text.split()) < 6:
@@ -2004,7 +2009,7 @@ def kept_home_paste(text: str, e: EgressRefused) -> dict | None:
     except Exception:
         return None
     others = [f for f in verdict.get("scam_flags", [])
-              if not f.startswith("it carries what looks like")]
+              if not f.startswith(("it carries what looks like", "it quotes what looks like"))]
     score = without.get("scam_score", 0)
     if verdict.get("verdict") == "safety":
         print("\n  ⚠  JEFFEREY checked it here, on your Mac: this message "
@@ -2154,9 +2159,14 @@ def parse_permit(rest: str) -> dict:
     return out
 
 
-def _confirmed(prompt: str, answer, tty: bool | None) -> bool:
+def _confirmed(prompt: str, answer, tty: bool | None, widen: bool = False) -> bool:
     """A yes typed by a person at this keyboard. Not at a keyboard (a script,
-    a pipe, another program) means no."""
+    a pipe, another program) means no. Whatever was typed or pasted before
+    the question is thrown away first, so a pasted block cannot carry its
+    own 'yes'. And anything that WIDENS what an AI or a key may do asks for
+    three digits shown only now, which nothing written beforehand can hold
+    (verify I-04: one pasted scam e-mail set payments to act and gave
+    ChatGPT's key his private memories)."""
     if tty is None:
         try:
             tty = sys.stdin.isatty()
@@ -2166,10 +2176,21 @@ def _confirmed(prompt: str, answer, tty: bool | None) -> bool:
         print("  This can only be done by you, typing at the keyboard of this Mac. "
               "Nothing was changed.")
         return False
+    import answers as _answers
+    _answers.flush_typeahead()
+    if widen:
+        code = _answers.fresh_code()
+        prompt = (f"  To make sure it is really you at the keyboard, type the number "
+                  f"{' '.join(code)} and press return: ")
     try:
         said = answer(prompt).strip().lower()
     except (EOFError, KeyboardInterrupt):
         said = ""
+    if widen:
+        if not _answers.typed_code(said, code):
+            print("  That was not the number shown, so nothing was changed.")
+            return False
+        return True
     if said not in ("y", "yes", "oui", "o"):
         print("  Nothing was changed.")
         return False
@@ -2228,7 +2249,8 @@ def owner_command(command: str, answer=input, tty: bool | None = None) -> dict |
             cat, preview = conscience.check_permission(
                 p["category"], p["level"], p["cap"], p["period"], p["currency"], p["floor"])
             print("  From now on: " + conscience.describe_permission(cat, preview) + ".")
-            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty,
+                              widen=True):
                 return None
             with access.owner_console():
                 res = conscience.set_permission(p["category"], p["level"], p["cap"],
@@ -2252,7 +2274,8 @@ def owner_command(command: str, answer=input, tty: bool | None = None) -> dict |
                 print(f"    - {SCOPES[s]}")
             if not chosen:
                 print("    - nothing at all (there is no preset by that name)")
-            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty,
+                              widen=True):
                 return None
             with access.owner_console():
                 res = cloud.grant(name, scopes or None)
@@ -2268,7 +2291,8 @@ def owner_command(command: str, answer=input, tty: bool | None = None) -> dict |
                 return None
             print(f"  '{name}' will {'also have' if how == 'add' else 'no longer have'}: "
                   f"{SCOPES[scope]}.")
-            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty,
+                              widen=how == "add"):
                 return None
             with access.owner_console():
                 res = (cloud.add_scope if how == "add" else cloud.remove_scope)(name, scope)
@@ -2320,6 +2344,8 @@ def owner_charges(command: str, answer=input, tty: bool | None = None) -> dict |
               "Nothing was changed.")
         return None
     import guardian as _guardian
+    import answers as _answers
+    _answers.flush_typeahead()          # a pasted 'yes' never counts (verify I-04)
     try:
         _guardian.review_at_the_keyboard(guard, input_fn=answer)
     except StoreProblem as e:
@@ -2359,7 +2385,8 @@ def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | No
             ids = rest.split()
             print("  You are confirming " + ("everything listed by /pending" if ids == ["all"]
                                             else ", ".join(ids)) + " as right.")
-            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty,
+                              widen=True):
                 return None
             with access.owner_console():
                 res = conscience.confirm(ids)
@@ -2380,7 +2407,8 @@ def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | No
                      if level == "legacy" else
                      ": any AI you gave a key that reads facts may see it." if level == "engines"
                      else "."))
-            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty,
+                              widen=level != "private"):
                 return None
             with access.owner_console():
                 res = conscience.set_visibility(ids, level)
@@ -2411,7 +2439,8 @@ def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | No
                 names = [x.lower() for x in parts[1:]]
                 print(f"  Open what you meant for after to: {', '.join(names)}. They will be "
                       f"able to read every moment you marked 'legacy'.")
-                if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                if not _confirmed("  Is that right? Type yes and press return: ", answer, tty,
+                              widen=True):
                     return None
                 with access.owner_console():
                     res = life.release_legacy(names)
@@ -2447,7 +2476,7 @@ def owner_forgetting(command: str, answer=input) -> dict | None:
                          "the number." if verb == "/bringback" else "the words."))
             return None
         if verb == "/approve":
-            res = fg.approve(conscience, rest)
+            return fg.console_approve(conscience, rest, answer)
         elif verb == "/bringback":
             res = fg.bring_back(conscience, rest)
         else:

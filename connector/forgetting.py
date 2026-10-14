@@ -65,6 +65,13 @@ from conscience import Conscience, StoreProblem
 MIN_CHARS = 3            # letters or digits a match must have
 AI_MAX_ITEMS = 3         # more than this, in one request, needs the owner
 AI_DAILY_MAX = 10        # more than this in a day, because an AI asked, too
+# Marking a goal done or an offer declined removes nothing (it can be undone
+# from 'Forget or bring back'), so it is counted on its own, more generous
+# daily line — routine triage of offers must not use up the removals' ten
+# (verify: the 11th declined coupon of the day needed the owner, and he was
+# told "10 things have already been removed" when nothing had been).
+STATUS_TOOLS = frozenset({"close_goal", "resolve_opportunity"})
+AI_DAILY_STATUS_MAX = 40
 AI_CODE_MINUTES = 30     # how long a code an AI may use stays good
 OWNER_CODE_DAYS = 7      # how long a request waits for the owner
 TRASH_KEEP_DAYS = 90     # how long the removed list keeps a thing
@@ -119,6 +126,10 @@ STILL_HELD = (
     "'Forget or bring back' and chooses erase. Anything already sent to an AI "
     "company may still be held by that company.")
 
+STATUS_HELD = (
+    "Nothing was removed: it is only marked, and JEFFEREY still knows it. The "
+    "owner can undo this himself from 'Forget or bring back'.")
+
 ASK_FIRST = ("Read the owner the list of what would go, in plain words, and ask "
              "him. Never say anything was removed until a later result says it "
              "was.")
@@ -128,6 +139,11 @@ ASK_FIRST = ("Read the owner the list of what would go, in plain words, and ask 
 def _norm(s) -> str:
     s = unicodedata.normalize("NFKC", str(s))
     return s.replace("’", "'").replace("‘", "'").casefold()
+
+
+_SPACELESS = re.compile("[\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3005\u3040-\u30ff"
+                        "\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+                        "\U00020000-\U0002ffff]")
 
 
 def _squash(s) -> str:
@@ -141,8 +157,12 @@ class Words:
     def __init__(self, words: str):
         parts = _norm(words).split()
         self.text = " ".join(parts)
-        self.rx = re.compile(r"(?<!\w)" + r"\s+".join(map(re.escape, parts))
-                             + r"(?!\w)")
+        # Chinese and Japanese are written without spaces, so a word there
+        # has no "edge" to find: it is matched where it stands ('凯伦' in
+        # '我和凯伦分居了'); everything else, as whole words.
+        head = "" if parts and _SPACELESS.match(parts[0][:1]) else r"(?<!\w)"
+        tail = "" if parts and _SPACELESS.match(parts[-1][-1:]) else r"(?!\w)"
+        self.rx = re.compile(head + r"\s+".join(map(re.escape, parts)) + tail)
 
     def __call__(self, s) -> bool:
         return isinstance(s, str) and bool(self.rx.search(_norm(s)))
@@ -154,7 +174,9 @@ def too_vague(text) -> str | None:
     if not s:
         return ("Nothing was given to match, so nothing was removed. JEFFEREY "
                 "never takes an empty match to mean everything.")
-    if sum(ch.isalnum() for ch in s) < MIN_CHARS:
+    # A Chinese or Japanese character says as much as a short word: two of
+    # them are a word ('女儿', daughter).
+    if sum(2 if _SPACELESS.match(ch) else 1 for ch in s if ch.isalnum()) < MIN_CHARS:
         return (f"'{s}' is too short to match safely — it would catch things "
                 "nobody meant. Nothing was removed.")
     return None
@@ -667,9 +689,12 @@ class _Trash:
         return [(p, e) for p, e in self._read_all()
                 if float(e.get("keep_until_ts", 0)) >= now]
 
-    def removed_by_ai_since(self, since: float) -> int:
+    def removed_by_ai_since(self, since: float, status: bool = False) -> int:
+        """How many things an AI's requests took away (or, with status=True,
+        only marked done or declined) since then."""
         return sum(len(e["changes"]) for _, e in self._read_all()
-                   if e.get("by") == "ai" and float(e.get("ts", 0)) >= since)
+                   if e.get("by") == "ai" and float(e.get("ts", 0)) >= since
+                   and (e.get("tool") in STATUS_TOOLS) == status)
 
 
 # ---------------------------------------------------------- the two steps
@@ -733,10 +758,7 @@ def ask(c: Conscience, tool: str, plan: Plan) -> dict:
     elif len(sections) > 1:
         why = "it is more than one kind of thing"
     else:
-        today = _Trash(c).removed_by_ai_since(time.time() - 86400)
-        if today + count > AI_DAILY_MAX:
-            why = (f"{today} things have already been removed in the last day "
-                   "because an AI asked")
+        why = _over_the_day(c, tool, count)
     now = time.time()
     entry = {
         "tool": tool, "client": _client(), "ts": now, "at": _cs._now(),
@@ -785,6 +807,37 @@ def ask(c: Conscience, tool: str, plan: Plan) -> dict:
     return res
 
 
+def _waiting_for_ai(c: Conscience, status: bool, but: str | None = None) -> int:
+    """Things in requests an AI may still confirm itself, today."""
+    now = time.time()
+    return sum(len(e.get("changes") or []) for e in _Pending(c).all()
+               if not e.get("needs_owner") and e.get("code") != but
+               and float(e.get("expires_ts", 0)) > now
+               and (e.get("tool") in STATUS_TOOLS) == status)
+
+
+def _over_the_day(c: Conscience, tool: str, count: int, but: str | None = None,
+                  waiting: bool = True) -> str | None:
+    """Why this many more would be too many for one day because an AI asked —
+    counting what was done today AND what is waiting to be confirmed, so ten
+    small requests cannot add up to a whole life (verify I-01: the daily
+    limit was looked at only when the list was shown, never when the code
+    was used) — or None."""
+    status = tool in STATUS_TOOLS
+    limit = AI_DAILY_STATUS_MAX if status else AI_DAILY_MAX
+    done = _Trash(c).removed_by_ai_since(time.time() - 86400, status=status)
+    pend = _waiting_for_ai(c, status, but) if waiting else 0
+    if done + pend + count <= limit:
+        return None
+    if status:
+        return (f"{done + pend} goals or offers have already been marked done or "
+                f"declined today because an AI asked (or are waiting to be), and more "
+                f"than {limit} in a day is his own decision")
+    return (f"{done + pend} things have already been removed today because an AI "
+            f"asked (or are waiting to be), and more than {limit} in a day is his "
+            f"own decision")
+
+
 def confirm_code(c: Conscience, tool: str, code: str) -> dict:
     """Step two, from an AI: only a small request it was shown, by the same
     key, on the same tool — never one that needs the owner."""
@@ -801,6 +854,19 @@ def confirm_code(c: Conscience, tool: str, code: str) -> dict:
     if e.get("client") != _client():
         return refusal(tool, "That code was given to a different key. Nothing was "
                              "removed.")
+    if not e.get("needs_owner"):
+        # The day's limit again, now: what was done since the list was shown
+        # counts (verify I-01). Over it, the same code waits for the owner.
+        why = _over_the_day(c, tool, len(e.get("changes") or []), but=e["code"],
+                            waiting=False)
+        if why:
+            pend = _Pending(c)
+            taken = pend.take(e["code"])
+            if taken is not None:
+                taken.update(needs_owner=True, why_owner=why,
+                             expires_ts=time.time() + OWNER_CODE_DAYS * 86400)
+                pend.put_back(taken)
+                e = taken
     if e.get("needs_owner"):
         code = e["code"]
         return refusal(tool, f"This needs the owner's own OK, because "
@@ -906,6 +972,7 @@ def _carry_out(c: Conscience, entry: dict, by_owner: bool) -> dict:
             pass
         raise
 
+    status_only = tool in STATUS_TOOLS and not counts
     also = []
     for sec, i in entry.get("also") or []:
         it = _find(c.data, sec, i)
@@ -921,8 +988,10 @@ def _carry_out(c: Conscience, entry: dict, by_owner: bool) -> dict:
         "put_back": (f"Until {_day(keep_until)} the owner can put this back himself: "
                      "double-click 'Forget or bring back' (in JEFFEREY's own "
                      "terminal: /removed)."),
-        "still_held": STILL_HELD,
-        "tell_the_user": (f"Tell the owner exactly what went, from this list, and "
+        "still_held": STATUS_HELD if status_only else STILL_HELD,
+        "tell_the_user": (f"Tell the owner exactly what changed, from this list, and "
+                          f"that he can undo it until {_day(keep_until)}." if status_only
+                          else f"Tell the owner exactly what went, from this list, and "
                           f"that he can put it back until {_day(keep_until)}. Do not "
                           f"say it is gone everywhere — see still_held."),
         **_legacy(tool, changes, True),
@@ -1210,6 +1279,43 @@ def _copy_files(c: Conscience) -> list[Path]:
     return files
 
 
+def _other_lives(c: Conscience) -> list[Conscience]:
+    """The memory files that are not the one in use — the Mac's own, left
+    from before the drive, or another of his drives — opened only to be
+    rewritten, never to be read into this process."""
+    try:
+        import home
+        found = home.conscience_files()
+    except Exception:
+        return []
+    try:
+        mine = c.path.resolve()
+    except OSError:
+        mine = c.path
+    out = []
+    for p in found:
+        try:
+            if p.resolve() == mine or not p.is_file():
+                continue
+        except OSError:
+            continue
+        o = Conscience.__new__(Conscience)
+        o._init_fields(p)
+        out.append(o)
+    return out
+
+
+def _temps_holding(c: Conscience, w: Callable) -> list[Path]:
+    out = []
+    for p in c._temp_files():
+        try:
+            if w(p.read_bytes().decode("utf-8", "replace")):
+                out.append(p)
+        except OSError:
+            continue
+    return out
+
+
 def erase(c: Conscience, words: str, *, dry_run: bool = False) -> dict:
     """OWNER ONLY — his console, never a tool an AI can call: this cannot be
     undone, and nothing irreversible happens because an AI asked.
@@ -1234,9 +1340,17 @@ def erase(c: Conscience, words: str, *, dry_run: bool = False) -> dict:
     store = _erase_data(probe, w, stamp)
     names = _names_hit(c.data, w, words)
     log_hits = egress.matching(w)
-    copies = [p for p in _copy_files(c) if _file_mentions(p, w)]
-    trash = [p for p, e in _Trash(c)._read_all()
+    # This life's copies, then every other memory file and its copies: the
+    # live file of another life is rewritten the same way as a copy.
+    lives = [c] + _other_lives(c)
+    groups = []
+    for life in lives:
+        files = ([] if life is c else [life.path]) + _copy_files(life)
+        groups.append((life, [p for p in files if _file_mentions(p, w)]))
+    copies = [p for _, fs in groups for p in fs]
+    trash = [p for life in lives for p, e in _Trash(life)._read_all()
              if any(w(s) for _, s in _leaves(e.get("changes")))]
+    temps = [p for life in lives for p in _temps_holding(life, w)]
     receipt = {
         "step": "preview" if dry_run else "done",
         "when": stamp, "words_sha256": fingerprint,
@@ -1244,13 +1358,13 @@ def erase(c: Conscience, words: str, *, dry_run: bool = False) -> dict:
         "names_taken_off": store["unnamed"],
         "action_log_entries_reworded": store["redacted"],
         "sent_records_erased": log_hits["entries"],
-        "copies": len(copies),
+        "copies": len(copies) + len(temps),
         "removed_list_entries": len(trash),
         "not_erased": [_untouched_words(s) for s in store["untouched"]],
         "still_held_elsewhere": _elsewhere(log_hits),
     }
     if not (sum(store["removed"].values()) or store["unnamed"] or store["redacted"]
-            or log_hits["entries"] or copies or trash):
+            or log_hits["entries"] or copies or trash or temps):
         receipt.update(step="nothing", plain="  Nothing JEFFEREY keeps holds those "
                        "words (whole words, any case). Nothing was erased.")
         return receipt
@@ -1276,42 +1390,56 @@ def erase(c: Conscience, words: str, *, dry_run: bool = False) -> dict:
         raise
     problems: list[str] = []
 
-    # 2. Every copy (under the store's lock, so none is rotated meanwhile).
+    # 2. Every copy, and every other memory file (each under its own store's
+    # lock, so none is rotated meanwhile) — and the half-written temporary
+    # copies a cut-off save left behind (durability-34).
     rewritten = deleted = 0
-    with c._lock():
-        for p in copies:
-            try:
-                raw = p.read_bytes()
-                try:
-                    obj = Conscience._parse(raw)
-                except _cs._Unreadable:
-                    p.unlink()
-                    deleted += 1
-                    continue
-                _erase_data(obj, w, stamp)
-                _cs._write_atomic(p, Conscience._canon(obj))
-                rewritten += 1
-            except OSError:
-                problems.append(f"a copy could not be rewritten ({p.name})")
+    for life, files in groups:
+        try:
+            with life._lock():
+                for p in files:
+                    try:
+                        raw = p.read_bytes()
+                        try:
+                            obj = Conscience._parse(raw)
+                        except _cs._Unreadable:
+                            p.unlink()
+                            deleted += 1
+                            continue
+                        _erase_data(obj, w, stamp)
+                        _cs._write_atomic(p, Conscience._canon(obj))
+                        rewritten += 1
+                    except OSError:
+                        problems.append(f"a copy could not be rewritten ({p.name})")
+                deleted += life._sweep_temps_locked()
+        except OSError:
+            problems.append(f"the copies beside {life.path.name} could not be reached")
+        left = _temps_holding(life, w)
+        if left:
+            problems.append(f"{len(left)} half-written copy file(s) still hold the words")
 
     # 3. The removed list, and anything waiting for an OK.
     purged = 0
-    for p, e in _Trash(c)._read_all():
-        keep = [ch for ch in e["changes"]
-                if not any(w(s) for _, s in _leaves(ch))]
-        if len(keep) == len(e["changes"]):
-            continue
+    for life in lives:
+        for p, e in _Trash(life)._read_all():
+            keep = [ch for ch in e["changes"]
+                    if not any(w(s) for _, s in _leaves(ch))]
+            if len(keep) == len(e["changes"]):
+                continue
+            try:
+                if keep:
+                    e["changes"] = keep
+                    _cs._write_atomic(p, json.dumps(e, indent=1, ensure_ascii=False)
+                                      .encode("utf-8"))
+                else:
+                    p.unlink()
+                purged += 1
+            except OSError:
+                problems.append(f"an entry in the removed list could not be erased ({p.name})")
         try:
-            if keep:
-                e["changes"] = keep
-                _cs._write_atomic(p, json.dumps(e, indent=1, ensure_ascii=False)
-                                  .encode("utf-8"))
-            else:
-                p.unlink()
-            purged += 1
-        except OSError:
-            problems.append(f"an entry in the removed list could not be erased ({p.name})")
-    _Pending(c).drop_matching(w)
+            _Pending(life).drop_matching(w)
+        except StoreProblem:
+            problems.append("a request waiting for the owner could not be erased")
 
     # 4. The record of what was sent: each entry stays, as a dated tombstone.
     try:
@@ -1393,7 +1521,7 @@ def _receipt_words(r: dict, done: bool) -> str:
                  "(each stays as a dated line with its fingerprint)")
     if done:
         lines.append(f"    safety copies: {r.get('copies_rewritten', 0)} rewritten"
-                     + (f", {r['copies_deleted']} damaged one(s) deleted"
+                     + (f", {r['copies_deleted']} damaged or half-written one(s) deleted"
                         if r.get("copies_deleted") else ""))
     else:
         lines.append(f"    safety copies holding them: {r.get('copies', 0)}")
@@ -1454,6 +1582,41 @@ def _say(res: dict) -> None:
     print(f"  You can put this back until {res.get('kept_until')}, here.")
 
 
+def console_approve(c: Conscience, which: str, answer=input, yes: bool = False) -> dict | None:
+    """The owner approves a waiting request at his own keyboard — after he
+    has seen exactly what it removes. A code read out to him by an AI is
+    never carried out unseen (verify I-01: '/approve CODE' removed at once,
+    without showing the list)."""
+    rows = waiting(c)
+    s = str(which or "").strip()
+    row = next((r for r in rows if str(r["number"]) == s or r["code"] == _clean_code(s)), None)
+    if row is None:
+        res = refusal("approve", "There is no request waiting with that code (it may "
+                                 "have been done already, or it expired). Nothing was "
+                                 "removed.")
+        _say(res)
+        return res
+    print(f"  Code {row['code']}, asked for by '{row['asked_by']}' {row['when'][3:]}. "
+          f"It would remove or change:")
+    for sec, what, change in row["items"][:SHOW_MAX]:
+        print(f"         {_kind(sec)}: {what}" + (f"  — {change}" if change else ""))
+    if not row["items"]:
+        print("         (nothing on it is still there)")
+    if not yes:
+        try:
+            import answers as _answers
+            _answers.flush_typeahead()      # a pasted 'yes' never counts
+            a = answer("  Do this? It can still be put back. Type yes and press return: ")
+        except EOFError:
+            a = ""
+        if a.strip().lower() not in ("yes", "y", "oui", "o"):
+            print("  Nothing was removed.")
+            return None
+    res = approve(c, row["code"])
+    _say(res)
+    return res
+
+
 def console_erase(c: Conscience, words: str, answer=input, yes: bool = False) -> dict | None:
     pre = erase(c, words, dry_run=True)
     if pre.get("refused"):
@@ -1503,9 +1666,7 @@ def menu(c: Conscience, answer=input) -> int:
         verb, rest = "ok", choice
     try:
         if verb in ("ok", "approve") and rest:
-            row = next((x for x in w if str(x["number"]) == rest
-                        or x["code"] == _clean_code(rest)), None)
-            _say(approve(c, row["code"] if row else rest))
+            console_approve(c, rest, answer)
         elif verb in ("back", "bring") and rest:
             _say(bring_back(c, rest.replace("back", "").strip() or rest))
         elif verb == "erase":
@@ -1528,6 +1689,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("waiting", parents=[common])
     a = sub.add_parser("approve", parents=[common])
     a.add_argument("code")
+    a.add_argument("--yes", action="store_true", help="do not ask first")
     sub.add_parser("removed", parents=[common])
     b = sub.add_parser("bring-back", parents=[common])
     b.add_argument("which")
@@ -1549,9 +1711,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "removed":
             _print_removed(c)
         elif args.cmd == "approve":
-            res = approve(c, args.code)
-            _say(res)
-            return 1 if res.get("refused") else 0
+            res = console_approve(c, args.code, yes=args.yes)
+            return 1 if res is None or res.get("refused") else 0
         elif args.cmd == "bring-back":
             res = bring_back(c, args.which)
             _say(res)

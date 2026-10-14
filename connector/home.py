@@ -657,6 +657,14 @@ def door_switches() -> list[Path]:
     return _known("JEFFEREY_DOOR", "door-shut")
 
 
+def conscience_files() -> list[Path]:
+    """Every memory file that exists: the one in use first, then one left in
+    the owner's own folder on this Mac and on each of his drives plugged in.
+    Erasing for good must reach all of them (verify I-16: the Mac's own copy
+    from before the drive kept what was erased on the drive)."""
+    return [p for p in _known("JEFFEREY_CONSCIENCE_PATH", "conscience.json") if p.exists()]
+
+
 def egress_logs() -> list[Path]:
     """Every record of what left the house that exists, the one in use first."""
     return [p for p in _known("JEFFEREY_EGRESS", "egress.jsonl") if p.exists()]

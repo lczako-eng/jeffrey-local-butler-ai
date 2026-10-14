@@ -210,7 +210,23 @@ SENSITIVE_PATTERNS = [
     "lock box", "keypad", "combination", "wifi key", "wi-fi key",
     # Variants a real form uses for the same boxes (I-66).
     "nas", "assurance sociale", "nip", "pwd", "passwd",
+    # ...and the other names people and forms give the same identity
+    # documents and security answers (verify I-58).
+    "travel document", "document number", "document no", "id number", "id no",
+    "photo id", "identification number", "identity card", "id card",
+    "pasaporte", "reisepass", "passaporto", "paszport", "utlevel", "útlevél",
+    "driving permit", "driver permit", "driver's permit", "permit number",
+    "health no", "health num", "born in", "city of birth", "town of birth",
+    "country of birth", "birth place", "first pet", "pet's name", "pets name",
+    "memorable word", "memorable", "maiden", "mother's family name",
+    "mothers family name", "family name at birth", "birth name",
 ]
+# A plate is on the car for anyone to read: 'Licence plate' is not a licence.
+_NOT_SENSITIVE_PHRASES = _phrases("licence plate", "license plate", "plate number",
+                                  "licence plate number", "license plate number")
+# An old profile key written as one word ('passportno', 'mothersmaiden').
+_JOINED = tuple(sorted({"".join(p) for p in _phrases(*SENSITIVE_PATTERNS)
+                        if len("".join(p)) >= 8}))
 _SENSITIVE = _phrases(*SENSITIVE_PATTERNS)
 
 # Words that make a box about SOMEONE (or something) other than the owner's
@@ -367,9 +383,22 @@ def is_signing(*texts: str) -> bool:
 def is_sensitive(*texts: str) -> bool:
     for t in texts:
         toks = _tokens(t)
+        for ph in _NOT_SENSITIVE_PHRASES:
+            if _has_phrase(toks, ph):
+                toks = [x for x in toks if x not in ("licence", "license")]
         if any(_has_phrase(toks, ph) for ph in _SENSITIVE):
             return True
-    return bool(secret_kinds(*texts))
+        if len(toks) == 1 and any(j in toks[0] for j in _JOINED):
+            return True
+        if re.search(r"(?i)\b(?:health|licen[cs]e|passport|permit|document|id)\s*#", str(t)):
+            return True                       # 'Health #', 'ID #'
+        if secret_kinds(" ".join(toks)):
+            return True
+    return False
+
+
+# The record of what left the house judges a labelled value by the same rule.
+egress.LABEL_IS_SENSITIVE = is_sensitive
 
 
 def vault_fits(name: str, *texts: str) -> bool:
@@ -2100,10 +2129,14 @@ class Representative:
             # a password, PIN, code or card number is the attack itself; an
             # account or health-card number in a real bank's or clinic's
             # letter is only a small sign
-            add("quoted_secret", 0.3 if set(quoted) - _QUIET_SECRETS else 0.1, (
+            loud = bool(set(quoted) - _QUIET_SECRETS)
+            add("quoted_secret", 0.3 if loud else 0.1, (
                 f"it carries what looks like {' and '.join(quoted)} — never read it out, "
                 "type it or send it to anyone who calls, texts or emails you; a real "
-                "bank, government office or company never asks for it"))
+                "bank, government office or company never asks for it") if loud else (
+                f"it quotes what looks like {' and '.join(quoted)} — normal in a real bill "
+                "or statement, but never read it out or type it for anyone who calls, "
+                "texts or emails about it"))
 
         # Words that speak to an AI, not to him — hidden or not (I-25).
         if any(re.search(p, text, re.I | re.S) for p in _HIDDEN_SIGNALS):

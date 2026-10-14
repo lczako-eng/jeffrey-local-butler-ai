@@ -996,5 +996,244 @@ class DamagedStoreIsNotACrash(StoreTest):
         self.assertIn("need attention", p.stdout)
 
 
+# ============================================== after the fixes (verify, hunt)
+class AfterTheFixes(StoreTest):
+    """What the skeptics and regression hunters found after the first round
+    of fixes: verify I-05, I-19, I-50, the history budget; durability-34,
+    scale-01/02/21, onboarding-08."""
+
+    # ---- I-50 (and its regression): a full drive must not lose the damaged file
+    def torn_with_newer_fact(self) -> bytes:
+        c = Conscience(self.store)
+        for i in range(5):
+            c.remember_fact(f"fact {i}")
+        d = json.loads(self.store.read_text())
+        d["facts"].append({"fact": "NEWER, said after the copy: Czakó", "category": "general"})
+        raw = json.dumps(d, indent=2, ensure_ascii=False).encode()
+        cut = raw.index("ó".encode()) + 1
+        self.store.write_bytes(raw[:cut])          # cut inside a letter: a power cut
+        return raw[:cut]
+
+    def kept_anywhere(self, word: bytes) -> bool:
+        return any(word in p.read_bytes() for p in self.tmp.rglob("*") if p.is_file())
+
+    def test_a_full_drive_recovery_keeps_the_damaged_file(self):
+        # verify I-50: the copy could not be written on a full drive, and the
+        # first save after space came back wrote over the only place the
+        # newer fact was. (The old code renamed it; a link needs no space.)
+        self.torn_with_newer_fact()
+        r = self.py(f"""
+            import resource, signal
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (100, hard))     # the drive is full
+            from conscience import Conscience
+            c = Conscience({str(self.store)!r})
+            kept = [p.name for p in c._damaged_copies()]
+            resource.setrlimit(resource.RLIMIT_FSIZE, (hard, hard))    # space again
+            c.remember_fact("after space came back")
+            out({{"kept": kept, "facts": len(c.data["facts"])}})
+        """)
+        self.assertEqual(len(r["kept"]), 1, r)
+        self.assertTrue(self.kept_anywhere(b"NEWER"), "the newer fact is nowhere on disk")
+
+    def test_nothing_is_saved_until_the_damaged_file_is_kept(self):
+        self.torn_with_newer_fact()
+        with mock.patch.object(Conscience, "_keep_damaged", lambda self, raw: None):
+            c = Conscience(self.store)
+            self.assertEqual(len(c.data["facts"]), 5)
+            with self.assertRaises(ConscienceSaveFailed) as e:
+                c.remember_fact("while the damaged file cannot be kept")
+            self.assertIn("nothing was saved", str(e.exception))
+            self.assertNotIn("/", str(e.exception))
+        self.assertTrue(self.kept_anywhere(b"NEWER"))
+        c.remember_fact("now it can be kept")                       # the real keeper
+        self.assertTrue(any(b"NEWER" in p.read_bytes() for p in c._damaged_copies()))
+        self.assertIn("now it can be kept", self.store.read_text())
+
+    # ---- I-19: an edit saved by an editor in another text format
+    def test_a_hand_edit_saved_as_utf16_or_with_a_mark_is_the_owners(self):
+        for enc in ("utf-16", "utf-8-sig", "utf-16-be"):
+            with self.subTest(enc=enc):
+                shutil.rmtree(self.tmp)
+                (self.tmp / "home").mkdir(parents=True)
+                c = Conscience(self.store)
+                c.remember_fact("I had an affair in 2009")
+                c.remember_fact("My doctor is Dr Old in Montréal")
+                d = json.loads(self.store.read_text())
+                d["facts"] = [f for f in d["facts"] if "affair" not in f["fact"]]
+                time.sleep(TEAR_WINDOW_PLUS)
+                self.store.write_bytes(json.dumps(d, indent=2, ensure_ascii=False).encode(enc))
+                c2 = Conscience(self.store)
+                self.assertEqual([f["fact"] for f in c2.data["facts"]],
+                                 ["My doctor is Dr Old in Montréal"])
+                self.assertEqual(c2._damaged_copies(), [], "taken for a power cut")
+                self.assertIn("changed outside", json.dumps(c2.notices()))
+                raw = self.store.read_bytes()
+                self.assertNotIn(b"affair", raw)
+                raw.decode("utf-8")                     # written back as plain UTF-8
+                self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+
+    def test_a_mistake_in_the_file_is_said_in_plain_words(self):
+        Conscience(self.store).remember_fact("one")
+        self.store.write_text('{"facts": [{"fact": "one"},], "goals": [], "priorities": []}')
+        with self.assertRaises(ConscienceNeedsFixing) as e:
+            Conscience(self.store)
+        msg = str(e.exception)
+        self.assertIn("line 1", msg)
+        for raw in ("Expecting", "delimiter", "enclosed in double quotes"):
+            self.assertNotIn(raw, msg)
+
+    def test_an_edit_in_place_with_the_old_date_put_back_is_still_seen(self):
+        c = Conscience(self.store)
+        c.remember_fact("My doctor is Dr Old")
+        c.remember_fact("PIN hint: dog name")
+        st = os.stat(self.store)
+        raw = self.store.read_bytes()
+        new = raw.replace(b"Dr Old", b"Dr New").replace(b"PIN hint: dog name", b" " * 18)
+        self.assertEqual(len(new), len(raw))
+        with open(self.store, "r+b") as fh:
+            fh.write(new)
+        os.utime(self.store, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertTrue(c.refresh())
+        facts = [f["fact"] for f in c.data["facts"]]
+        self.assertIn("My doctor is Dr New", facts)
+        self.assertFalse(any("PIN hint" in f for f in facts), "the deleted text is still served")
+        c.remember_fact("a new fact after the edit")      # not refused, ever again
+        self.assertIn("Dr New", self.store.read_text())
+
+    def test_after_a_conflict_ask_again_works(self):
+        c = Conscience(self.store)
+        c.remember_fact("first")
+        other = Conscience(self.store)
+        other.remember_fact("from another engine")
+        c._stat = c._key(os.stat(self.store))           # as if the date had not moved
+        with self.assertRaises(ConscienceConflict):
+            c.remember_fact("lost the race")
+        c.refresh()
+        c.remember_fact("asked again")
+        facts = [f["fact"] for f in json.loads(self.store.read_text())["facts"]]
+        self.assertEqual(facts, ["first", "from another engine", "asked again"])
+
+    # ---- durability-34: half-written temporary copies
+    def test_half_written_copies_do_not_pile_up(self):
+        c = Conscience(self.store)
+        c.remember_fact("Karen and I are separating, nobody knows yet")
+        hist = self.store.parent / (self.store.stem + ".history")
+        strays = [self.store.parent / f".{self.store.name}.k{i}x.tmp" for i in range(3)]
+        strays.append(hist / f".{self.store.stem}-20261014T000000Z-000009.json.zz.tmp")
+        for p in strays:
+            p.write_text(self.store.read_text())       # what a killed save leaves
+        other = self.store.parent / ".someone-elses.tmp"
+        other.write_text("not JEFFEREY's")
+        c.remember_fact("an ordinary day")
+        self.assertEqual([p for p in strays if p.exists()], [])
+        self.assertTrue(other.exists(), "removed a file that was not JEFFEREY's")
+
+    def test_killed_writers_leave_nothing_behind_after_the_next_save(self):
+        import signal
+        Conscience(self.store).remember_fact("seed")
+        writer = ("import sys; sys.path.insert(0, %r)\nfrom conscience import Conscience\n"
+                  "c = Conscience(sys.argv[1]); c.data['facts'] += [{'fact': 'x' * 300} for _ in "
+                  "range(3000)]\nprint('READY', flush=True)\ni = 0\nwhile True:\n"
+                  "    c.remember_fact('note %%d' %% i); i += 1\n" % str(CONNECTOR))
+        for k in range(6):
+            pr = subprocess.Popen([PY, "-c", writer, str(self.store)], env=self.env(),
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            pr.stdout.readline()
+            time.sleep(0.2 + 0.05 * k)
+            os.kill(pr.pid, signal.SIGKILL)
+            pr.communicate()
+        Conscience(self.store).remember_fact("a normal day")
+        left = [p for p in self.store.parent.rglob(".*.tmp")]
+        self.assertEqual(left, [])
+
+    # ---- verify: all the copies together stay within a budget
+    def test_the_copies_stay_within_their_budget(self):
+        c = Conscience(self.store)
+        c.data["facts"] = [{"fact": "padding " * 200} for _ in range(20)]   # ~32 KB a copy
+        c._save()
+        size = self.store.stat().st_size
+        with mock.patch.object(cmod, "HISTORY_MAX_BYTES", 12 * size):
+            for i in range(40):
+                c.remember_fact(f"note {i}")
+                c.pin_snapshot(f"before something {i}") if i % 10 == 0 else None
+            files = c._history_files()
+            total = sum(p.stat().st_size for p in files)
+        self.assertLessEqual(total, 13 * size, (total, size, len(files)))
+        newest = c._snapshot_files()[:cmod.HISTORY_PROTECT]
+        self.assertTrue(all(p.exists() for p in newest))
+        self.assertIn("note 39", c._snapshot_files()[0].read_text())
+        self.assertTrue(c._pinned_files(), "the newest pinned copy was let go")
+
+    # ---- I-05: a reader is never refused because another engine is writing
+    def test_a_first_time_reader_is_not_refused_while_another_engine_writes(self):
+        import access
+        c = Conscience(self.store)
+        c.remember_fact("seed")
+        reader = Conscience(self.store)
+        cloud = SelfCloud(reader)
+        Conscience(self.store).remember_fact("written a moment ago elsewhere")
+        gate = access.Gate(cloud, "claude-raw", announce=False)
+        reader._stat = reader._key(os.stat(self.store))        # it has not noticed yet
+        v = gate.check("facts.read")
+        self.assertTrue(v["allowed"], v)
+        disk = json.loads(self.store.read_text())
+        self.assertIn("claude-raw", disk["selfcloud_grants"])
+        self.assertIn("written a moment ago elsewhere", [f["fact"] for f in disk["facts"]])
+
+    # ---- scale-01 / scale-02 / scale-21: a long life loads and answers fast
+    def test_a_long_life_saved_before_october_loads_and_answers_quickly(self):
+        import grounding
+        facts = [{"fact": f"Fact {i}: we drove to the cottage near Wiarton with Anna and "
+                          f"talked about the harbour and the old boat", "category": "general",
+                  "added": "2025-01-01T00:00:00+0000"} for i in range(4000)]
+        mems = [{"text": f"Moment {i}: the lake in summer, Anna laughing by the dock",
+                 "when": "1990", "people": ["Anna"]} for i in range(2000)]
+        self.store.write_text(json.dumps({"facts": facts, "memories": mems,
+                                          "people": [{"name": "Anna"}], "priorities": [],
+                                          "goals": [], "_rev": 3}))
+        t = time.perf_counter()
+        r = self.py("""
+            import time
+            t = time.perf_counter()
+            import jefferey_mcp as m
+            imp = time.perf_counter() - t
+            mcp_call(m, "who_am_i")
+            import grounding
+            before = grounding._words.cache_info().misses
+            t = time.perf_counter()
+            mcp_call(m, "who_am_i")
+            mcp_call(m, "tell_story")
+            again = time.perf_counter() - t
+            out({"import": imp, "again": again,
+                 "new_words": grounding._words.cache_info().misses - before})
+        """, JEFFEREY_CLIENT="jefferey")
+        # 4d2c44c: about a second; 35e4e9b: 2.6 s to import and 3 s a call at this
+        # size (the rules and the kind of private re-read from text, every time).
+        self.assertLess(r["import"], 6.0, r)
+        self.assertLess(r["again"], 4.0, r)
+        self.assertLess(r["new_words"], 50, "the same texts were read again")
+        self.assertLess(time.perf_counter() - t, 60)
+
+    # ---- onboarding-08: a new Mac is not told to restore memories it never had
+    def test_install_check_on_a_new_mac_is_calm(self):
+        env = {k: v for k, v in self.env().items()
+               if not k.startswith(("JEFFEREY_", "SELFCLOUD_"))}
+        env["HOME"] = str(self.tmp / "newmac")
+        (self.tmp / "newmac").mkdir()
+        p = subprocess.run([PY, str(ROOT / "tools" / "install.py"), "--check"], env=env,
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        line = [l for l in p.stdout.splitlines() if "Your memories" in l]
+        self.assertTrue(line, p.stdout)
+        self.assertNotIn("✗", line[0])
+        self.assertNotIn("Restore my memories", p.stdout)
+        self.assertEqual(list((self.tmp / "newmac").rglob("*")), [], "--check wrote")
+
+
+TEAR_WINDOW_PLUS = cmod.TEAR_WINDOW_S + 0.3
+
+
 if __name__ == "__main__":
     unittest.main()

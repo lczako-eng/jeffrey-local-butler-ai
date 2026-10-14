@@ -335,8 +335,14 @@ class ExactMatching(DeletionTest):
         self.assertTrue(r["ai_try"]["refused"])
         self.assertIn("Forget or bring back", r["ai_try"]["tell_the_user"])
         self.assertEqual(r["people"], 2, "an AI confirmed what needs the owner")
+        # The owner sees the list again before it is carried out (verify
+        # I-01: approve used to remove at once, unseen); he types yes.
         p = self.owner("approve", shown["confirm"])
+        self.assertNotEqual(p.returncode, 0, "approved without his yes")
+        self.assertEqual(len(json.loads(self.store.read_text())["people"]), 2)
+        p = self.owner("approve", shown["confirm"], input_text="yes\n")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Sarah (ex-wife)", p.stdout)
         s = json.loads(self.store.read_text())
         self.assertEqual([x["name"] for x in s["people"]], ["Joanna"])
         self.assertEqual([(m["text"], m["people"]) for m in s["memories"]],
@@ -434,7 +440,9 @@ class TwoSteps(DeletionTest):
         self.assertTrue(r["big_try"]["refused"])
         self.assertEqual(r["done"], [3, 3, 3])
         self.assertTrue(r["budget"]["needs_owner"], r["budget"])
-        self.assertIn("in the last day", r["budget"]["how_to_finish"])
+        # (The day's count now includes what waits to be confirmed — verify
+        # I-01 — so the words say "today … or are waiting to be".)
+        self.assertIn("already been removed today", r["budget"]["how_to_finish"])
         self.assertEqual(r["left"], 7)
 
     def test_close_goal_and_resolve_opportunity_take_two_steps_too(self):
@@ -544,7 +552,12 @@ class UndoAndAudit(DeletionTest):
             out({"a": a})
         """)
         self.assertTrue(r["a"]["needs_owner"])
+        # The menu shows what is waiting, and asks once more before it
+        # removes anything (verify I-01).
         p = self.owner(input_text="ok 1\n")
+        self.assertIn("Nothing was removed", p.stdout)
+        self.assertEqual(len(json.loads(self.store.read_text())["facts"]), 5)
+        p = self.owner(input_text="ok 1\nyes\n")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("Waiting for your OK", p.stdout)
         self.assertIn("Done: 5", p.stdout)
@@ -555,11 +568,13 @@ class UndoAndAudit(DeletionTest):
             for i in range(4):
                 d("remember_fact", {"fact": f"spare key {i}"})
             a = d("forget", {"contains": "spare key"})
-            res = jc.owner_forgetting(f"/approve {a['confirm']}")
+            unseen = jc.owner_forgetting(f"/approve {a['confirm']}", answer=lambda p: "")
+            res = jc.owner_forgetting(f"/approve {a['confirm']}", answer=lambda p: "yes")
             back = jc.owner_forgetting("/bringback 1")
-            out({"res": res, "back": back, "facts": len(store()["facts"]),
+            out({"unseen": unseen, "res": res, "back": back, "facts": len(store()["facts"]),
                  "tools": [t["name"] for t in jc.TOOLS]})
         """)
+        self.assertIsNone(r["unseen"], "/approve removed without the owner's yes")
         self.assertEqual(r["res"]["removed_facts"], 4)
         self.assertEqual(r["back"]["put_back"], 4)
         self.assertEqual(r["facts"], 4)
@@ -852,6 +867,171 @@ class RealErasure(DeletionTest):
         self.assertEqual(r["yes"]["step"], "done")
         self.assertEqual(r["facts"], [])
         self.assertIn("cannot reach what an AI company keeps", r["yes"]["still_held_elsewhere"])
+
+
+# ============================================== after the fixes (verify, hunt)
+class AfterTheFixes(DeletionTest):
+    """verify I-01, I-16 and the close_goal regression; durability-34."""
+
+    def test_the_days_limit_is_checked_again_when_a_code_is_used(self):
+        # verify I-01 (h/p2.py): thirty facts, previewed three at a time while
+        # nothing had yet gone (each preview: no owner needed), then all ten
+        # codes confirmed — the whole lot went, with no owner.
+        r = self.py("""
+            import jefferey_chat as jc
+            d = jc.dispatch_tool
+            for i in range(30):
+                d("remember_fact", {"fact": f"fact number {i} zebra{i}"})
+            ids = [f["id"] for f in store()["facts"]]
+            shown = [d("forget", {"ids": ids[k:k + 3]}) for k in range(0, 30, 3)]
+            done = [d("forget", {"confirm": s["confirm"]}) for s in shown]
+            out({"shown_owner": [s["needs_owner"] for s in shown],
+                 "done": [(x.get("step"), x.get("removed_facts"), bool(x.get("refused")))
+                          for x in done],
+                 "reasons": [x.get("reason", "") for x in done if x.get("refused")],
+                 "left": len(store()["facts"])})
+        """)
+        self.assertGreaterEqual(r["left"], 20, "an AI removed more than ten in a day")
+        self.assertTrue(any(r["shown_owner"]), "every preview claimed no owner was needed")
+        self.assertTrue(r["reasons"], r)
+        self.assertIn("owner's own OK", r["reasons"][0])
+        # ...and the owner can still do it, with the same code, at his console
+        r2 = self.py("""
+            import forgetting, jefferey_chat as jc
+            w = forgetting.waiting(jc.conscience)
+            out({"waiting": len(w), "owner": all(x["needs_owner"] for x in w)})
+        """)
+        self.assertGreater(r2["waiting"], 0)
+        self.assertTrue(r2["owner"])
+
+    def test_marking_offers_declined_is_not_counted_as_removing(self):
+        # verify: the 11th declined coupon of the day needed the owner, and he
+        # was told "10 things have already been removed" — nothing had been.
+        r = self.py("""
+            import jefferey_chat as jc
+            d = jc.dispatch_tool
+            for i in range(12):
+                d("record_opportunity", {"what": f"coupon offer number{i}"})
+            res = []
+            for i in range(12):
+                s = d("resolve_opportunity", {"contains": f"number{i}", "outcome": "declined"})
+                res.append(d("resolve_opportunity", {"confirm": s["confirm"]}) if not
+                           s.get("needs_owner") else s)
+            out({"res": res, "ops": [o.get("resolved") for o in store()["opportunities"]]})
+        """)
+        self.assertEqual(r["ops"], [True] * 12)
+        last = r["res"][-1]
+        self.assertEqual(last["step"], "done", last)
+        self.assertNotIn("Gone from what JEFFEREY knows", last["still_held"])
+        self.assertIn("Nothing was removed", last["still_held"])
+
+    def test_erase_finds_a_name_at_the_start_of_a_line_in_a_long_record(self):
+        # verify I-16 (h/p16.py): a record cut at its size limit is searched as
+        # text, where a line break is '\n' — and 'Karen' right after the 'n'
+        # was not a whole word, so 'erase Karen' said done and kept it.
+        story = ("It was a cold morning.\nKaren made coffee and we sat by the window.\n"
+                 + "We talked about the old days and the farm. " * 80)
+        r = self.py("""
+            import jefferey_chat as jc
+            d = jc.dispatch_tool
+            d("add_memory", {"text": %r, "people": "Anna"})
+            d("remember_fact", {"fact": "Notes:\\n\\tZoë's lawyer is Bob"})
+            out(1)
+        """ % story)
+        p = self.owner("erase", "Karen", "--yes")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        p = self.owner("erase", "Zoë", "--yes")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        log = self.egress.read_text(encoding="utf-8")
+        self.assertNotIn("Karen", log)
+        self.assertNotIn("Zo", log.replace("Zo\\u00eb", "Zo"))  # neither raw nor escaped
+
+    def test_erase_reaches_the_macs_own_copy_from_before_the_drive(self):
+        # verify I-16 (h/p12.py): the life on the drive was erased; the copy in
+        # ~/.jefferey on the Mac, and its own safety copy, kept the words.
+        mac = self.tmp / "machome"
+        lap = mac / ".jefferey" / "conscience.json"
+        lap.parent.mkdir(parents=True)
+        old = {"facts": [{"fact": "Diagnosed with Alzheimer's in 2025"}, {"fact": "Tea"}],
+               "priorities": [], "goals": [], "_rev": 4}
+        lap.write_text(json.dumps(old))
+        (lap.parent / "conscience.history").mkdir()
+        (lap.parent / "conscience.history" / "conscience-20250101T000000Z-000004.json"
+         ).write_text(json.dumps(old))
+        r = self.py("""
+            import home, forgetting, access, jefferey_chat as jc
+            jc.dispatch_tool("remember_fact", {"fact": "Diagnosed with Alzheimer's, the doctor said"})
+            here = home.conscience_files
+            home.conscience_files = lambda: here() + [home.owner_dir() / "conscience.json"]
+            with access.owner_console():
+                rec = forgetting.erase(jc.conscience, "Alzheimer's")
+            out(rec)
+        """, HOME=str(mac))
+        self.assertEqual(r["step"], "done", r)
+        for p in [lap] + list(lap.parent.rglob("*.json")):
+            self.assertNotIn("Alzheimer", p.read_text(), p)
+        self.assertIn("Tea", lap.read_text())
+        self.assertNotIn("Alzheimer", self.store.read_text())
+
+    def test_the_macs_own_copy_is_found_without_being_named(self):
+        mac = self.tmp / "machome"
+        (mac / ".jefferey").mkdir(parents=True)
+        (mac / ".jefferey" / "conscience.json").write_text('{"facts": [], "goals": [], '
+                                                           '"priorities": []}')
+        env = {k: v for k, v in self.env().items() if k != "JEFFEREY_CONSCIENCE_PATH"}
+        env["HOME"] = str(mac)
+        p = subprocess.run([PY, "-c", PRELUDE + "import home\n"
+                            "home.choose_this_mac() if hasattr(home, 'choose_this_mac') else None\n"
+                            "out([str(p) for p in home.conscience_files()])"],
+                           env=env, cwd=self.tmp, capture_output=True, text=True, timeout=60)
+        found = json.loads([l for l in p.stdout.splitlines() if l.startswith("RESULT ")][-1][7:])
+        self.assertIn(str(mac / ".jefferey" / "conscience.json"), found)
+
+    def test_erase_takes_the_words_out_of_half_written_copies(self):
+        # durability-34: a killed save left hidden copies holding a private
+        # fact; the owner's erase said done, and they still held it.
+        r = self.py("""
+            import jefferey_chat as jc, os
+            jc.dispatch_tool("remember_fact", {"fact": "Karen and I are separating"})
+            p = jc.conscience.path
+            stray = p.with_name("." + p.name + ".abc123.tmp")
+            stray.write_text(p.read_text())
+            out(str(stray))
+        """)
+        p = self.owner("erase", "separating", "--yes")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(Path(r).exists())
+        for f in self.tmp.rglob("*"):
+            if f.is_file():
+                self.assertNotIn(b"separating", f.read_bytes(), f)
+
+    def test_the_outcome_of_an_offer_is_not_written_down_word_for_word(self):
+        self.py("""
+            import jefferey_chat as jc
+            d = jc.dispatch_tool
+            d("record_opportunity", {"what": "a cruise offer"})
+            s = d("resolve_opportunity", {"contains": "cruise",
+                                          "outcome": "declined because of Karen's chemo"})
+            out(s.get("step"))
+        """)
+        asked = [json.loads(l).get("asked", "") for l in self.egress.read_text().splitlines()
+                 if json.loads(l).get("tool") == "resolve_opportunity"]
+        self.assertTrue(asked)
+        self.assertFalse(any("chemo" in a for a in asked), asked)
+
+    def test_chinese_words_are_found_to_forget_and_to_erase(self):
+        r = self.py("""
+            import jefferey_chat as jc
+            d = jc.dispatch_tool
+            d("remember_fact", {"fact": "我和凯伦分居了"})
+            s = d("forget", {"contains": "凯伦"})
+            out(s)
+        """)
+        self.assertEqual(r["step"], "preview", r)
+        self.assertEqual(r["count"], 1)
+        p = self.owner("erase", "凯伦", "--yes")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("凯伦", self.store.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

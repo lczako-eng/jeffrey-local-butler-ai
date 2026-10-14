@@ -71,6 +71,15 @@ OWNER = "owner"
 # Who acts when no engine is bound to this process at all (the owner's own
 # command-line tools, or a test): there is no AI on the other end.
 LOCAL = "local"
+# Names no key may have: the record would show an engine holding one as the
+# owner's own hands (verify I-43, I-45: a key called 'owner' was written down
+# as by:'owner'). Refused when a key is made, when a surface starts, and at
+# the gate for a key someone wrote into the file by hand.
+RESERVED = frozenset({OWNER, LOCAL, "unknown", "jefferey-owner", "the owner"})
+
+
+def reserved(client) -> bool:
+    return str(client or "").strip().lower() in RESERVED
 
 
 # The canonical scope table: which key each tool needs. The MCP and HTTP
@@ -165,9 +174,15 @@ NARROWING_TOOLS = frozenset({"selfcloud_revoke", "selfcloud_remove_scope"})
 # Tools that change something. The egress door writes its record of the call
 # BEFORE one of these runs, so a log that cannot be written stops the change
 # (I-12) instead of letting it land unrecorded.
+# Some tools keep something although a read key may call them: checking a
+# charge or a statement remembers the charges seen (money.read), and the
+# album writes down when a moment was offered (life.read). They are writes
+# for the door all the same (verify I-12: with the log unwritable, a charge
+# was saved and then the call crashed — a change with no line in the log).
+WRITES_UNDER_READ = frozenset({"check_charge", "review_statement", "next_story_prompt"})
 WRITE_TOOLS = frozenset(
     {t for t, s in TOOL_SCOPES.items() if s.endswith(".write") or s == "act.request"}
-    | NARROWING_TOOLS)
+    | NARROWING_TOOLS | WRITES_UNDER_READ)
 
 
 def owner_only_refusal(tool: str) -> dict:
@@ -212,6 +227,11 @@ class Gate:
     def __init__(self, cloud, client: str, announce: bool = True):
         self.cloud = cloud
         self.client = (client or DEFAULT_CLIENT).strip().lower()
+        if reserved(self.client):
+            sys.exit(f"JEFFEREY will not start: this connection calls itself "
+                     f"'{self.client}', a name only the owner himself goes by. Give it "
+                     f"its own key name (for example JEFFEREY_CLIENT=claude-raw) and "
+                     f"start again.")
         # (store, client): a key issued in one store is not issued in another —
         # the life moves to the drive when it is plugged in (I-08).
         self._provisioned: set[tuple[str, str]] = set()
@@ -247,8 +267,6 @@ class Gate:
         """
         from selfcloud import PRESETS
 
-        from conscience import ConscienceConflict
-
         client = client or self.client
         done = (str(getattr(self.cloud.c, "path", "")), client)
         if done in self._provisioned:
@@ -266,20 +284,20 @@ class Gate:
             return
         # Marked provisioned only once the key is SAVED. An earlier version
         # marked it first, so a grant that lost a race with another engine's
-        # write was never retried: every later call was refused as 'never
-        # granted' until the app was restarted. One retry, after re-reading.
-        # (`auto=True`: issuing a preset exactly as written is not widening,
-        # so it does not need the owner's hands; nothing else may pass it.)
+        # write was never retried. Now the key is written against the newest
+        # memories on disk, under the lock, so another engine writing at the
+        # same moment cannot make this reader's call fail (I-05). Issuing a
+        # preset exactly as written is not widening, so it does not need the
+        # owner's hands; nothing else may do it this way. With the door shut
+        # nothing is written at all: the call is refused anyway (I-12).
         try:
-            self.cloud.grant(client, note="auto-issued from its preset on "
-                                          "first use; the owner may narrow it",
-                             auto=True)
-        except ConscienceConflict:
-            self.cloud.c.refresh()
-            if client not in self.cloud.c.data.get("selfcloud_grants", {}):
-                self.cloud.grant(client, note="auto-issued from its preset on "
-                                              "first use; the owner may narrow it",
-                                 auto=True)
+            import egress
+            if egress.is_shut():
+                return
+        except Exception:
+            pass
+        self.cloud.issue_preset(client, note="auto-issued from its preset on "
+                                             "first use; the owner may narrow it")
         self._provisioned.add(done)
 
     def announce(self) -> None:
@@ -296,6 +314,9 @@ class Gate:
 
     def check(self, scope: str) -> dict:
         client = self.current_client()
+        if reserved(client):
+            return {"allowed": False, "client": client, "scope": scope,
+                    "reason": f"no key may be called '{client}'"}
         self._provision(client)
         return self.cloud.check_access(client, scope)
 
@@ -315,11 +336,15 @@ class Gate:
         if client is None:
             client = self.current_client()
             self._provision(client)
+        if reserved(client):
+            return False
         return bool(self.cloud.check_access(client, scope, log=False)["allowed"])
 
     def live(self, client: str | None = None) -> dict | None:
         """The caller's key if it exists and is switched on, else None."""
         client = client or self.current_client()
+        if reserved(client):
+            return None
         self._provision(client)
         g = self.cloud.c.data.get("selfcloud_grants", {}).get(client)
         return g if isinstance(g, dict) and g.get("active") else None
@@ -408,7 +433,8 @@ def who() -> str:
         return OWNER
     if GATE is None:
         return LOCAL
-    return GATE.current_client()
+    c = GATE.current_client()
+    return f"a key calling itself '{c}'" if reserved(c) else c
 
 
 def may(scope: str) -> bool:

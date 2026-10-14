@@ -262,7 +262,7 @@ class I03Threads(Temp):
             from fastapi.testclient import TestClient
             import jefferey_http as h
             cl = TestClient(h.app)
-            H = {"Authorization": "Bearer tok-123-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+            H = {"Authorization": "Bearer tok-123-0123456789abcdefghijklmnopqrstuvwx"}
             first = cl.get("/album/next", headers=H).json()
             with ThreadPoolExecutor(6) as pool:
                 codes = list(pool.map(lambda _: cl.get("/album/progress", headers=H).status_code, range(12)))
@@ -272,7 +272,7 @@ class I03Threads(Temp):
                     "moment_id": first["moment_id"], "text": f"Story {i}."})
                 posts.append([r.status_code, bool(r.json().get("kept"))])
             print("RESULT " + json.dumps({"first": first, "codes": codes, "posts": posts}))
-        """, JEFFEREY_CLIENT="jefferey", JEFFEREY_HTTP_TOKEN="tok-123-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        """, JEFFEREY_CLIENT="jefferey", JEFFEREY_HTTP_TOKEN="tok-123-0123456789abcdefghijklmnopqrstuvwx")
         self.assertEqual(left, [], "wrote into the home folder")
         r = result_of(p)
         self.assertEqual(set(r["codes"]), {200}, r)

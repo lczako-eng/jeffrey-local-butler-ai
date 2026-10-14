@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import codecs
 import copy
 import functools
 import hashlib
@@ -52,13 +53,14 @@ import math
 import os
 import re
 import secrets
+import shutil
 import stat as _stat
 import sys
 import tempfile
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     import fcntl  # POSIX only; Windows falls back to no cross-process lock
@@ -87,6 +89,15 @@ HISTORY_HOURLY_DAYS = 7      # then the newest of each hour for a week
 HISTORY_DAILY_DAYS = 90      # and the newest of each day for three months
 PIN_KEEP_DAYS = 90           # a copy pinned before a destructive change
 PIN_MAX = 500
+# Every copy is a whole copy of the life, so all of them together are kept
+# within a budget, and never so many that the drive fills and saving stops
+# (verify: 430 copies of a 24 MB life would be over 10 GB). Over it, the
+# copies that add least go first — the extra ones of the last day, then
+# hourly, then the oldest — never the newest few or the newest pinned one.
+HISTORY_MAX_BYTES = 2 * 1024 ** 3
+HISTORY_PROTECT = 3          # the newest copies, never let go for space
+HISTORY_FREE_SAVES = 10      # leave room on the drive for this many saves…
+HISTORY_FREE_MIN = 256 * 1024 ** 2   # …and never less than this
 NOTICE_DAYS = 14             # how long a notice keeps being shown
 # A file torn by a power cut was written by JEFFEREY, which copies every
 # write into history a moment later. A damaged file newer than its newest
@@ -504,29 +515,44 @@ AUTH_MINUTES = 30              # an approval is used once, within this long
 
 # Never 'act', at any level, whatever anyone sets: JEFFEREY never moves
 # money, never speaks in the owner's voice, never lets anyone into the house.
+# A category is matched by what it ENDS with, so 'phone calls', 'the doors'
+# and 'home alarm' are never — and 'voice lessons', 'alarm clock' and 'door
+# dash' are ordinary things one can buy (verify I-44).
 _NEVER = (
     (re.compile(r"\b(?:e ?transfers?|transfers?|wires?|wiring|interac|remittances?"
-                r"|western ?union|money ?grams?|money ?orders?)\b"),
+                r"|western ?union|money ?grams?|money ?orders?|pay ?pal|venmo|zelle)\b"),
      "moving money from one account to another"),
     (re.compile(r"\b(?:gift ?cards?|prepaid ?cards?|itunes|google ?play|steam ?cards?"
                 r"|vouchers?)\b"), "buying gift cards"),
-    (re.compile(r"\b(?:crypto\w*|bitcoins?|btc|ethereum|usdt|tether)\b"),
-     "crypto-currency"),
-    (re.compile(r"\b(?:phone ?calls?|calls?|calling|voice(?! ?mail)\w*|intercoms?|doorbells?)\b"),
+    (re.compile(r"\b(?:crypto\w*|bitcoins?|btc|ethereum|usdt|usdc|tether|stablecoins?"
+                r"|litecoin|dogecoin)\b"), "crypto-currency"),
+    (re.compile(r"\b(?:phone ?calls?|calls?|calling|voice|voices|intercoms?|doorbells?)$"),
      "speaking for the owner on the phone, in his voice or at the door"),
-    (re.compile(r"\b(?:unlock\w*|locks?|alarms?|garage ?doors?|garage ?openers?|doors?)\b"),
+    (re.compile(r"\b(?:unlock\w*|locks?|alarms?|garage ?doors?|garage ?openers?|doors?)$"),
      "letting anyone into the house"),
 )
 # Inside a description, under any category, only the unmistakable ones.
 _NEVER_IN_TEXT = (
     (re.compile(r"\b(?:e-?\s?transfer\w*|wire\s+(?:transfer|\$|money|funds|it|the)\w*"
-                r"|interac|western\s?union|money\s?gram|money\s?order)"),
+                r"|by\s+wire\b|interac|western\s?union|money\s?gram|money\s?order"
+                r"|(?:bank|money|wire|fund)\s+transfers?\b"
+                r"|transfer\s+(?:the\s+)?(?:money|funds|cash|\$|\d)|confirm\s+the\s+transfer"
+                r"|pay\s?pal|venmo|zelle"
+                r"|send(?:ing)?\s+(?:\w+\s+){0,3}(?:money|cash|funds)\b)"),
      "moving money from one account to another"),
-    (re.compile(r"\bgift\s?cards?\b"), "buying gift cards"),
-    (re.compile(r"\b(?:bitcoin|crypto\w*|btc|ethereum|usdt)\b"), "crypto-currency"),
-    (re.compile(r"\b(?:unlock\w*|disarm\w*|open\s+the\s+(?:front|back|side|garage)\s+door)"),
+    (re.compile(r"\b(?:gift[\s-]?cards?|google\s?play\s+cards?|itunes\s+cards?|apple\s+itunes"
+                r"|steam\s+cards?|prepaid\s+(?:visa|cards?))\b"), "buying gift cards"),
+    (re.compile(r"\b(?:bitcoin|crypto\w*|btc|ethereum|usdt|usdc|tether|stablecoins?)\b"),
+     "crypto-currency"),
+    (re.compile(r"\b(?:unlock\s+(?:the\s+)?(?:front|back|side|garage|door|house|gate|lock)\w*"
+                r"|disarm\w*|open\s+(?:the\s+)?(?:front\s+|back\s+|side\s+)?(?:door|garage|gate)"
+                r"|let\s+(?:\w+\s+){1,3}in\b|buzz\s+(?:\w+\s+){1,3}in\b)"),
      "letting anyone into the house"),
-    (re.compile(r"\b(?:phone\s?call|place\s+a\s+call|in\s+(?:my|his|her)\s+voice)"),
+    (re.compile(r"\b(?:phone\s?call|place\s+a\s+call|in\s+(?:my|his|her)\s+voice"
+                r"|call\s+(?:him|her|them|back|the\s+(?:bank|police|number|office)"
+                r"|[a-z]+\s+and\s+(?:tell|say|ask))"
+                r"|ring\s+(?:him|her|them|the\s+(?:bank|police|office)|up|back)"
+                r"|phone\s+(?:him|her|them|the\s+(?:bank|police|office)|back|up))"),
      "speaking for the owner on the phone or in his voice"),
 )
 # A category about money: 'act' there needs a limit.
@@ -539,20 +565,32 @@ _MONEYISH = re.compile(
 _SALEISH = re.compile(r"sell|\bsale|auction|marketplace|listing")
 # A commitment that repeats or has a minimum term is the owner's to make.
 _RECURRING = re.compile(
-    r"/\s?(?:mo|month|yr|year|wk|week)\b|\bper\s+(?:month|year|week|annum)\b"
+    r"/\s?(?:mo|mth|mon|month|yr|year|wk|week)\b|\bper\s+(?:month|year|week|annum)\b"
+    r"|(?:[$£€]\s?\d[\d.,]*|\d[\d.,]*\s?(?:\$|dollars?))\s*(?:a\s+|per\s+|/\s*)?"
+    r"(?:monthly|weekly|yearly|annually|fortnightly)\b"
+    r"|\b(?:billed|charged|paid|renews?|payable)\s+(?:monthly|weekly|yearly|annually"
+    r"|fortnightly)\b|\b(?:monthly|weekly|yearly|annually|fortnightly)\s*$"
+    r"|\bevery\s+(?:\d+|two|three|four|six)\s+(?:days?|weeks?|months?|years?)\b"
     r"|\b(?:a|each|every)\s+(?:month|year|week)\b|\bsubscri\w*|\bauto-?\s?renew\w*"
     r"|\b(?:monthly|yearly|annual|annually|weekly)\s+(?:plan|fee|payment|charge|bill\w*"
     r"|subscription|membership|contract|instal\w*|donation)"
     r"|\bbilled\s+(?:monthly|yearly|annually|weekly)|\brecurring\b|\bminimum\s+term\b"
     r"|\binstal(?:l)?ments?\b"
     r"|\b\d+[- ]?(?:month|year)s?\s+(?:minimum|contract|term|commitment)")
-_CURRENCY_TEXT = (("GBP", re.compile(r"£|\bgbp\b|\bpounds?\s+sterling\b")),
+_CURRENCY_TEXT = (("GBP", re.compile(r"£|\bgbp\b|\bpounds?\s+sterling\b|\bquid\b"
+                                     r"|\b\d+(?:\.\d+)?\s*pounds?\b(?!\s+(?:of|weight|bag))")),
+                  ("AUD", re.compile(r"\ba\$|\baud\b|\baustralian\s+dollars?\b")),
+                  ("NZD", re.compile(r"\bnz\$|\bnzd\b")),
                   ("EUR", re.compile(r"€|\beur\b|\beuros?\b")),
                   ("USD", re.compile(r"\bus\s?\$|\busd\b|\bu\.s\.\s?dollars?\b"
                                      r"|\bamerican\s+dollars?\b")),
                   ("JPY", re.compile(r"¥|\bjpy\b|\byen\b")),
                   ("CAD", re.compile(r"\bcad\b|\bc\$|\bcanadian\s+dollars?\b")))
-_MONEY_TEXT = re.compile(r"[$£€¥]\s?\d|\d\s?(?:\$|dollars?\b|bucks\b|cad\b|usd\b|eur\b|gbp\b)")
+_MONEY_TEXT = re.compile(r"[$£€¥]\s?\d|\d\s?(?:\$|dollars?\b|bucks\b|cad\b|usd\b|eur\b|gbp\b)"
+                         r"|\b(?:dollars?|bucks|cash|money|payment|deposit|cheque|check\s+for)\b")
+# Amounts written in a description, to compare with the amount given.
+_AMOUNT_IN_TEXT = re.compile(r"[$£€¥]\s?(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s?"
+                             r"(?:\$|dollars?\b|bucks\b|cad\b|usd\b)")
 # What an engine may not write as an act's outcome: these are JEFFEREY's own
 # words, and a forged 'approved by owner' looked exactly like a real one.
 _RESERVED_OUTCOME = re.compile(
@@ -646,16 +684,19 @@ class Conscience:
         self.path = Path(path).expanduser()
         self.data: dict[str, Any] = self._defaults()
         self._rev_seen = 0
-        self._stat: tuple[int, int, int] | None = None
+        self._stat: tuple[int, int, int, int] | None = None
         # sha256 of the bytes this process last read from or wrote to disk:
         # how a change made anywhere else — another engine, a hand edit — is
         # recognised, whatever its revision number says.
         self._disk_sha: str | None = None
         # Those contents as JEFFEREY writes them: the point a failed save
         # rolls back to, and the yardstick for "did anything change?".
-        self._clean: bytes = self._canon(self.data)
+        self._clean: bytes = self._snap(self.data)
         self._unavailable: ConscienceCorrupt | None = None
         self._runtime_notices: dict[str, str] = {}
+        # sha256 of a damaged file that recovery could not set aside yet:
+        # nothing is saved over it until it is (I-50).
+        self._unkept: str | None = None
         self.access_log = AppendLog(self.path.with_name(self.path.stem + ".access.jsonl"))
         # A store opened where home.py says the life lives follows it: when
         # the drive goes, memory is let go; when it comes back — under any
@@ -671,7 +712,7 @@ class Conscience:
         """Hold nothing of the life in this process (the same dict object, so
         every module holding it sees the empty one)."""
         self._replace_data(self._defaults())
-        self._clean = self._canon(self.data)
+        self._clean = self._snap(self.data)
         self._disk_sha, self._stat, self._rev_seen = None, None, 0
 
     def _drive_left(self) -> None:
@@ -741,8 +782,11 @@ class Conscience:
     # and what the owner changed by hand.
 
     @staticmethod
-    def _key(st: os.stat_result) -> tuple[int, int, int]:
-        return (st.st_ino, st.st_mtime_ns, st.st_size)
+    def _key(st: os.stat_result) -> tuple[int, int, int, int]:
+        # The change time too: an editor that writes in place and puts the
+        # old modification time back (same inode, same size) still changes
+        # it, and nothing can set it back (I-19).
+        return (st.st_ino, st.st_mtime_ns, st.st_size, st.st_ctime_ns)
 
     def _mark(self) -> None:
         try:
@@ -898,6 +942,68 @@ class Conscience:
                                  '{"fact": "…"}')
         return obj
 
+    @staticmethod
+    def _decode(raw: bytes) -> tuple[str | None, str | None]:
+        """(text, how) for a file some editor saved in another text format:
+        with a byte-order mark, or as UTF-16 or UTF-32. JEFFEREY only ever
+        writes UTF-8 without a mark, so such a file is always an edit by hand
+        — never a power-cut tear to recover over (I-19: an owner's edit
+        saved as UTF-16 was taken for a tear, and the fact he had deleted
+        came back). (None, None) for an ordinary file."""
+        boms = ((codecs.BOM_UTF32_LE, "utf-32"), (codecs.BOM_UTF32_BE, "utf-32"),
+                (codecs.BOM_UTF8, "utf-8-sig"), (codecs.BOM_UTF16_LE, "utf-16"),
+                (codecs.BOM_UTF16_BE, "utf-16"))
+        for bom, enc in boms:
+            if raw.startswith(bom):
+                try:
+                    return raw.decode(enc), enc
+                except UnicodeDecodeError:
+                    return None, enc
+        # UTF-16 or UTF-32 without a mark: the file starts with '{' (or a
+        # space) written that way, every letter of the first line padded
+        # with NULs in the same places. A power cut leaves runs of NULs,
+        # never that pattern.
+        head = raw[:64]
+        for enc, width, at in (("utf-32-le", 4, 0), ("utf-32-be", 4, 3),
+                               ("utf-16-le", 2, 0), ("utf-16-be", 2, 1)):
+            if len(raw) % width or len(head) < width * 2:
+                continue
+            units = [head[i:i + width] for i in range(0, len(head) - width + 1, width)]
+            if units[0][at:at + 1] not in (b"{", b" ", b"\t", b"\r", b"\n"):
+                continue
+            if all(u[:at] + u[at + 1:] == b"\0" * (width - 1) for u in units
+                   if u[at:at + 1].isascii() and u[at:at + 1] != b"\0"):
+                if sum(1 for u in units if u[at:at + 1] != b"\0") < len(units) // 2:
+                    continue
+                try:
+                    return raw.decode(enc), enc
+                except UnicodeDecodeError:
+                    return None, enc
+        return None, None
+
+    # Python's own words for a mistake in the file, as an owner would say it.
+    _JSON_WORDS = (
+        ("Expecting property name enclosed in double quotes",
+         "a name in double quotes was expected (often a comma is left after "
+         "the last item before a closing bracket)"),
+        ("Expecting ',' delimiter", "a comma is missing between two items"),
+        ("Expecting ':' delimiter", "a colon ( : ) is missing after a name"),
+        ("Expecting value", "something is missing there, or there is one comma "
+                            "too many"),
+        ("Extra data", "there is something more after the end of the memories"),
+        ("Invalid control character", "a line break or tab is inside quotes"),
+        ("Invalid \\escape", "a backslash ( \\ ) needs to be written twice"),
+        ("Invalid \\uXXXX escape", "a backslash ( \\ ) needs to be written twice"),
+        ("Unterminated string", "a quote mark is opened and never closed"),
+    )
+
+    @classmethod
+    def _json_words(cls, msg: str) -> str:
+        for start, plain in cls._JSON_WORDS:
+            if msg.startswith(start):
+                return plain
+        return "something there is not written the way JEFFEREY expects"
+
     @classmethod
     def _parse(cls, raw: bytes) -> dict:
         """Bytes → a validated store, or _Unreadable saying why in plain words.
@@ -905,6 +1011,14 @@ class Conscience:
         'ó' (Czakó, Montréal) is a torn file to recover, not a crash."""
         if not raw.strip():
             raise _Unreadable("the file is empty", torn=True, certain=True)
+        text, enc = cls._decode(raw)
+        if enc is not None:
+            # Saved by an editor in another format: the owner's edit, never a
+            # tear. Read it if it can be read; otherwise say what to fix.
+            if text is None:
+                raise _Unreadable("it was saved in a text format JEFFEREY cannot "
+                                  "read. Save it again as plain text (UTF-8)")
+            return cls._parse_text(text, hand=True)
         if b"\x00" in raw:
             line = raw[:raw.index(b"\x00")].count(b"\n") + 1
             raise _Unreadable(f"it is damaged from line {line} on, the way a "
@@ -920,14 +1034,19 @@ class Conscience:
             raise _Unreadable(f"line {line} holds a character JEFFEREY cannot "
                               "read (the file may have been saved in the wrong "
                               "text format)") from None
+        return cls._parse_text(text)
+
+    @classmethod
+    def _parse_text(cls, text: str, hand: bool = False) -> dict:
         try:
             obj = json.loads(text)
         except json.JSONDecodeError as e:
-            if e.msg.startswith("Unterminated string") or e.pos >= len(text.rstrip()):
+            if not hand and (e.msg.startswith("Unterminated string")
+                             or e.pos >= len(text.rstrip())):
                 raise _Unreadable("it stops part-way through, the way a power "
                                   "cut can leave a file", torn=True) from None
             raise _Unreadable(f"there is a mistake on line {e.lineno}, near "
-                              f"character {e.colno} ({e.msg})") from None
+                              f"character {e.colno}: {cls._json_words(e.msg)}") from None
         try:
             return cls._validate(obj)
         except ValueError as e:
@@ -939,12 +1058,26 @@ class Conscience:
         return r if isinstance(r, int) and not isinstance(r, bool) else 0
 
     @classmethod
-    def _canon(cls, data: dict) -> bytes:
-        """The store exactly as JEFFEREY writes it. Empty sections that other
-        modules create on start-up are left out, so starting never makes a
-        file look changed."""
-        body = {k: v for k, v in data.items()
+    def _body(cls, data: dict) -> dict:
+        """What is written. Empty sections that other modules create on
+        start-up are left out, so starting never makes a file look changed."""
+        return {k: v for k, v in data.items()
                 if k in cls._CORE or not (isinstance(v, (list, dict)) and not v)}
+
+    @classmethod
+    def _snap(cls, data: dict) -> bytes:
+        """The same contents, compact: what "has anything changed?" and a
+        rolled-back save compare against. Six times quicker to make than the
+        file itself (scale-01: every load and every save made the indented
+        file twice, which took seconds on a long life)."""
+        return json.dumps(cls._body(data), ensure_ascii=True,
+                          separators=(",", ":")).encode("ascii")
+
+    @classmethod
+    def _canon(cls, data: dict) -> bytes:
+        """The store exactly as JEFFEREY writes it (indented, so the owner
+        can read and edit it)."""
+        body = cls._body(data)
         try:
             return json.dumps(body, indent=2, ensure_ascii=False).encode("utf-8")
         except UnicodeEncodeError:
@@ -953,15 +1086,16 @@ class Conscience:
             return json.dumps(body, indent=2).encode("ascii")
 
     # ------------------------------------------------- memory ⇄ disk, safely
-    def _replace_data(self, obj: dict) -> None:
+    def _replace_data(self, obj: dict, owned: bool = False) -> None:
         """Make memory hold `obj`. Sections another module created in memory
         (people, rules, grants…) that `obj` lacks must still exist, empty, or
-        the next call into that module fails on a missing key."""
+        the next call into that module fails on a missing key. `owned`: the
+        caller parsed `obj` for this alone and will not look at it again."""
         sections = {k: type(v)() for k, v in self.data.items()
                     if isinstance(v, (list, dict))}
-        # A copy all the way down: ids are added below, and the parsed file
-        # the caller holds must stay exactly what is on disk.
-        new = copy.deepcopy(obj)
+        # A copy all the way down: ids are added below, and a parsed file
+        # the caller still holds must stay exactly what is on disk.
+        new = obj if owned else copy.deepcopy(obj)
         self._absorb_legacy(new)
         self.data.clear()
         self.data.update(new)
@@ -1057,11 +1191,12 @@ class Conscience:
                 used.add(cand)
                 it["id"] = cand
 
-    def _adopt(self, raw: bytes, obj: dict, st: os.stat_result | None = None) -> None:
+    def _adopt(self, raw: bytes, obj: dict, st: os.stat_result | None = None,
+               owned: bool = False) -> None:
         _check_version(obj, self.path)
-        self._replace_data(obj)
+        self._replace_data(obj, owned=owned)
         self._disk_sha = _sha(raw)
-        self._clean = self._canon(self.data)
+        self._clean = self._snap(self.data)
         if st is not None:
             self._stat = self._key(st)
         else:
@@ -1071,7 +1206,7 @@ class Conscience:
         """A save failed: memory goes back to exactly what is on disk, so a
         change the engine was told had failed is never served, and never
         written later by some unrelated save."""
-        self._replace_data(json.loads(self._clean.decode("utf-8")))
+        self._replace_data(json.loads(self._clean.decode("utf-8")), owned=True)
 
     def _absorb_legacy(self, obj: dict) -> None:
         """The access log used to live inside the store. Move it beside the
@@ -1127,8 +1262,9 @@ class Conscience:
                 self._reset_locked(raw, u.plain)
                 return True
             raise ConscienceNeedsFixing(self._fix_text(u), self.path) from None
-        self._adopt(raw, obj, st)
-        self._ensure_versioned(raw, obj)
+        rev = self._rev_of(obj)
+        self._adopt(raw, obj, st, owned=True)
+        self._ensure_versioned(raw, rev)
         return True
 
     def _good_copy(self) -> Path | None:
@@ -1165,8 +1301,31 @@ class Conscience:
 
     def _keep_damaged(self, raw: bytes) -> Path | None:
         """Set a damaged file's bytes aside as <name>.corrupt-<UTC time>,
-        never over an earlier one, before anything replaces it."""
+        never over an earlier one, before anything replaces it. First as a
+        second name for the same file (a link), which needs no free space —
+        a full drive is exactly when a damaged file turns up, and a copy
+        that could not be written once let the next save destroy the only
+        place a newer fact was (I-50). Only if that is not possible, a copy."""
         base = f"{self.path.name}.corrupt-{_utc_stamp()}"
+        for i in range(1, 1000):
+            cand = self.path.with_name(base if i == 1 else f"{base}-{i}")
+            try:
+                os.link(self.path, cand, follow_symlinks=False)
+            except FileExistsError:
+                continue
+            except (OSError, NotImplementedError):
+                break                         # no links here: copy instead
+            try:
+                if _sha(cand.read_bytes()) == _sha(raw):
+                    _sync_dir(cand.parent)
+                    return cand
+            except OSError:
+                pass
+            try:                              # the file changed meanwhile
+                cand.unlink()
+            except OSError:
+                pass
+            break
         for i in range(1, 1000):
             cand = self.path.with_name(base if i == 1 else f"{base}-{i}")
             try:
@@ -1204,14 +1363,18 @@ class Conscience:
             self._replace_data(obj)
             if raw is not None and kept is None:
                 # The damaged file could not be set aside (a full drive?), so
-                # it is NOT written over. Work from the copy, in memory only.
-                self._disk_sha, self._clean = _sha(raw), self._canon(self.data)
+                # it is NOT written over: work from the copy, in memory only,
+                # and every save first tries again to set it aside — no save
+                # happens until it is kept (I-50).
+                self._disk_sha, self._clean = _sha(raw), self._snap(self.data)
+                self._unkept = _sha(raw)
                 self._mark()
                 self._runtime_notices["recovery"] = (
                     f"Your memory file could not be read ({reason}). JEFFEREY "
                     f"is working from the copy saved {saved}, but could not "
-                    "repair the file on the drive. Please free some space or "
-                    "check the drive.")
+                    "repair the file on the drive, and he will not save "
+                    "anything until the damaged file is kept safe. Please free "
+                    "some space on the drive.")
                 return
             self._note("recovered",
                        f"Your memory file could not be read ({reason}). JEFFEREY "
@@ -1223,7 +1386,7 @@ class Conscience:
                 self._commit_locked(check_disk=False)
             except OSError:
                 self._disk_sha = _sha(raw) if raw is not None else None
-                self._clean = self._canon(self.data)
+                self._clean = self._snap(self.data)
                 self._runtime_notices["recovery"] = (
                     f"Your memory file could not be read ({reason}). JEFFEREY "
                     f"is working from the copy saved {saved}, but could not "
@@ -1269,7 +1432,7 @@ class Conscience:
               + (f"\n     The damaged file is kept at {kept}." if kept else "")
               + "\n", file=sys.stderr)
 
-    def _ensure_versioned(self, raw: bytes, obj: dict) -> None:
+    def _ensure_versioned(self, raw: bytes, disk_rev: int) -> None:
         """Whatever is on disk must also be in history, in the right order.
 
         Normally it already is: JEFFEREY copies every write it makes. If it
@@ -1281,7 +1444,7 @@ class Conscience:
         if not files:
             return
         top = files[0]
-        top_rev, disk_rev = self._snap_rev(top), self._rev_of(obj)
+        top_rev = self._snap_rev(top)
         if disk_rev > top_rev:
             self._archive(raw, disk_rev)          # written, never copied
             return
@@ -1294,7 +1457,7 @@ class Conscience:
                 return
             if top_raw is not None:
                 try:
-                    if self._parse(top_raw) == obj:
+                    if self._parse(top_raw) == self._parse(raw):
                         return
                 except _Unreadable:
                     self._archive(raw, disk_rev)  # the newest copy is damaged
@@ -1346,6 +1509,63 @@ class Conscience:
                 "and nothing was lost. Ask again and JEFFEREY will use the "
                 "newest version.", self.path)
 
+    def _set_aside_if_needed(self) -> None:
+        """Before a save, under the lock: a damaged file recovery could not
+        keep is kept now, or the save does not happen."""
+        if self._unkept is None:
+            return
+        try:
+            raw = self.path.read_bytes()
+        except OSError:
+            raw = None
+        if raw is None or _sha(raw) != self._unkept:
+            self._unkept = None               # it is gone or changed: nothing to keep
+            return
+        kept = self._keep_damaged(raw)
+        if kept is None:
+            raise ConscienceSaveFailed(
+                "Your memory file was damaged, and JEFFEREY has not been able to "
+                "keep the damaged file safe yet (the drive may be full). So that "
+                "nothing in it is lost, nothing was saved. Free some space on the "
+                "drive and ask again.", self.path)
+        self._unkept = None
+        self._runtime_notices.pop("recovery", None)
+        self._note("recovered", "Your memory file could not be read earlier. "
+                   "JEFFEREY went back to his last copy, and the damaged file is "
+                   f"now kept beside it as {kept.name}. Anything said in between "
+                   "may be missing, so please check.")
+
+    def _temp_files(self) -> list[Path]:
+        """Half-written temporary files a save left behind when it was cut
+        off (a crash, a kill, a power cut): '.c.json.XXXX.tmp' beside the
+        store and the same in its copies' folders. Each is a whole or partial
+        copy of the life, so they must not pile up — nor keep words the owner
+        erased (durability-34)."""
+        out = []
+        for d, prefix in ((self.path.parent, f".{self.path.name}."),
+                          (self.history_dir, f".{self.path.stem}-"),
+                          (self.pinned_dir, f".{self.path.stem}-")):
+            try:
+                out += [p for p in d.iterdir()
+                        if p.name.startswith(prefix) and p.name.endswith(".tmp")]
+            except OSError:
+                continue
+        return out
+
+    def _sweep_temps_locked(self) -> int:
+        """Remove them. Only ever under the store's lock: every save that
+        makes one holds that lock, so any such file seen now was left by a
+        save that is no longer running."""
+        n = 0
+        for p in self._temp_files():
+            try:
+                if _stat.S_ISREG(os.lstat(p).st_mode):
+                    p.unlink()
+                    n += 1
+            except OSError:
+                pass
+        return n
+
     def _next_rev(self) -> int:
         """One above everything: the file, and every copy in history. After an
         older copy is put back, new writes still sort above the abandoned
@@ -1365,9 +1585,10 @@ class Conscience:
             self.data[VERSION_KEY] = __version__
         payload = self._canon(self.data)
         _make_dir(self.path.parent)
+        self._sweep_temps_locked()
         _write_atomic(self.path, payload)
         self._rev_seen = rev
-        self._clean = payload
+        self._clean = self._snap(self.data)
         self._disk_sha = _sha(payload)
         self._mark()
         self._archive(payload, rev)
@@ -1383,12 +1604,51 @@ class Conscience:
                 self._rollback()
                 raise DriveNotHere(why[0].upper() + why[1:] + ".")
         self._ensure_ids()          # whatever was just added gets its id now
-        if self._canon(self.data) == self._clean:
+        if self._snap(self.data) == self._clean:
             return                  # nothing changed: no write, no copy, no rev
         try:
             _make_dir(self.path.parent)
             with self._lock():
+                self._set_aside_if_needed()
                 self._commit_locked()
+        except StoreProblem as exc:
+            self._rollback()
+            if isinstance(exc, ConscienceConflict):
+                # Read the file again by its content next time, whatever its
+                # date says: "ask again" must actually work (I-19).
+                self._stat = None
+            raise
+        except OSError as exc:
+            self._rollback()
+            raise ConscienceSaveFailed(_SAVE_FAILED, self.path) from exc
+        except BaseException:
+            self._rollback()
+            raise
+
+    def save_fresh(self, change: Callable[[dict], Any]) -> bool:
+        """Make one small change to the NEWEST memories on disk and save it,
+        all under the lock: what another engine wrote a moment ago is read
+        first, so this save can never collide with it. For changes that are
+        not the engine's own (a key issued on its first use): a reader must
+        not be refused because a writer was busy (I-05). Returns True if
+        anything was written. Unsaved changes in memory are not kept."""
+        if self._unavailable is not None:
+            raise self._unavailable
+        if self._follows_home:
+            why = home.problem()
+            if why:
+                raise DriveNotHere(why[0].upper() + why[1:] + ".")
+        try:
+            _make_dir(self.path.parent)
+            with self._lock():
+                self._open_locked()
+                change(self.data)
+                self._ensure_ids()
+                if self._snap(self.data) == self._clean:
+                    return False
+                self._set_aside_if_needed()
+                self._commit_locked()
+                return True
         except StoreProblem:
             self._rollback()
             raise
@@ -1445,12 +1705,65 @@ class Conscience:
                     p.unlink(missing_ok=True)
                 except OSError:
                     pass
+        pins = []
         for i, p in enumerate(self._pinned_files()):
             if i >= PIN_MAX or now - self._snap_time(p) > PIN_KEEP_DAYS * 86400:
                 try:
                     p.unlink(missing_ok=True)
                 except OSError:
                     pass
+            else:
+                pins.append(p)
+        self._fit_budget_locked([p for p in snaps if p in keep], pins, now)
+
+    def _fit_budget_locked(self, kept: list[Path], pins: list[Path], now: float) -> None:
+        """Keep every copy together within HISTORY_MAX_BYTES, and leave room
+        on the drive for the store itself to keep being saved."""
+        sizes: dict[Path, int] = {}
+        for p in kept + pins:
+            try:
+                sizes[p] = p.stat().st_size
+            except OSError:
+                sizes[p] = 0
+        total = sum(sizes.values())
+        try:
+            store = self.path.stat().st_size
+        except OSError:
+            store = max(sizes.values(), default=0)
+        reserve = max(HISTORY_FREE_MIN, HISTORY_FREE_SAVES * store)
+
+        def free() -> int:
+            try:
+                return shutil.disk_usage(self.history_dir).free
+            except OSError:
+                return reserve
+        if total <= HISTORY_MAX_BYTES and free() >= reserve:
+            return
+        # kept is newest first. What each ordinary copy is kept for:
+        hours: set[int] = set()
+        days: set[int] = set()
+        rank: dict[Path, int] = {}
+        for i, p in enumerate(kept):
+            t = self._snap_time(p)
+            h, d = int(t // 3600), int(t // 86400)
+            daily = now - t <= HISTORY_DAILY_DAYS * 86400 and d not in days
+            hourly = now - t <= HISTORY_HOURLY_DAYS * 86400 and h not in hours
+            days.add(d)
+            hours.add(h)
+            if i < HISTORY_PROTECT:
+                continue                      # never for space
+            rank[p] = (3 if i < HISTORY_KEEP else 2 if daily else 1 if hourly else 0)
+        for p in pins[1:]:
+            rank[p] = 2
+        order = sorted(rank, key=lambda p: (rank[p], self._snap_time(p)))
+        for p in order:
+            if total <= HISTORY_MAX_BYTES and free() >= reserve:
+                break
+            try:
+                p.unlink(missing_ok=True)
+                total -= sizes.get(p, 0)
+            except OSError:
+                pass
 
     def _pin_locked(self, raw: bytes, rev: int, label: str) -> Path:
         pins = self._pinned_files()
@@ -2029,7 +2342,7 @@ class Conscience:
     @staticmethod
     def _never(category: str, description: str = "") -> str | None:
         """Why this can never be approved, whatever is set — or None."""
-        words = re.sub(r"[^a-z0-9]+", " ", (category or "").lower())
+        words = re.sub(r"[^a-z0-9]+", " ", (category or "").lower()).strip()
         for rx, why in _NEVER:
             if rx.search(words):
                 return why
@@ -2219,6 +2532,20 @@ class Conscience:
                 cur != pcur or (named and named != pcur)):
             return no(f"The owner's limit is in {pcur}, and this is in {named or cur}. "
                       f"JEFFEREY does not convert money — ask the owner.")
+        if _SALEISH.search(cat) and perm.get("floor") is None:
+            # A limit saved for selling before floors existed is a ceiling,
+            # and a ceiling on a sale protects nothing (verify I-44: 'sell
+            # the ring, appraised $4,200, for $20' was approved three times).
+            return no(f"The owner has not set the lowest price he would accept for "
+                      f"'{cat}', so no sale is approved. Bring the offer to him; he can "
+                      f"set one himself (/permit {cat} act at least …).")
+        mentioned = [float((a or b).replace(",", "")) for a, b in _AMOUNT_IN_TEXT.findall(desc.lower())
+                     if (a or b).replace(",", "").replace(".", "", 1).isdigit()]
+        if mentioned and not _SALEISH.search(cat) and (amt is None
+                                                        or max(mentioned) > amt + 0.005):
+            return no(f"The description mentions {_money(max(mentioned), pcur)}, more than "
+                      f"the amount given. State the full price as the amount; nothing is "
+                      f"approved for less than it really costs.")
         if perm.get("floor") is not None:
             if amt is None or amt <= 0:
                 return no("Say the full sale price as a plain number (for example 450); "
@@ -2288,6 +2615,9 @@ class Conscience:
                                 f"authorization_id='{aid}'.")
         else:
             entry["outcome"] = "denied: " + verdict["reason"]
+        # The verdict is JEFFEREY's; the words of what was asked are the
+        # engine's, and the line says so (verify I-45).
+        entry["description_by"] = "engine"
         self.data["actions"].append(self._stamp(entry, "jefferey"))
         self._save()
         return verdict
@@ -2319,6 +2649,12 @@ class Conscience:
                 return (f"{_money(amt, a.get('currency') or DEFAULT_CURRENCY)} is more than "
                         f"the {_money(approved, a.get('currency') or DEFAULT_CURRENCY)} "
                         f"that was approved"), None
+        elif amt is not None and amt > 0.005:
+            # An approval for something that costs nothing never covers a
+            # purchase (verify I-45: 'turn on the porch light' was approved,
+            # then logged as a $5,000 television, approved:true).
+            return ("that approval was for something that costs nothing, and this "
+                    f"cost {_money(amt, a.get('currency') or DEFAULT_CURRENCY)}"), None
         return None, a
 
     def log_action(self, category: str, description: str, outcome: str,
@@ -2352,7 +2688,10 @@ class Conscience:
         problem, auth = (self._approval_problem(aid, cat, amt) if aid
                          else ("no approval was cited", None))
         if auth is not None:
-            entry.update(authorization_id=aid, approved=True)
+            # What was approved stands beside what was done, so the owner
+            # sees at a glance whether they are the same thing (verify I-45).
+            entry.update(authorization_id=aid, approved=True,
+                         approved_for=str(auth.get("description") or "")[:300])
             auth["used"] = _now()
         else:
             entry.update(authorization_id=aid or None, approved=False,

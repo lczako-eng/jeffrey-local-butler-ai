@@ -23,11 +23,13 @@ Run:
 
 Keys (October 2026, I-59): a token shorter than 32 characters, or the same
 token given to two keys, stops the server at start-up with a plain message.
-A wrong token is written down with where it came from, and five wrong ones
-from one address in ten minutes lock that address out for ten minutes. A
-token whose key the owner switched off gets nothing at all. With a public
-address set, the /docs, /redoc and /openapi.json pages are switched off —
-they told any passer-by every route there is.
+A token with fewer than ten different characters is refused the same way.
+A wrong token is written down with where it came from; after five wrong ones
+from one address in ten minutes, wrong ones get "too many" — but the right
+token is always checked first and always works (behind a tunnel every caller
+shares one address). A token whose key the owner switched off gets nothing at
+all. The /docs, /redoc and /openapi.json pages are switched off — they told
+any passer-by every route there is; `--schema` prints the schema on this Mac.
 
 Wire up a custom GPT (chatgpt.com → Create a GPT):
     1. Instructions: paste connector/directives.md, plus one line —
@@ -106,6 +108,8 @@ TOKEN = os.environ.get("JEFFEREY_HTTP_TOKEN") or secrets.token_urlsafe(32)
 PUBLIC_URL = os.environ.get("JEFFEREY_PUBLIC_URL", "").rstrip("/")
 PORT = int(os.environ.get("JEFFEREY_HTTP_PORT", "8377"))
 MIN_TOKEN = 32                 # characters; a one-letter token fell in 11 tries
+MIN_KINDS = 10                 # different characters: 'AAAA…' is not a key
+DOCS = (os.environ.get("JEFFEREY_HTTP_DOCS", "").strip() == "1" and not PUBLIC_URL)
 FAIL_LIMIT, FAIL_WINDOW = 5, 600   # wrong tokens per address, per ten minutes
 
 
@@ -130,6 +134,9 @@ def _token_map() -> dict[str, str]:
         if len(TOKEN) < MIN_TOKEN:
             problems.append(f"the key in JEFFEREY_HTTP_TOKEN is only {len(TOKEN)} "
                             f"characters long; it must be at least {MIN_TOKEN}")
+        elif len(set(TOKEN)) < MIN_KINDS:
+            problems.append("the key in JEFFEREY_HTTP_TOKEN repeats the same few "
+                            "characters; it must be made at random")
     else:
         for pair in raw.split(","):
             pair = pair.strip()
@@ -143,6 +150,12 @@ def _token_map() -> dict[str, str]:
             if len(tok) < MIN_TOKEN:
                 problems.append(f"the token for '{client}' is only {len(tok)} characters "
                                 f"long; it must be at least {MIN_TOKEN}")
+            elif len(set(tok)) < MIN_KINDS:
+                problems.append(f"the token for '{client}' repeats the same few "
+                                f"characters; it must be made at random")
+            if access.reserved(client):
+                problems.append(f"'{client}' is a name only the owner himself goes by; "
+                                f"a key may not be called that")
             if tok in out:
                 problems.append(f"'{out[tok]}' and '{client}' were given the same token; "
                                 f"every key needs its own")
@@ -150,8 +163,11 @@ def _token_map() -> dict[str, str]:
     if problems:
         raise SystemExit(
             "JEFFEREY will not start the ChatGPT connection, because "
-            + "; ".join(problems) + ".\nMake a strong token for each key with:\n"
-            "    python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"")
+            + "; ".join(problems) + ".\nNothing was changed. Make a strong token for "
+            "each key with:\n"
+            "    python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"\n"
+            "then put it in JEFFEREY_HTTP_TOKENS, and paste the same token into the "
+            "GPT's settings (Actions → Authentication → API Key → Bearer).")
     return out
 
 
@@ -182,19 +198,42 @@ def _bad_token(where: str, why: str) -> None:
         pass
 
 
+def _wrong_key(where: str, tok: str) -> None:
+    """A wrong or missing key: counted for its address, written down (the
+    first few in each ten minutes, so a flood cannot fill the log), and
+    refused. After FAIL_LIMIT in ten minutes the refusal says to slow down.
+
+    Only WRONG keys are ever refused here. The right key is checked first
+    and always works: behind the tunnel the owner sets up, every caller
+    arrives from one address, and ChatGPT's GPTs share OpenAI's addresses —
+    so locking out an address locked out the owner's own GPT, the family app
+    and the caretaker whenever a stranger sent five bad keys (engines-25,
+    money-64). With 43-character keys, guessing is hopeless anyway."""
+    now = time.time()
+    if len(_FAILS) > 10_000:                   # many addresses: forget the old
+        for k in [k for k, v in _FAILS.items() if not v or now - v[-1] >= FAIL_WINDOW]:
+            _FAILS.pop(k, None)
+    recent = [t for t in _FAILS.get(where, []) if now - t < FAIL_WINDOW]
+    recent.append(now)
+    _FAILS[where] = recent[-(FAIL_LIMIT * 20):]
+    if len(recent) <= FAIL_LIMIT:
+        _bad_token(where, "a missing or wrong key" if tok else "no key")
+    elif len(recent) == FAIL_LIMIT + 1:
+        _bad_token(where, f"more than {FAIL_LIMIT} wrong keys in ten minutes; the "
+                          "rest from this address are counted, not each written down")
+    if len(recent) > FAIL_LIMIT:
+        raise HTTPException(status_code=429, detail=(
+            "Too many wrong keys from this address. A wrong key is refused; the "
+            "right key still works."))
+    raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+
+
 async def require_owner(request: Request) -> None:
     """Every byte in the store is personal. No token, no access — and the
     token decides which key you hold for the rest of this request. A token
     whose key the owner switched off gets nothing (I-09: a revoked key still
     read the key list and revoked others)."""
     where = request.client.host if request.client else "an unknown address"
-    now = time.time()
-    recent = [t for t in _FAILS.get(where, []) if now - t < FAIL_WINDOW]
-    if len(recent) >= FAIL_LIMIT:
-        _FAILS[where] = recent
-        raise HTTPException(status_code=429, detail=(
-            "Too many wrong keys from this address. Wait ten minutes, then try "
-            "again with the right one."))
     scheme, _, tok = request.headers.get("authorization", "").strip().partition(" ")
     tok = tok.strip()
     client = None
@@ -203,12 +242,13 @@ async def require_owner(request: Request) -> None:
             if secrets.compare_digest(tok.encode(), known.encode()):
                 client = who
     if client is None:
-        recent.append(now)
-        _FAILS[where] = recent
-        _bad_token(where, "a missing or wrong key" if tok else "no key")
-        raise HTTPException(status_code=401, detail="missing or invalid bearer token")
-    _FAILS.pop(where, None)
+        _wrong_key(where, tok)
     access.use_client(client)          # per-request identity, not per-call
+    # The door shut: nothing is done, and no key is issued on first use
+    # either (I-12: a shut door still wrote two new keys into the store).
+    why = egress.shut_reason()
+    if why:
+        raise egress._refused_before(request.url.path, None, why)
     try:
         access.require_live()
     except AccessDenied as e:
@@ -225,11 +265,14 @@ app = FastAPI(
     ),
     servers=[{"url": PUBLIC_URL}] if PUBLIC_URL else None,
     dependencies=[Depends(require_owner)],
-    # Reachable from outside this Mac: no open pages listing every route.
-    # The schema for GPT Actions comes from `--schema`, on this Mac.
-    docs_url=None if PUBLIC_URL else "/docs",
-    redoc_url=None if PUBLIC_URL else "/redoc",
-    openapi_url=None if PUBLIC_URL else "/openapi.json",
+    # No open pages listing every route, whether or not the owner told it
+    # its public address (a tunnel set up without JEFFEREY_PUBLIC_URL still
+    # exposed them — verify I-59). The schema for GPT Actions comes from
+    # `--schema`, on this Mac. A developer on this Mac alone may switch the
+    # pages on with JEFFEREY_HTTP_DOCS=1.
+    docs_url="/docs" if DOCS else None,
+    redoc_url="/redoc" if DOCS else None,
+    openapi_url="/openapi.json" if DOCS else None,
 )
 
 
@@ -636,7 +679,7 @@ def forget_profile_field(field: str, confirm: str = "") -> dict:
     answer lists exactly what would go (with ids) and a one-time code. Read
     it to the owner; only if he says yes, call again with confirm=<code>.
     Anything big can only be approved by the owner himself — the answer says
-    how. `ids` is a comma-separated list."""
+    how."""
     return rep.forget_profile_field(field, confirm)
 
 
@@ -1048,7 +1091,7 @@ def remove_rule(rule_id_or_text: str = "", confirm: str = "") -> dict:
     answer lists exactly what would go (with ids) and a one-time code. Read
     it to the owner; only if he says yes, call again with confirm=<code>.
     Anything big can only be approved by the owner himself — the answer says
-    how. `ids` is a comma-separated list."""
+    how."""
     return rules.remove_rule(rule_id_or_text, confirm)
 
 
@@ -1097,12 +1140,11 @@ if __name__ == "__main__":
 
     print("JEFFEREY HTTP connector — one conscience, many engines")
     print(f"  store : {conscience.path}")
+    print(f"  local : http://127.0.0.1:{PORT}   (no open /docs or /openapi.json pages; "
+          f"use --schema)")
     if PUBLIC_URL:
-        print(f"  local : http://127.0.0.1:{PORT}")
-        print(f"  public: {PUBLIC_URL}   (no open /docs or /openapi.json pages; "
-              f"use --schema)")
+        print(f"  public: {PUBLIC_URL}")
     else:
-        print(f"  local : http://127.0.0.1:{PORT}   (openapi: /openapi.json)")
         print("  public: set JEFFEREY_PUBLIC_URL before importing into GPT Actions")
     if "JEFFEREY_HTTP_TOKEN" not in os.environ and not os.environ.get("JEFFEREY_HTTP_TOKENS"):
         print(f"  token : {TOKEN}   (generated — set JEFFEREY_HTTP_TOKEN to pin it)")

@@ -20,7 +20,9 @@ before JEFFEREY's own Python space exists.
 
 from __future__ import annotations
 
+import os
 import re
+import secrets
 import sys
 import unicodedata
 
@@ -69,6 +71,34 @@ def choice(text: str | None, table: dict) -> str | None:
         if w in words:
             return name
     return None
+
+
+def flush_typeahead(stream=None) -> None:
+    """Throw away whatever was typed or pasted BEFORE the question was asked,
+    so only an answer typed after it counts (verify I-04: one pasted scam
+    e-mail held a command and the 'yes' after it, and the yes was read as
+    the owner's own). Does nothing when not at a real keyboard."""
+    try:
+        import termios
+        fd = (stream or sys.stdin).fileno()
+        if os.isatty(fd):
+            termios.tcflush(fd, termios.TCIFLUSH)
+    except Exception:
+        pass
+
+
+def fresh_code() -> str:
+    """Three digits to type back, different each time: nothing pasted or
+    written beforehand can hold them."""
+    while True:
+        c = "".join(secrets.choice("123456789") for _ in range(3))
+        if len(set(c)) > 1:
+            return c
+
+
+def typed_code(answer: str | None, code: str) -> bool:
+    """Did the person type these digits back ('482', '4 8 2', '4-8-2')?"""
+    return re.sub(r"\D", "", str(answer or "")) == code
 
 
 def _ask(prompt: str, input_fn) -> str | None:

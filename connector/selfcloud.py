@@ -158,6 +158,27 @@ def migrate_grants(data: dict) -> bool:
         return False
     if v < 2 and _CARETAKER_V1 <= set(g["scopes"]):
         g["scopes"] = sorted(set(g["scopes"]) | {"act.request", "keys.read"})
+    elif v < 2 and g.get("active", True):
+        # A caretaker key he had narrowed is left as he made it — nothing is
+        # widened without his hands — but he is told what it no longer does,
+        # and how to give it back (verify: it silently lost authorize_action
+        # and the full key list, which every key used to have implicitly).
+        lost = [s for s in ("act.request", "keys.read") if s not in g["scopes"]]
+        ns = data.get("_notices")
+        if not isinstance(ns, list):
+            ns = data["_notices"] = []
+        if lost and not any(isinstance(n, dict) and n.get("kind") == "caretaker_narrowed"
+                            for n in ns):
+            words = {"act.request": "ask for your approval before acting for you",
+                     "keys.read": "see the list of every key"}
+            how = " and ".join(f"/scope add jefferey {s}" for s in lost)
+            ns.append({"at": _now(), "ts": time.time(), "kind": "caretaker_narrowed",
+                       "message": ("Since this update, your caretaker key 'jefferey' — "
+                                   "which you had narrowed yourself — can no longer "
+                                   + " or ".join(words[s] for s in lost)
+                                   + ". Nothing was widened without you. If you want it "
+                                   "back, type " + how + " in 'Talk to JEFFEREY on this "
+                                   "Mac'.")})
     if v < 3 and _CARETAKER_V2 <= set(g["scopes"]):
         g["scopes"] = sorted(set(g["scopes"]) | {"paperwork.write"})
     if v < 4 and "facts.read" in g["scopes"]:
@@ -224,20 +245,16 @@ class SelfCloud:
         client = (client or "").strip().lower()
         if not client:
             return {"granted": False, "error": "a key needs a name"}
+        if _access().reserved(client):
+            return {"granted": False, "error": f"'{client}' is a name only the owner "
+                                               f"himself goes by; choose another name"}
         preset = PRESETS.get(client, {})
         chosen = list(scopes) if scopes else list(preset.get("scopes", []))
         unknown = [s for s in chosen if s not in SCOPES]
         if unknown:
             return {"granted": False, "unknown_scopes": unknown,
                     "valid_scopes": sorted(SCOPES)}
-        entry = {
-            "client": client,
-            "label": label or preset.get("label", client),
-            "scopes": sorted(set(chosen)),
-            "note": note or preset.get("why", ""),
-            "active": True, "granted_on": _now(), "revoked_on": None,
-            "v": GRANTS_VERSION,
-        }
+        entry = self._entry(client, chosen, label, note)
         self.c.data["selfcloud_grants"][client] = entry
         if not auto:
             self._changed(client, "it was given out, holding "
@@ -245,6 +262,38 @@ class SelfCloud:
         self.c._save()
         self._log(client, "grant", ", ".join(entry["scopes"]), True)
         return entry
+
+    @staticmethod
+    def _entry(client: str, scopes, label: str = "", note: str = "") -> dict:
+        preset = PRESETS.get(client, {})
+        return {
+            "client": client,
+            "label": label or preset.get("label", client),
+            "scopes": sorted(set(scopes)),
+            "note": note or preset.get("why", ""),
+            "active": True, "granted_on": _now(), "revoked_on": None,
+            "v": GRANTS_VERSION,
+        }
+
+    def issue_preset(self, client: str, note: str = "") -> bool:
+        """The gate issuing a preset key exactly as written, on its first
+        use — not widening, so it needs no owner's hands. Saved against the
+        newest memories on disk, under the lock, so a reader is never refused
+        because another engine was writing at that moment (I-05). True when
+        the key was issued now (False: it already existed)."""
+        client = (client or "").strip().lower()
+        if client not in PRESETS:
+            return False
+        entry = self._entry(client, PRESETS[client].get("scopes", []), note=note)
+
+        def put(data: dict) -> None:
+            gs = data.setdefault("selfcloud_grants", {})
+            if client not in gs:
+                gs[client] = entry
+        if not self.c.save_fresh(put):
+            return False
+        self._log(client, "grant", ", ".join(entry["scopes"]), True)
+        return True
 
     def add_scope(self, client: str, scope: str) -> dict:
         """Widen one key by exactly one scope — the owner's decision, never
@@ -327,7 +376,10 @@ class SelfCloud:
         granted. Every decision — allowed or refused — is written down."""
         client = client.strip().lower()
         g = self.c.data.get("selfcloud_grants", {}).get(client)
-        if g is None:
+        if _access().reserved(client):
+            verdict = {"allowed": False, "client": client, "scope": scope,
+                       "reason": f"no key may be called '{client}'"}
+        elif g is None:
             verdict = {"allowed": False, "client": client, "scope": scope,
                        "reason": "no key: this client has never been granted access"}
         elif not g["active"]:
@@ -391,9 +443,14 @@ class SelfCloud:
             where = a.surface()
         except Exception:
             actor, where = actor or "unknown", "unknown"
+        try:                    # never a secret's home, whatever was asked
+            import egress
+            detail, _ = egress.mask_text(str(detail))
+        except Exception:
+            detail = str(detail)
         self.c.access_log.append({
             "client": client, "actor": actor, "surface": where, "action": action,
-            "detail": detail, "allowed": bool(allowed), "at": _now(),
+            "detail": detail[:300], "allowed": bool(allowed), "at": _now(),
         })
 
     # ---------------------------------------------------------------- status

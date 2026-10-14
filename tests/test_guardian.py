@@ -707,16 +707,16 @@ class I47Register(Temp):
         # (I-04, I-43) — HTTP refuses to start at all when it is set.
         p = subprocess.run([PY, "-c", PRELUDE + "import jefferey_http"], cwd=REPO,
                            env=child_env(self.tmp, JEFFEREY_OWNER_CONSOLE="1",
-                                         JEFFEREY_HTTP_TOKENS="jefferey:" + "t" * 40),
+                                         JEFFEREY_HTTP_TOKENS="jefferey:" + "tok-guardian-0123456789abcdefghijklmnop"),
                            capture_output=True, text=True, timeout=120)
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("will not start", p.stderr)
         r = self.child("""
-            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:" + "t" * 40
+            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:" + "tok-guardian-0123456789abcdefghijklmnop"
             import jefferey_http as h
             from fastapi.testclient import TestClient
             c = TestClient(h.app)
-            H = {"Authorization": "Bearer " + "t" * 40}
+            H = {"Authorization": "Bearer " + "tok-guardian-0123456789abcdefghijklmnop"}
             e = c.post("/charges/expected", json={"merchant": "Netflix", "amount": 99.99}, headers=H).json()
             reg = c.get("/charges/expected", headers=H).json()
             out(note=e.get("note"), active=[x for x in reg if x.get("active")])

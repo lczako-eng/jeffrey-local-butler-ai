@@ -195,7 +195,7 @@ class TheDriveIsWhereTheLifeIs(DriveTest):
         # seam#0: revoke gpt-raw on the drive, move the drive away, relaunch:
         # the revoked key used to get 200 with 'Takes warfarin'.
         vol = self.drive()
-        tok = "g" * 40
+        tok = "gpt-raw-0123456789abcdefghijklmnopqrstuv"   # tokens must vary (I-59)
         self.py("""
             import access, jefferey_mcp as m
             mcp_call(m, "remember_fact", {"fact": "Takes warfarin; INR checked monthly"})

@@ -94,9 +94,14 @@ chatgpt.com → **Create a GPT**:
 
 1. **Instructions**: paste `directives.md`, plus one line — *"Call
    get_directives and get_conscience at the start of every chat."*
-2. **Actions → Import from URL**: `<JEFFEREY_PUBLIC_URL>/openapi.json`
+2. **Actions**: paste the schema that `python connector/jefferey_http.py
+   --schema` prints on this Mac (the server never shows its routes to the
+   internet: `/docs` and `/openapi.json` are off).
 3. **Authentication**: API Key → Bearer → the token the server printed
-   (pin it with `JEFFEREY_HTTP_TOKEN`).
+   (pin it with `JEFFEREY_HTTP_TOKEN`; make one with
+   `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` — a short
+   or repetitive token stops the server at start-up). Wrong tokens are
+   written down and slowed with "too many"; the right one always works.
 
 Same `conscience.json` as the Claude connector and the standalone chat.
 Override GPT-Jefferey on Monday, and Claude-Jefferey already knows why on

@@ -175,12 +175,25 @@ def selftest_env(tmp: Path) -> dict:
 def memories_line(python: Path | None = None) -> int:
     """'Your memories: OK / will be recovered / need restoring' — a line of its
     own, read-only, separate from whether the program works."""
+    # Not yet decided where they live (a new Mac, or step 3 of a first
+    # install, before the drive question): nothing is wrong, and there is
+    # nothing to restore (onboarding-08: a new owner was told, with a red
+    # cross, to put back memories that never existed).
+    try:
+        where = home.locate() if home.problem() else None
+    except Exception:
+        where = None
+    if where is not None and where.why == "undecided":
+        say(f"  · Your memories: none yet. JEFFEREY keeps them where you choose — your "
+            f"Self-Cloud drive or this Mac — and this installer asks you which.")
+        return 0
     py = python or (venv_python() if venv_python().exists() else Path(sys.executable))
     r = run([str(py), str(CONNECTOR / "conscience.py"), "check"])
     out = r.stdout.strip().splitlines()
     text = out[0].strip() if out else "Your memories: could not be checked."
-    (ok if r.returncode == 0 else warn if r.returncode == 2 else bad)(text)
-    if r.returncode == 1 and "no good copy" not in text:
+    away = where is not None
+    (ok if r.returncode == 0 else warn if r.returncode == 2 or away else bad)(text)
+    if r.returncode == 1 and not away and "no good copy" not in text:
         say(f"  {DIM}Double-click 'Restore my memories.command' to put back an "
             f"earlier copy. JEFFEREY still connects, and tells you the same "
             f"in Claude.{OFF}")
@@ -357,16 +370,34 @@ def warn_exposures(servers: dict, offer: bool, input_fn=input) -> list[str]:
     return gone
 
 
+def owner_keys() -> list[str]:
+    """Keys the owner made himself (/grant), read from his memory file —
+    read only, never opened for writing. A key he made is as good a choice
+    as a preset (verify: --client refused every key that was not a preset)."""
+    try:
+        if home.problem():
+            return []
+        raw = json.loads(home.conscience_path().read_text(encoding="utf-8-sig"))
+        gs = raw.get("selfcloud_grants") if isinstance(raw, dict) else None
+        return sorted(k for k, g in (gs or {}).items()
+                      if isinstance(g, dict) and g.get("active") and isinstance(k, str))
+    except Exception:
+        return []
+
+
 def known_clients() -> list[str]:
-    """The keys JEFFEREY knows how to issue (selfcloud.PRESETS)."""
+    """The keys JEFFEREY knows: the ones he can issue (selfcloud.PRESETS) and
+    the ones the owner made himself."""
     sys.path.insert(0, str(CONNECTOR))
     try:
         from selfcloud import PRESETS
-        return list(PRESETS)
+        presets = list(PRESETS)
     except Exception:
-        return ["jefferey", "claude-raw", "gpt-raw", "family", "executor"]
+        presets = ["jefferey", "claude-raw", "gpt-raw", "family", "executor"]
     finally:
         sys.path.remove(str(CONNECTOR))
+    return presets + [k for k in owner_keys() if k not in presets
+                      and k not in ("owner", "local", "unknown")]
 
 
 def wire_claude_desktop(client: str, drive_ids: list[str] | None = None,

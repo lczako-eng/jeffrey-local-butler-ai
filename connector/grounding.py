@@ -27,13 +27,26 @@ surface answers the same way (the October 2026 stress test):
 
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 
 # ------------------------------------------------------------------ words
 _QUOTES = str.maketrans({"‘": "'", "’": "'", "ʼ": "'", "`": "'",
                          "´": "'", "“": '"', "”": '"'})
-_WORD = re.compile(r"[^\W_]+(?:'[^\W_]+)*")
+# Scripts written without spaces between words: Chinese, Japanese kana,
+# Thai, Lao, Khmer, Myanmar. A sentence there is one long run of letters, so
+# it is read as overlapping pairs of characters ('我女儿住在多伦多' → 我女,
+# 女儿, 儿住 …): most Chinese words are two characters, and a pair on both
+# sides of a comparison finds them (learning-30: every Chinese and Japanese
+# lookup used to find nothing).
+_SPACELESS = ("฀-໿က-႟ក-៿々぀-ヿ"
+              "ㇰ-ㇿ㐀-䶿一-鿿豈-﫿"
+              "\U00020000-\U0002ffff")
+_TOKEN = re.compile(r"(?P<run>[" + _SPACELESS + r"]+)"
+                    r"|(?P<w>[^\W_" + _SPACELESS + r"]+(?:'[^\W_" + _SPACELESS + r"]+)*)"
+                    r"|(?P<sym>[^\w\s])")
+_RUN = re.compile("[" + _SPACELESS + "]")
 
 # Little words that never decide what something is about — in English and
 # the French a Canadian owner may write in — and the words of the task
@@ -54,21 +67,43 @@ send sending sent ask asking asked tell telling told say saying said help helpin
 le la les un une des du de et ou en au aux mon ma mes ton ta tes son sa ses est
 sont je tu il elle nous vous ils elles ce cet cette ces qui que quoi pour par avec
 sans sur dans pas plus
+oh uh eh ok hi yo ah ha ya mr mrs ms dr st pm vs eg ie re ne se te si ni ça là
+el lo es da im um zu az
 """.split())
+
+
+def _is_symbol(tok: str) -> bool:
+    """A picture-word: an emoji or a symbol like ♥ (not punctuation)."""
+    return len(tok) == 1 and unicodedata.category(tok) == "So"
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _normalise(t: str) -> str:
+    t = unicodedata.normalize("NFKC", t).translate(_QUOTES).casefold()
+    return re.sub(r"\s+", " ", t).strip()
 
 
 def normalise(text) -> str:
     """One spelling for the same words: compatible characters folded,
     straight quotes, case folded, runs of space made one."""
-    t = unicodedata.normalize("NFKC", str(text or "")).translate(_QUOTES).casefold()
-    return re.sub(r"\s+", " ", t).strip()
+    return _normalise(str(text or ""))
 
 
-def words(text) -> list[str]:
-    """The whole words, in order. "Mom's" is 'mom'; French "l'alarme" is
-    'alarme'; "don't" is 'dont'."""
+@functools.lru_cache(maxsize=1 << 17)
+def _words(t: str) -> tuple[str, ...]:
     out = []
-    for w in _WORD.findall(normalise(text)):
+    for m in _TOKEN.finditer(_normalise(t)):
+        run, w, sym = m.group("run"), m.group("w"), m.group("sym")
+        if run:
+            if len(run) == 1:
+                out.append(run)
+            else:
+                out.extend(run[i:i + 2] for i in range(len(run) - 1))
+            continue
+        if sym:
+            if _is_symbol(sym):
+                out.append(sym)
+            continue
         if "'" in w:
             head, _, tail = w.partition("'")
             if len(head) == 1 or head == "qu":          # l'alarme, d'abord, qu'il
@@ -79,9 +114,21 @@ def words(text) -> list[str]:
                 w = w.replace("'", "")
         if w:
             out.append(w)
-    return out
+    return tuple(out)
 
 
+def words(text) -> list[str]:
+    """The whole words, in order. "Mom's" is 'mom'; French "l'alarme" is
+    'alarme'; "don't" is 'dont'; Chinese and Japanese are read in pairs of
+    characters; an emoji is a word of its own."""
+    return list(_words(str(text or "")))
+
+
+def _joined(text) -> str:
+    return " ".join(_words(str(text or "")))
+
+
+@functools.lru_cache(maxsize=1 << 16)
 def stem(w: str) -> str:
     """Light stemming, the same on both sides of every comparison: flights →
     flight, booking → book, rented → rent, families → family. Never so
@@ -104,19 +151,32 @@ def stem(w: str) -> str:
     return w
 
 
-def content(text) -> set[str]:
-    """The words that say what something is about: whole, stemmed, without
-    the little words, at least three letters (or a number)."""
+def _keeps(s: str) -> bool:
+    """Is this (stemmed) word enough to say what something is about? Two
+    letters or more ('TV', 'AC'), a number, a Chinese or Japanese pair (or a
+    single character standing alone), or an emoji. The little words are
+    already gone (STOP)."""
+    return (len(s) >= 2 or s.isdigit() or bool(_RUN.match(s)) or _is_symbol(s))
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _content(t: str) -> frozenset:
     out = set()
-    for w in words(text):
+    for w in _words(t):
         if w in STOP:
             continue
         s = stem(w)
         if s in STOP:
             continue
-        if len(s) >= 3 or s.isdigit():
+        if _keeps(s):
             out.add(s)
-    return out
+    return frozenset(out)
+
+
+def content(text) -> set[str]:
+    """The words that say what something is about: whole, stemmed, without
+    the little words (see _keeps)."""
+    return set(_content(str(text or "")))
 
 
 # A few everyday words that mean the same subject, so 'booking a flight'
@@ -143,15 +203,13 @@ def expand(ws: set[str]) -> set[str]:
 def phrase_in(phrase: str, text: str) -> bool:
     """Is this phrase in the text as whole words ('lives alone' in 'He lives
     alone now', never 'art' in 'heart')?"""
-    p = " ".join(words(phrase))
-    t = " ".join(words(text))
-    return bool(p) and f" {p} " in f" {t} "
+    p = _joined(phrase)
+    return bool(p) and f" {p} " in f" {_joined(text)} "
 
 
 def topic_problem(topic) -> str | None:
     """Why a subject cannot be looked up — or None when it names something."""
-    t = str(topic or "").strip()
-    if len(t) < 3 or not content(t):
+    if not content(str(topic or "").strip()):
         return ("Name the subject in a word or two that mean something (for example "
                 "'travel', 'Mom's care' or 'the phone bill'); nothing was looked up.")
     return None
@@ -172,7 +230,7 @@ def context_problem(context, engine: bool) -> str | None:
                     "himself. Name the subject it is about (for example 'Mom's care' "
                     "or 'travel'); nothing was stored.")
         return None
-    if len(n) < 3 or not content(n):
+    if not content(n):
         return ("Name the subject this value is about in a word or two (for example "
                 "'travel' or 'Mom's care'); nothing was stored.")
     return None
@@ -186,7 +244,7 @@ def context_match(context, topic_words: set[str]) -> tuple[str, str] | None:
     if n in CATCH_ALL:
         return ("general", "a value he holds about everything")
     c = content(n)
-    if len(n) < 3 or not c:
+    if not c:
         return None
     if c <= topic_words:
         return ("about", "it is about " + " and ".join(sorted(c)))
@@ -271,27 +329,41 @@ _CATEGORY = {
 }
 
 
-def sensitivity(text, category="") -> list[str]:
-    """What kind of private this is, if any: health, money, minors (children),
-    home_security, third_party (someone else's confidence) or private (marked
-    so). An empty list means nothing sensitive was recognised."""
-    t = normalise(text)
-    st = {stem(w) for w in words(t)}
-    cat = {stem(w) for w in words(category)}
+# Each phrase as whole words, worked out once (sensitivity() runs for every
+# fact and moment on every call that shows them: re-reading ~80 phrases from
+# text each time made 'who am I' take eight seconds on a long life — scale-21).
+_PHRASE_FORMS = {cls: tuple(f" {_joined(p)} " for p in ps)
+                 for cls, ps in _SENSE_PHRASES.items()}
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _sensitivity(text: str, category: str) -> tuple[str, ...]:
+    t = _normalise(text)
+    ws = _words(t)
+    st = {stem(w) for w in ws}
+    joined = f" {' '.join(ws)} "
+    cat = {stem(w) for w in _words(category)}
     found = set()
     for cls in CLASSES:
         if st & _SENSE_WORDS.get(cls, frozenset()):
             found.add(cls)
-        elif any(phrase_in(p, t) for p in _SENSE_PHRASES.get(cls, ())):
+        elif any(p in joined for p in _PHRASE_FORMS.get(cls, ())):
             found.add(cls)
         elif any(rx.search(t) for rx in _SENSE_PATTERNS.get(cls, ())):
             found.add(cls)
         if cat & _CATEGORY.get(cls, frozenset()):
             found.add(cls)
-    c = normalise(category)
+    c = _normalise(category)
     if "never share" in c or "do not share" in c or "don't share" in c:
         found.add("private")
-    return [c for c in CLASSES if c in found]
+    return tuple(c for c in CLASSES if c in found)
+
+
+def sensitivity(text, category="") -> list[str]:
+    """What kind of private this is, if any: health, money, minors (children),
+    home_security, third_party (someone else's confidence) or private (marked
+    so). An empty list means nothing sensitive was recognised."""
+    return list(_sensitivity(str(text or ""), str(category or "")))
 
 
 # What a subject has to say to NAME a kind of private ("my medications"
@@ -352,7 +424,8 @@ def tag_hits(rule_tags, text: str = "", tags=()) -> bool:
         return True
     tset = {normalise(t) for t in tags if normalise(t)}
     classes = {CLASS_ALIASES.get(t, t) for t in tset} & set(CLASSES)
-    have = {stem(w) for w in words(text)} | {stem(w) for t in tset for w in words(t)}
+    have = {stem(w) for w in _words(str(text or ""))} | {stem(w) for t in tset
+                                                          for w in _words(t)}
     for rt in rts:
         if rt in tset:
             return True
