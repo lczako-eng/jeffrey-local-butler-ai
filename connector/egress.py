@@ -67,8 +67,10 @@ RELEASE: dict[str, frozenset[str]] = {
     "get_directives": frozenset({TEXT, "directives"}),
     # store_path is deliberately absent: the layout of the owner's drive is
     # not the engine's business.
+    # notices: JEFFEREY's own plain words about the store (a recovery, a
+    # restore, an edit by hand) — the owner must hear them, so they go out.
     "get_conscience": frozenset({"owner", "priorities", "facts", "active_goals",
-                                 "corrections_learned_from"}),
+                                 "corrections_learned_from", "notices"}),
     # values and how they are learned
     "record_correction": frozenset({"context", "higher", "lower", "confidence",
                                     "evidence", "updated"}),
@@ -103,7 +105,7 @@ RELEASE: dict[str, frozenset[str]] = {
                              "instruction", "added"}),
     "daily_brief": frozenset({"orb", "active_goals", "opportunities",
                               "recent_actions", "recent_observations",
-                              "corrections_learned_from"}),
+                              "corrections_learned_from", "notices"}),
     "orb_state": frozenset({"mood"}),
     # goals and the opportunity engine
     "add_goal": frozenset({"goal", "added", "active"}),

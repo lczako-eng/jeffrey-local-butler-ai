@@ -30,6 +30,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -133,8 +134,43 @@ def build_venv(base: Path) -> bool:
 
 
 # ------------------------------------------------------------- the selftest
+def selftest_env(tmp: Path) -> dict:
+    """The self-test proves the CODE works, so it runs entirely on a throwaway
+    store. (It used to open the owner's real memory file on the way in, so a
+    damaged memory showed up as 'his self-test did NOT pass', as if the
+    program were broken.)"""
+    env = dict(os.environ)
+    for k in ("SELFCLOUD_ROOT", "JEFFEREY_CLIENT", "JEFFEREY_OWNER_CONSOLE",
+              "JEFFEREY_OFFLINE", "JEFFEREY_ALLOW_RESET"):
+        env.pop(k, None)
+    env.update(JEFFEREY_CONSCIENCE_PATH=str(tmp / "conscience.json"),
+               JEFFEREY_EGRESS=str(tmp / "egress.jsonl"),
+               JEFFEREY_DOOR=str(tmp / "door-shut"),
+               SELFCLOUD_INDEX=str(tmp / "photo-index"),
+               SELFCLOUD_VOICE=str(tmp / "voice"),
+               SELFCLOUD_DISCS=str(tmp / "discs"))
+    return env
+
+
+def memories_line(python: Path | None = None) -> int:
+    """'Your memories: OK / will be recovered / need restoring' — a line of its
+    own, read-only, separate from whether the program works."""
+    py = python or (venv_python() if venv_python().exists() else Path(sys.executable))
+    r = run([str(py), str(CONNECTOR / "conscience.py"), "check"])
+    out = r.stdout.strip().splitlines()
+    text = out[0].strip() if out else "Your memories: could not be checked."
+    (ok if r.returncode == 0 else warn if r.returncode == 2 else bad)(text)
+    if r.returncode == 1 and "no good copy" not in text:
+        say(f"  {DIM}Double-click 'Restore my memories.command' to put back an "
+            f"earlier copy. JEFFEREY still connects, and tells you the same "
+            f"in Claude.{OFF}")
+    return r.returncode
+
+
 def selftest() -> bool:
-    r = run([str(venv_python()), str(CONNECTOR / "jefferey_chat.py"), "--selftest"])
+    with tempfile.TemporaryDirectory(prefix="jefferey-selftest-") as td:
+        r = run([str(venv_python()), str(CONNECTOR / "jefferey_chat.py"), "--selftest"],
+                env=selftest_env(Path(td)))
     if r.returncode != 0:
         bad("His self-test did NOT pass. Nothing has been connected to Claude.")
         tail = (r.stdout + r.stderr).strip().splitlines()[-25:]
@@ -144,6 +180,7 @@ def selftest() -> bool:
     ok(f"Self-test passed — {len(passed)} checks, no API key needed")
     say(f"  {DIM}(this proves the learning loop, the permission gate, the money"
         f" watch,\n   the life layer and the crash-recovery all work){OFF}")
+    memories_line()
     return True
 
 
@@ -242,18 +279,7 @@ def check_only() -> int:
     (ok if venv_python().exists() else warn)(
         f"Private space {'ready' if venv_python().exists() else 'not built yet'}"
         f" at {VENV}")
-    store = HOME_DIR / "conscience.json"
-    if store.exists():
-        try:
-            d = json.loads(store.read_text())
-            ok(f"Conscience exists: {len(d.get('facts', []))} facts, "
-               f"{len(d.get('priorities', []))} priorities, "
-               f"{len(d.get('memories', []))} moments, revision {d.get('_rev', 0)}")
-        except Exception:
-            bad("Conscience file exists but will not parse — he will refuse to "
-                "start rather than lose it. Restore from ~/.jefferey/conscience.history/")
-    else:
-        warn("No conscience yet — that's normal before the first conversation")
+    memories_line()
     if CLAUDE_DESKTOP_CONFIG and CLAUDE_DESKTOP_CONFIG.exists():
         try:
             servers = json.loads(CLAUDE_DESKTOP_CONFIG.read_text()).get("mcpServers", {})
@@ -333,7 +359,8 @@ def main() -> int:
     say(f"  Everything he remembers lives in one file you own:")
     say(f"     {store}")
     say(f"  {DIM}Plain text. Readable, editable, deletable, yours. Old versions are")
-    say(f"   kept beside it in conscience.history/ in case anything goes wrong.{OFF}")
+    say(f"   kept beside it in conscience.history/ in case anything goes wrong —")
+    say(f"   double-click 'Restore my memories.command' to put one back.{OFF}")
     say()
     say(f"  {DIM}Check on him any time:   python3 tools/install.py --check{OFF}")
     say(f"  {DIM}Unhook him (keeps data): python3 tools/install.py --uninstall{OFF}")

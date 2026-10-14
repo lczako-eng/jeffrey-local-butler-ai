@@ -186,14 +186,16 @@ any model name Ollama has.
 | `Show me my life.command` | index the photographs, open the wall | one-time model download |
 | `Record my voice.command` | enrol your voice onto the drive | no |
 | `What left the house.command` | the egress log, in plain words; shut / open the door | no |
+| `Restore my memories.command` | see the copies of your memories JEFFEREY keeps, and put one back | no |
 | `Talk to JEFFEREY on this Mac.command` | JEFFEREY riding Hermes on your own Mac, same conscience | one-time download; then no |
 | on the drive: `Self-Cloud/Start Self-Cloud.command` | the same as *Show me my life*, bound to that drive, on any Mac | no |
 
 ## Where things live
 
 With the drive in: `<drive>/.selfcloud/jefferey/` — `conscience.json` (+
-history), `photo-index/`, `voice/`, `egress.jsonl`, `door-shut` (exists only
-while the door is shut). Without the drive: `~/.jefferey/` and `~/.selfcloud/`.
+history, and `conscience.access.jsonl`: who asked for what), `photo-index/`,
+`voice/`, `egress.jsonl`, `door-shut` (exists only while the door is shut).
+Without the drive: `~/.jefferey/` and `~/.selfcloud/`.
 The drive always wins when it is plugged in; unplugged means gone.
 
 ## If something goes wrong
@@ -203,6 +205,13 @@ The drive always wins when it is plugged in; unplugged means gone.
 - The self-test fails → nothing was connected. Run
   `~/.jefferey/venv/bin/python ~/JEFFEREY/connector/jefferey_chat.py --selftest`
   in Terminal and send the last twenty lines to whoever is helping you.
+- JEFFEREY says your memories *cannot be read*, or that they were *put back
+  to an earlier copy* → double-click **`Restore my memories.command`**. It
+  lists the copies he keeps (every one from the last day, one an hour for a
+  week, one a day for three months, and one from just before anything was
+  deleted) and puts back the one you pick. What is there now is kept too, so
+  it can be undone. You can edit the memory file by hand; if a typo makes it
+  unreadable, he tells you which line instead of quietly using an old copy.
 - Two Self-Cloud drives plugged in at once → every tool refuses to guess and
   says so. Unplug one.
 - The icon didn't change → eject, re-plug.

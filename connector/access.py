@@ -153,21 +153,35 @@ class Gate:
         """
         from selfcloud import PRESETS
 
+        from conscience import ConscienceConflict
+
         client = client or self.client
         if client in self._provisioned:
             return
-        self._provisioned.add(client)
         grants = self.cloud.c.data.get("selfcloud_grants", {})
         if client in grants:
+            self._provisioned.add(client)
             return
         if client not in PRESETS:
+            self._provisioned.add(client)
             print(f"\n  ⚠  JEFFEREY_CLIENT={client!r} has no key and no preset.\n"
                   f"     Every scoped call will be denied until the owner runs:\n"
                   f"       selfcloud_grant('{client}', [...])\n",
                   file=sys.stderr)
             return
-        self.cloud.grant(client, note="auto-issued from its preset on "
-                                      "first use; the owner may narrow it")
+        # Marked provisioned only once the key is SAVED. An earlier version
+        # marked it first, so a grant that lost a race with another engine's
+        # write was never retried: every later call was refused as 'never
+        # granted' until the app was restarted. One retry, after re-reading.
+        try:
+            self.cloud.grant(client, note="auto-issued from its preset on "
+                                          "first use; the owner may narrow it")
+        except ConscienceConflict:
+            self.cloud.c.refresh()
+            if client not in self.cloud.c.data.get("selfcloud_grants", {}):
+                self.cloud.grant(client, note="auto-issued from its preset on "
+                                              "first use; the owner may narrow it")
+        self._provisioned.add(client)
 
     def announce(self) -> None:
         scopes = self._effective_scopes()          # no write on startup

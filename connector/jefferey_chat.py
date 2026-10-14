@@ -18,6 +18,8 @@ Run:
 
 In-chat commands:
     /conscience   show everything Jefferey knows (you own every byte)
+    /history      the copies of your memories that are kept
+    /restore N    put copy N back (you are asked first; it can be undone)
     /quit         leave (the conscience stays)
 """
 
@@ -29,8 +31,11 @@ import os
 import sys
 from pathlib import Path
 
+# Everything this process creates is readable by the owner's account only.
+os.umask(0o077)
+
 sys.path.insert(0, str(Path(__file__).parent))
-from conscience import Conscience
+from conscience import Conscience, StoreProblem
 from representative import Representative
 from guardian import Guardian
 from life import Life
@@ -48,7 +53,8 @@ MAX_TOKENS = 4096
 
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
-conscience = Conscience()
+# A damaged store does not crash the terminal: it explains, and /restore works.
+conscience = Conscience.for_surface()
 rep = Representative(conscience)
 guard = Guardian(conscience)
 life = Life(conscience)
@@ -887,8 +893,8 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
     doors: the access gate on the way in, the egress door on the way out. A
     refusal comes back as a result the model must report, not as a crash and
     not as something it can retry differently."""
-    conscience.refresh()          # another engine may have written since
     try:
+        conscience.refresh()      # another engine, or the owner, may have written
         if name in access.OWNER_ONLY_TOOLS:
             access.owner_only(lambda: None)()
         scope = access.TOOL_SCOPES.get(name)
@@ -902,6 +908,8 @@ def dispatch_tool(name: str, args: dict) -> dict | list:
                                  "key permits, and do not attempt it another way."}
     except EgressRefused as e:
         return egress.refusal_result(name, e)
+    except StoreProblem as e:     # damaged file, changed elsewhere, drive full
+        return e.as_result(name)
 
 
 def _dispatch_tool(name: str, args: dict) -> dict | list:
@@ -1202,7 +1210,12 @@ _TRACE = {
 
 
 def system_prompt() -> str:
-    conscience.refresh()          # the live conscience, not the one at startup
+    try:
+        conscience.refresh()      # the live conscience, not the one at startup
+    except StoreProblem as e:
+        return (DIRECTIVES + "\n\n## The owner's memories cannot be read right now\n\n"
+                + e.plain + "\n\nTell the owner this plainly. Do not guess at "
+                "what the memories contained.")
     snap = conscience.snapshot()
     return (
         DIRECTIVES
@@ -1421,6 +1434,12 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         turn = lambda h: run_turn(client, h)         # noqa: E731
         engine_line = f"{MODEL} (rented)"
 
+    try:
+        conscience.refresh()
+    except StoreProblem as e:
+        print(f"\n  ⚠  {e.for_owner()}\n")
+        print("  Type /history to see the copies kept, and /restore <number> to "
+              "put one back.\n")
     snap = conscience.snapshot()
     print(f"{BOLD}JEFFEREY{RESET} — Personal AI Shadow™")
     print(f"{DIM}engine: {engine_line} · conscience: {snap['store_path']} (owned)")
@@ -1432,6 +1451,8 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
 
     print(f"{DIM}egress: {'SHUT — nothing will leave' if egress.is_shut() else 'open'} · "
           f"log: {egress.log_path()}{RESET}")
+    for n in snap.get("notices", []):
+        print(f"  ⚠  {n['what']}")
 
     if once is not None:
         try:
@@ -1460,6 +1481,9 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         if user.lower() in ("/egress", "/left", "/what left the house"):
             print(egress.report(7))
             continue
+        if user.lower() in ("/history", "/copies") or user.lower().startswith("/restore"):
+            owner_restore(user)       # the owner's hands only; never a model tool
+            continue
         try:
             history.append({"role": "user", "content": egress.release_text("you_said", user)})
         except EgressRefused as e:
@@ -1479,6 +1503,39 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
             if history and history[-1]["role"] == "user" and isinstance(history[-1]["content"], str):
                 history.pop()
         print()
+
+
+def owner_restore(command: str, answer=input) -> dict | None:
+    """/history and /restore N — typed by the OWNER at this terminal. This is
+    deliberately not a tool: putting an old copy back would re-surface what
+    he deleted, so no engine can ever ask for it."""
+    from conscience import _print_history
+    parts = command.split()
+    if parts[0].lower() != "/restore" or len(parts) < 2:
+        _print_history(conscience, 30)
+        if parts[0].lower() == "/restore":
+            print("  Then type /restore <number>.")
+        return None
+    rows = {str(r["number"]): r for r in conscience.history(None)}
+    row = rows.get(parts[1])
+    if row is None:
+        print(f"  There is no copy {parts[1]}. Type /history to see the list.")
+        return None
+    what = (f"{row['facts']} facts, {row['moments']} moments" if row.get("readable")
+            else "damaged — cannot be used")
+    print(f"  The copy saved {row['saved'][3:]}: {what}.")
+    print("  Your memories as they are now are kept as a copy first, so this can be undone.")
+    if answer("  Put this copy back? Type yes and press return: ").strip().lower() not in ("y", "yes"):
+        print("  Nothing was changed.")
+        return None
+    try:
+        res = conscience.restore(row["file"])
+    except StoreProblem as e:
+        print(f"  {e.for_owner()}")
+        return None
+    print(f"  Done. Your memories are back to the copy saved {res['saved'][3:]} "
+          f"({res['facts']} facts).")
+    return res
 
 
 # ------------------------------------------------------------------ selftest
@@ -1625,7 +1682,10 @@ def selftest() -> None:
         r = dispatch_tool("remember_fact", {"fact": "my visa is 4111 1111 1111 1111"})
         assert r.get("refused") and "4111" not in json.dumps(r)
         assert "4111" not in json.dumps(conscience.data)
-        assert "4111" not in Path(os.environ["JEFFEREY_EGRESS"]).read_text()
+        # The whole number, not "4111": the log holds sha256 hashes, and a hash
+        # that happens to contain those four digits made this check flaky.
+        _log = Path(os.environ["JEFFEREY_EGRESS"]).read_text()
+        assert "4111 1111 1111 1111" not in _log and "4111111111111111" not in _log
         assert not dispatch_tool("who_am_i", {}).get("refused")
         # store_path never leaves; the owner's terminal still shows it locally
         assert "store_path" not in dispatch_tool("daily_brief", {})
@@ -2046,7 +2106,13 @@ def selftest() -> None:
         dpath.write_text('{"facts": [{"fact": "trunca')
         d3 = Conscience(dpath)
         assert len(d3.data["facts"]) == 5, "did not recover the whole store"
-        assert dpath.with_suffix(".json.corrupt").exists()
+        # The damaged original is kept under a timestamped name
+        # (durable.json.corrupt-<UTC time>), so a second recovery can never
+        # overwrite the first damaged copy — this used to be one fixed
+        # '.corrupt' name.
+        assert list(dpath.parent.glob("durable.json.corrupt-*"))
+        assert any("could not be read" in n["what"] for n in d3.notices()), \
+            "a recovery must be shown to the owner, not only printed"
 
         # and with nothing to recover from, it REFUSES rather than starting empty
         lone = Path(td) / "lone.json"

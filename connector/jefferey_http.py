@@ -34,12 +34,15 @@ import secrets
 import sys
 from pathlib import Path
 
+# Everything this process creates is readable by the owner's account only.
+os.umask(0o077)
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).parent))
-from conscience import Conscience
+from conscience import Conscience, StoreProblem
 from representative import Representative
 from guardian import Guardian
 from life import Life
@@ -52,7 +55,8 @@ import egress
 from access import AccessDenied, OwnerOnly, gate, owner_only
 from egress import EgressRefused
 
-conscience = Conscience()
+# A damaged store does not stop the server: every route explains instead.
+conscience = Conscience.for_surface()
 
 
 def door(register):
@@ -61,7 +65,11 @@ def door(register):
     def wrap(fn):
         @functools.wraps(fn)
         def fresh(*args, **kwargs):
-            conscience.refresh()
+            try:
+                conscience.refresh()
+            except StoreProblem:
+                if fn.__name__ != "get_directives":    # needs no store
+                    raise
             return fn(*args, **kwargs)
         return egress.door(register)(fresh)
     return wrap
@@ -150,6 +158,15 @@ async def _denied(request: Request, exc: AccessDenied):
 @app.exception_handler(OwnerOnly)
 async def _owner_only(request: Request, exc: OwnerOnly):
     return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(StoreProblem)
+async def _store(request: Request, exc: StoreProblem):
+    """The memory file is damaged, was changed elsewhere a moment ago, or the
+    drive refused the save. Plain words, never a bare 500 — and never a
+    file path."""
+    return JSONResponse(status_code=503, content={
+        "detail": exc.plain, "tell_the_user": exc.tell_the_user})
 
 
 @app.exception_handler(EgressRefused)

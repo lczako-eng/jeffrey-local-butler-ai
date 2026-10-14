@@ -24,8 +24,11 @@ Three properties make this a vault rather than a promise:
 
 1. **Deny by default.** An unknown client gets nothing. A known client gets
    exactly its granted scopes and not one scope more.
-2. **Every decision is logged**, allow or deny, in the owner's own store.
-   The audit belongs to them, not to us.
+2. **Every decision is logged**, allow or deny, in the owner's own access
+   log — an append-only file beside the store (conscience.access.jsonl), on
+   the drive when there is one. The audit belongs to them, not to us. It is
+   deliberately NOT inside the store: there, every question any engine asked
+   rewrote the whole life and pushed a backup copy out of history.
 3. **Revocation is instant and total** — `revoke('gpt-raw')` and that key
    is dead, with the record of it having existed left intact.
 
@@ -105,7 +108,9 @@ class SelfCloud:
     def __init__(self, conscience):
         self.c = conscience
         self.c.data.setdefault("selfcloud_grants", {})
-        self.c.data.setdefault("selfcloud_access_log", [])
+        # The access log is the conscience's append-only file beside the
+        # store (conscience.access_log); entries an older version kept inside
+        # the store were moved there when it was read.
 
     # ---------------------------------------------------------------- grants
     def grant(self, client: str, scopes: list[str] | None = None,
@@ -127,6 +132,7 @@ class SelfCloud:
             "active": True, "granted_on": _now(), "revoked_on": None,
         }
         self.c.data["selfcloud_grants"][client] = entry
+        self.c._save()
         self._log(client, "grant", ", ".join(entry["scopes"]), True)
         return entry
 
@@ -140,6 +146,7 @@ class SelfCloud:
         if scope not in SCOPES:
             return {"error": f"unknown scope '{scope}'", "valid_scopes": sorted(SCOPES)}
         g["scopes"] = sorted(set(g["scopes"] + [scope]))
+        self.c._save()
         self._log(client, "add_scope", scope, True)
         return g
 
@@ -149,6 +156,7 @@ class SelfCloud:
         if not g:
             return {"error": f"'{client}' has no key."}
         g["scopes"] = [s for s in g["scopes"] if s != scope]
+        self.c._save()
         self._log(client, "remove_scope", scope, True)
         return g
 
@@ -160,6 +168,7 @@ class SelfCloud:
             return {"revoked": False, "reason": f"'{client}' has no key."}
         g["active"] = False
         g["revoked_on"] = _now()
+        self.c._save()
         self._log(client, "revoke", "all scopes", True)
         return {"revoked": True, "client": client, "on": g["revoked_on"],
                 "note": "That key is dead. The record of it stays."}
@@ -201,25 +210,27 @@ class SelfCloud:
 
     def access_log(self, limit: int = 30) -> list[dict]:
         """Who asked for what, and what happened. The owner's record."""
-        return self.c.data.get("selfcloud_access_log", [])[-limit:][::-1]
+        return self.c.access_log.tail(limit)
 
     def _log(self, client: str, action: str, detail: str, allowed: bool) -> None:
-        self.c.data.setdefault("selfcloud_access_log", []).append({
+        """One line appended to the access log. Never a write of the store:
+        a question — allowed or refused — must not rewrite the owner's life
+        or use up a backup copy."""
+        self.c.access_log.append({
             "client": client, "action": action, "detail": detail,
             "allowed": bool(allowed), "at": _now(),
         })
-        self.c._save()
 
     # ---------------------------------------------------------------- status
     def status(self) -> dict:
         gs = self.c.data.get("selfcloud_grants", {})
-        denials = [a for a in self.c.data.get("selfcloud_access_log", [])
-                   if a["action"] == "check" and not a["allowed"]]
+        denials = [a for a in self.c.access_log.tail(500)
+                   if a.get("action") == "check" and not a.get("allowed")]
         return {
             "keys_issued": len(gs),
             "active_keys": [g["client"] for g in gs.values() if g["active"]],
             "revoked_keys": [g["client"] for g in gs.values() if not g["active"]],
-            "recent_denials": denials[-5:][::-1],
+            "recent_denials": denials[:5],          # newest first
             "principle": (
                 "Self-Cloud belongs to the owner. Jefferey is a caretaker with a "
                 "key, not the owner of the vault. Unknown clients get nothing, "

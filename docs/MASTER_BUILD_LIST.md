@@ -28,7 +28,7 @@ Every item here has code in `connector/` or `tools/` and is covered by
 |---|---|
 | Conscience store | facts, priorities, goals, corrections, in one plain JSON file the owner can read, edit and delete |
 | Priority learning | corrections reinforce (+15% of headroom) or erode (−30%); below 0.25 the hierarchy flips and confidence resets |
-| Durability | atomic fsynced writes under an exclusive lock, 20 snapshots kept, stale writer refused, corrupt store recovers from history or refuses to start rather than silently emptying |
+| Durability | atomic, fully flushed, private writes under an exclusive lock, only on a real change; reads never write (the access log is its own file); history kept by time plus copies pinned before destructive calls; hand edits adopted, not undone; torn store recovers, a hand-edit mistake is named, never overwritten; failed saves roll back; owner restore command |
 | Startup writes nothing | launching a surface no longer touches the file; the revision number means something happened |
 
 ### Representing the owner

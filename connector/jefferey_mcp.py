@@ -34,8 +34,13 @@ WHICH KEY THIS SERVER HOLDS
 """
 
 import functools
+import os
 import sys
 from pathlib import Path
+
+# Everything this process creates — the memory file, its copies, the logs —
+# is readable by the owner's account only, never by other accounts on the Mac.
+os.umask(0o077)
 
 # Support both SDK generations: mcp 1.x (FastMCP) and mcp 2.x (MCPServer).
 try:
@@ -44,7 +49,7 @@ except ImportError:  # mcp >= 2.0
     from mcp.server.mcpserver import MCPServer as _Server
 
 sys.path.insert(0, str(Path(__file__).parent))
-from conscience import Conscience
+from conscience import Conscience, StoreProblem
 from representative import Representative
 from guardian import Guardian
 from life import Life
@@ -66,15 +71,30 @@ def door(register):
 
     Also re-reads the conscience before every call: Claude Desktop keeps this
     process alive for as long as the app is open, and the owner may be
-    talking to another engine at the same time."""
+    talking to another engine — or editing the file — at the same time.
+
+    A problem with the memory file itself (damaged, changed elsewhere a
+    moment ago, a drive that refused the save) comes back as a plain result
+    too, never as a crash or a silent disconnect."""
     def wrap(fn):
         @functools.wraps(fn)
         def fresh(*args, **kwargs):
-            conscience.refresh()
-            return fn(*args, **kwargs)
+            try:
+                conscience.refresh()
+            except StoreProblem as e:
+                if fn.__name__ not in _STORELESS:
+                    return e.as_result(fn.__name__)
+            try:
+                return fn(*args, **kwargs)
+            except StoreProblem as e:
+                return e.as_result(fn.__name__)
         return egress.door(register, as_result=True)(fresh)
     return wrap
-conscience = Conscience()
+# Tools that never touch the store keep working when it is damaged, so the
+# engine can still load its directives (which say how to report the problem).
+_STORELESS = frozenset({"get_directives"})
+# A damaged store does not stop the server: every tool explains instead.
+conscience = Conscience.for_surface()
 rep = Representative(conscience)
 guard = Guardian(conscience)
 life = Life(conscience)
