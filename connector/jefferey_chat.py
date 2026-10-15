@@ -1039,7 +1039,8 @@ TOOLS = [
             "them to others). audience: 'me', 'anyone', or a named person. "
             "Only at the owner's word; never write a rule for them. From you a "
             "no (disclosure, allow false) holds at once, noted by the AI; any "
-            "other rule is a proposal that changes nothing until he confirms it."
+            "other rule is a proposal that changes nothing until he confirms it. "
+            "A no for someone he has not recorded holds for everyone and every AI."
         ),
         "input_schema": {
             "type": "object",
@@ -3265,6 +3266,13 @@ def selftest() -> None:
         assert _R.set_rule("disclosure", "money", "Anyone may know.", audience="anyone",
                            allow=True).get("proposed")
         assert not _R.check_disclosure("a neighbour", "money")["allowed"], "an AI's yes held"
+        # a no for someone nobody knows holds for everyone and every AI (round 8,
+        # F1); once he has recorded who Bob is, it binds only Bob
+        _said = _R.set_rule("disclosure", "travel", "Not the press.", audience="the press",
+                            allow=False)
+        assert _said["holds_for"] == "everyone and every AI", _said
+        assert not _R.check_disclosure("a neighbour", "travel")["allowed"], "unknown no ignored"
+        _R.c.data.setdefault("people", []).append({"name": "Bob", "relationship": "friend"})
         assert _R.set_rule("disclosure", "work", "Not Bob.", audience="bob",
                            allow=False)["status"] == "pending"
         assert not _R.check_disclosure("bob", "work")["allowed"], "an AI's no did not hold"

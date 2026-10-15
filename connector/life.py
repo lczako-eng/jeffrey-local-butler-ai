@@ -593,8 +593,9 @@ class Life:
         pics, h2, media_ok = self._pictures(v)
         people, h3 = self._people(v)
         facts, h4 = self._facts(v)
-        prios = sorted((p for p in self.c.data.get("priorities", []) if isinstance(p, dict)),
-                       key=lambda p: -float(p.get("confidence") or 0))[:8]
+        # his values, past his own rules (F2, round 8)
+        shown, h5 = self.c.visible_priorities(v["rd"])
+        prios = sorted(shown, key=lambda p: -float(p.get("confidence") or 0))[:8]
         mems_page, more_m, next_m = self._paged(mems, limit, offset, newest=True)
         pics_page, more_p, _ = self._paged(pics, limit, offset, newest=True)
         facts_page, more_f, _ = self._paged(facts, limit, offset, newest=True)
@@ -622,7 +623,7 @@ class Life:
                 "words is not his own wording."
             ),
         }
-        self._finish(out, v, h1 + h2 + h3 + h4, media_ok,
+        self._finish(out, v, h1 + h2 + h3 + h4 + (h5 if v["full"] else 0), media_ok,
                      more=more_m + more_p + more_f, next_offset=next_m)
         return out
 
@@ -665,7 +666,9 @@ class Life:
             def hit(text, tags, names):
                 if tkey and any(_key(n) == tkey for n in names):
                     return True
-                have = grounding.content(text) | {grounding.stem(x) for g in tags
+                # only what would leave the house is searched (F3, round 8)
+                have = grounding.content(self.c.searched(text, v["rd"])) | {
+                    grounding.stem(x) for g in tags
                                                   for x in grounding.words(g)}
                 have |= {grounding.stem(x) for n in names for x in grounding.words(n)}
                 return bool(tw & have)

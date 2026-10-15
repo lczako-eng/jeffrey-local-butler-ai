@@ -36,6 +36,7 @@ Enforcement, not etiquette:
 from __future__ import annotations
 
 import copy
+import re
 import secrets
 import time
 
@@ -67,8 +68,20 @@ KINDS = ("disclosure", "reaction", "representation")
 # A no that names people never applies to his caretaker key: his own agent
 # always sees his life so it can look after him; his rules about people
 # govern everyone else.
+#
+# AN AUDIENCE NO ONE KNOWS IS EVERYONE (F1, round 8). A no whose audience —
+# read through the shared fold — is not a person he recorded himself, not
+# the name of one of his keys, and not a group (an anyone-word, a family
+# word, an AI word) holds for everyone AND every AI, his own JEFFEREY too
+# (grounding.unknown_parts). 'my lawyer', 'Bob', 'Le Monde' and 'the press'
+# used to bind only a reader of that very name — in practice nobody. Once he
+# records who they are at his own console, the no binds only them; a person
+# an AI wrote down never makes a no narrower. A yes never widens past what
+# is written.
 SELF = "me"
 ANYONE = "anyone"
+# The keys a no may name: the presets, and every key he has given out.
+KEY_NAMES = ("claude-raw", "gpt-raw", "jefferey", "family", "executor")
 
 
 def _now() -> str:
@@ -92,17 +105,86 @@ def _written(r: dict) -> str:
     return str(r.get("audience_written") or r.get("audience") or "")
 
 
+def unknown(r: dict, data: dict | None = None) -> tuple[str, ...]:
+    """The parts of a NO's audience nobody knows (F1, round 8): not a person
+    he recorded himself, not one of his keys, not an anyone-, family- or
+    AI-word. Empty for a yes, and when every part is known."""
+    if not isinstance(r, dict) or r.get("kind") != "disclosure" or r.get("allow"):
+        return ()
+    if _aud(r) == SELF:
+        return ()
+    data = data or {}
+    people = tuple(grounding.person_key(p.get("name", ""), p.get("relationship", ""))
+                   for p in provenance.his_people(data))
+    keys = set(KEY_NAMES) | set((data.get("selfcloud_grants") or {}).keys())
+    return grounding.unknown_parts(_written(r), people, keys)
+
+
 def _no_aud(r: dict, data: dict | None = None) -> str:
     """Who a rule that says NO is for: its own audience, or everyone when it
-    says so with an anyone-word ('members of the public', 'the public or the
-    press', 'nobody but my doctor', 'les gens', 'le monde'). 'Bob', 'my GP'
-    and 'Le Monde' are each only themselves (R2, round 6)."""
-    return ANYONE if grounding.is_anyone(_written(r)) else _aud(r)
+    says so with an anyone-word ('members of the public', 'nobody but my
+    doctor', 'les gens', 'le monde') — or when nobody knows who it is (F1,
+    round 8: 'Bob', 'my GP' and 'Le Monde' are each only themselves once he
+    has recorded who they are)."""
+    if grounding.is_anyone(_written(r)) or unknown(r, data):
+        return ANYONE
+    return _aud(r)
+
+
+def _engine_names() -> tuple[str, ...]:
+    """The names of the engines reading right now ('hermes3', 'claude')."""
+    try:
+        label = provenance._engine_label().lower()
+    except Exception:
+        label = ""
+    # a model's own name carries its version ('hermes3', 'granite3', 'phi4');
+    # the rest of a label is plain words ('a person holding the family key')
+    return tuple(w for w in label.replace(":", " ").split()
+                 if re.fullmatch(r"[a-z][a-z\-]*\d[\w.\-]*", w))
 
 
 def names_ai(r: dict) -> bool:
-    """Does this rule name an AI, an engine or the company behind one (D1)?"""
-    return grounding.names_ai(_written(r))
+    """Does this rule name an AI, an engine or the company behind one (D1)
+    — the engines reading right now among them (F1)?"""
+    return grounding.names_ai(_written(r), _engine_names())
+
+
+def every_ai(r: dict, data: dict | None = None) -> bool:
+    """Does this NO hold for every AI: it names one, or nobody knows who its
+    audience is (F1)?"""
+    return names_ai(r) or bool(unknown(r, data))
+
+
+def describe(r: dict, data: dict | None = None) -> tuple[str, str]:
+    """(whom a rule that says NO holds for, the note that says so in plain
+    words) — the same on every surface."""
+    said = _written(r)
+    nobody = unknown(r, data)
+    everyone, ai = _no_aud(r, data) == ANYONE, every_ai(r, data)
+    if nobody:
+        who = (" and ".join(f"'{x}'" for x in nobody))
+        are = "is" if len(nobody) == 1 else "are"
+        return ("everyone and every AI",
+                f"I don't know who {who} {are}, so this no holds for everyone and every AI. "
+                f"Add them to your people to make it narrower. Only you, reading at your own "
+                f"keyboard, still see it.")
+    if ai:
+        return ("everyone and every AI" if everyone else "every AI",
+                f"'{said}' names an AI, so this no holds for every AI that reads your "
+                "memories — Claude, ChatGPT, a model on this Mac, and your own JEFFEREY too"
+                + (", and for every person as well" if everyone else "")
+                + ". Only you, reading at your own keyboard, still see it.")
+    if everyone:
+        return ("everyone",
+                f"'{said}' means everyone, so this no holds for everyone except your own "
+                "JEFFEREY, which always sees your life so it can look after you. To keep it "
+                "from your JEFFEREY too, add a no for 'any AI'. To let someone hear it after "
+                "all, add a yes that names them.")
+    family = grounding.names_family(said)
+    return (_aud(r),
+            f"This no is only for '{said}'"
+            + (", and so for your family's key too" if family else "")
+            + ". Your own JEFFEREY still sees it; nobody else is kept from it by this rule.")
 
 
 def _says_no_to(r: dict, names, people) -> bool:
@@ -120,10 +202,11 @@ def _says_no_to(r: dict, names, people) -> bool:
 
 
 def _ai_no(data: dict, hit) -> dict | None:
-    """The first rule that says NO to an AI about whatever `hit` reaches."""
+    """The first rule that says NO to every AI — it names one, or nobody
+    knows its audience (F1) — about whatever `hit` reaches."""
     for r in data.get("rules") or []:
         if isinstance(r, dict) and r.get("kind") == "disclosure" and not r.get("allow") \
-                and names_ai(r) and hit(r):
+                and hit(r) and every_ai(r, data):
             return r
     return None
 
@@ -139,9 +222,12 @@ def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, l
     disc = [r for r in rs if r.get("kind") == "disclosure" and hit(r)]
     reps = [r for r in rs if r.get("kind") == "representation" and hit(r)]
     for level, (names_no, names_yes) in enumerate(((broad, strict), ({ANYONE}, {ANYONE}))):
+        # a no for someone nobody knows (F1) holds for everyone — and, like
+        # any no, first of all for the very audience it names
         no = [r for r in disc if not r.get("allow") and (
             _no_aud(r, data) in names_no if level else
-            _no_aud(r, data) != ANYONE and _says_no_to(r, names_no, people))]
+            (_no_aud(r, data) != ANYONE or unknown(r, data))
+            and _says_no_to(r, names_no, people))]
         if no:
             return False, no[0], []
         yes = [r for r in disc if r.get("allow") and _aud(r) in names_yes]
@@ -202,12 +288,12 @@ def binds(r: dict, rd: dict | None = None, data: dict | None = None) -> bool:
     aud = rd.get("audiences") or frozenset()
     if not aud:
         return False                     # the owner himself, at his keyboard
-    if names_ai(r):
+    if not r.get("allow") and every_ai(r, data):
         return True                      # every reader that reaches an engine is an AI
     if not rd.get("people_rules"):
         return False                     # his rules about people never hold for his own key
     names = frozenset(grounding.norm_audience(a) for a in aud) - VENDOR_NAMES
-    if not r.get("allow") and _no_aud(r) == ANYONE:
+    if not r.get("allow") and _no_aud(r, data) == ANYONE:
         return True
     return _aud(r) in names or (not r.get("allow") and _says_no_to(
         r, names, (data or {}).get("people") or []))
@@ -217,6 +303,8 @@ def held_for_reader(r: dict, rd: dict | None = None, data: dict | None = None) -
     """A rule as a reader it binds may see it: what it is about, whom it is
     for, yes or no — never his sentence (S1)."""
     v = {k: r[k] for k in ("id", "kind", "tags", "audience", "allow", "added") if k in r}
+    if r.get("kind") == "disclosure" and not r.get("allow"):
+        v["holds_for"] = describe(r, data)[0]
     v["instruction_held_back"] = True
     v["note"] = ("His own words for this rule are not given to an AI it holds for — only "
                  "what it is about, whom it is for, and whether it is a yes or a no. Obey "
@@ -337,28 +425,8 @@ class ConscienceRules:
         """The rule, and — for a no — whom it holds for, said so he knows."""
         if rule.get("kind") != "disclosure" or rule.get("allow"):
             return rule
-        said = _written(rule)
-        everyone, ai = _no_aud(rule) == ANYONE, names_ai(rule)
-        if ai:
-            return {**rule, "holds_for": "everyone and every AI" if everyone else "every AI",
-                    "note": (f"'{said}' names an AI, so this no holds for every AI that reads "
-                             "your memories — Claude, ChatGPT, a model on this Mac, and your "
-                             "own JEFFEREY too"
-                             + (", and for every person as well" if everyone else "")
-                             + ". Only you, reading at your own keyboard, still see it.")}
-        if everyone:
-            return {**rule, "holds_for": "everyone",
-                    "note": (f"'{said}' means everyone, so this no holds for "
-                             "everyone except your own JEFFEREY, which always sees your life so "
-                             "it can look after you. To keep it from your JEFFEREY too, add a "
-                             "no for 'any AI'. To let someone hear it after all, add a yes "
-                             "that names them.")}
-        family = grounding.names_family(said)
-        return {**rule, "holds_for": _aud(rule),
-                "note": (f"This no is only for '{said}'"
-                         + (", and so for your family's key too" if family else "")
-                         + ". Your own JEFFEREY still sees it; nobody else is kept from it "
-                           "by this rule.")}
+        holds, note = describe(rule, self.c.data)
+        return {**rule, "holds_for": holds, "note": note}
 
     def remove_rule(self, rule_id_or_text: str = "", confirm: str = "") -> dict:
         """Delete a rule by its id, or by whole words of it, an exact tag or
@@ -400,7 +468,7 @@ class ConscienceRules:
                        "status": "pending", "added": _now()}
                 props.append(old)
             ids.append(old["id"])
-            seen = held_for_reader(r) if binds(r, rd, self.c.data) else r
+            seen = held_for_reader(r, rd, self.c.data) if binds(r, rd, self.c.data) else r
             rows.append({"id": r.get("id"), "kind": "rule",
                          "what": (f"a {'yes' if seen.get('allow') else 'no'} about "
                                   f"{', '.join(seen.get('tags') or []) or 'anything'} for "
@@ -428,7 +496,8 @@ class ConscienceRules:
         rd = provenance.reader()
         out = []
         for r in self.rules(kind):
-            v = held_for_reader(r) if binds(r, rd, self.c.data) else self._as_read(r)
+            v = (held_for_reader(r, rd, self.c.data) if binds(r, rd, self.c.data)
+                 else self._as_read(r))
             v = {k: x for k, x in v.items() if k not in ("source", "status")}
             if provenance.pending(r):
                 v.update(status="pending", noted_by=provenance.NOTED_BY_AI)
@@ -559,11 +628,13 @@ class ConscienceRules:
         for r in self.rules("disclosure"):
             if r.get("allow") or not r.get("tags"):
                 continue
-            if ai and names_ai(r):
+            if ai and every_ai(r, self.c.data):
                 out += r["tags"]
             elif _no_aud(r, self.c.data) != ANYONE and (
                     _aud(r) in broad or "family" in broad and grounding.names_family(_written(r))):
                 out += r["tags"]
+            elif unknown(r, self.c.data) and _aud(r) in broad:
+                out += r["tags"]                 # a no nobody knows names this very one
             elif _no_aud(r, self.c.data) == ANYONE:
                 # a yes for exactly this audience opens it again
                 if not any(x.get("allow") and _aud(x) in strict

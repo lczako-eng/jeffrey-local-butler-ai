@@ -949,7 +949,8 @@ def set_rule(kind: str, tags: str, instruction: str, audience: str = "me",
     audience: 'me', 'anyone', or a named person/group. Only ever at the
     owner's word; never write a rule for them. From you a no (disclosure,
     allow=false) holds at once, noted by the AI; any other rule is a proposal
-    that changes nothing until he confirms it himself."""
+    that changes nothing until he confirms it himself. A no for someone he
+    has not recorded holds for everyone and every AI; the result says so."""
     return rules.set_rule(kind, tags, instruction, audience, allow)
 
 

@@ -60,6 +60,7 @@ try:
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
+import grounding
 import home
 from version import __version__
 
@@ -379,11 +380,13 @@ BANK = "a bank account number"
 HEALTH = "a health card number"
 LICENCE = "a driver's licence number"
 PASSPORT = "a passport number"
+# The answer to a security question, a maiden name, a magic word (F3, round 8).
+ANSWER = "the answer to a security question or a secret word"
 # Not a kind of secret: any number in a note that mentions a password, a PIN
 # or a code, hidden on the way out in case it is the code (D3, round 7).
 NOTE_NUMBER = "a number in a note that mentions a code"
 # Most serious first: what looks_secret() names when several are present.
-_ORDER = (APIKEY, PASSWORD, CODE, SSN, CARD, SIN, BANK, HEALTH, LICENCE, PASSPORT,
+_ORDER = (APIKEY, PASSWORD, ANSWER, CODE, SSN, CARD, SIN, BANK, HEALTH, LICENCE, PASSPORT,
           NOTE_NUMBER)
 
 # ---- normalising: one spelling for what can be written many ways
@@ -405,24 +408,31 @@ _FOLD = {**dict.fromkeys(map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
 
 
 def _fold_char(ch: str) -> str:
-    if unicodedata.category(ch) == "Cf":      # zero-width spaces, soft hyphens
-        return ""
-    if ch.isdecimal():                        # Arabic, Devanagari, full-width …
-        try:
-            return str(unicodedata.decimal(ch))
-        except ValueError:
-            pass
-    s = unicodedata.normalize("NFKC", ch).translate(_FOLD)   # NBSP → space
-    s = "".join(c for c in unicodedata.normalize("NFKD", s)
-                if not unicodedata.combining(c))             # é → e
+    """One character in one spelling: the shared fold's (grounding.fold —
+    Cyrillic, Greek, Armenian and Cherokee look-alikes, small capitals,
+    full-width and mathematical letters, digits of every script, zero-width
+    characters dropped, accents off), then the door's own table."""
+    s = grounding._fold_char(ch, False).translate(_FOLD)
     return "".join(str(unicodedata.decimal(c, 0)) if c.isdecimal() and not c.isascii()
                    else c for c in s)
 
 
+# The words the door may read back from a spelling (round 8, F3): 'P I N',
+# 'p@ssword', 'pa$$word', 'passw0rd', 'c0de', 'm0t de passe'.
+_FOLD_KNOWN = frozenset("""password passwords passwd passcode passcodes passphrase pwd pin
+    pins nip code codes digicode digicodes combination combinaison combo mdp motdepasse
+    opener unlock secret security question answer maiden word mot magique wifi alarm
+    alarme garage door gate lockbox keypad""".split())
+_WORDISH = re.compile(r"[@$|]|[^\W_]\d|\d[^\W_]|(?<![^\W_])[^\W\d_](?:[ .\-]|\. )[^\W\d_](?![^\W_])"
+                      r"|[a-z]I[a-z]|(?<![^\W_])I[a-z]{2}")
+
+
 def _normalise(text: str) -> tuple[str, list[int] | None]:
     """The text in one spelling, and where each character came from in the
-    original (None when nothing changed), so a hit can be hidden in place."""
-    if text.isascii():
+    original (None when nothing changed), so a hit can be hidden in place.
+    Letters are read through the shared fold, and so are words a secret's
+    word is written as ('P I N', 'p@ssword')."""
+    if text.isascii() and not _WORDISH.search(text):
         return text, None
     out: list[str] = []
     src: list[int] = []
@@ -430,7 +440,14 @@ def _normalise(text: str) -> tuple[str, list[int] | None]:
         f = ch if ch.isascii() else _fold_char(ch)
         out.append(f)
         src.extend([i] * len(f))
-    return "".join(out), src
+    n = "".join(out)
+    n2, src2 = grounding.fold_map(n, _FOLD_KNOWN, accents=True)
+    if n2 != n:
+        src = [src[k] for k in src2]
+        n = n2
+    if n == text and len(src) == len(text):
+        return text, None
+    return n, src
 
 
 # ---- words that announce a secret, and what may follow them
@@ -447,6 +464,11 @@ _PW_WORDS = _rx(
     r"jelsz(?:o|avam|ava|avak)", r"wachtwoord", r"haslo", r"heslo")
 # PINs and the codes of a house: the value is a number ("PIN 4821").
 _PIN_WORDS = _rx(
+    # round 8 (F3): an opener, an unlock code, a safe that opens, a secret
+    # number, 'the numbers for' the bank machine, a chiffre secret
+    r"openers?", r"unlock", r"safe" + _S + r"(?:opens?|opened|opening|unlocks?)",
+    r"secret" + _S + r"numbers?", r"the" + _S + r"numbers?" + _S + r"(?:for|to|of)",
+    r"chiffres?" + _S + r"secrets?", r"(?:numero|nombre)" + _S + r"secret",
     r"pins?", r"pin" + r"[\s\-]*(?:code|number|no|#|kod)", r"nip", r"digicodes?",
     r"code" + _S + r"(?:nip|pin)", r"geheimzahl", r"cvv2?", r"cvc2?", r"cvn",
     r"numero" + _S + r"d'?\s*identification" + _S + r"personnel(?:le)?",
@@ -809,6 +831,52 @@ def _next_sentence_value(n: str, at: int, fam: str) -> tuple[int, int] | None:
             break                          # the first real word holds no value
         pos = stop
     return None
+
+
+# ---- the answer to a security question (F3, round 8)
+# Words after which the WHOLE value is the secret, whatever it is: the answer
+# to a security question, a maiden name, a magic or secret word. Its value
+# is what follows ':', 'is' or '=' within a few words, to the end of the
+# clause; or, right after the word, a capitalised name or a word with a digit
+# ('maiden name Kovacs'). 'answer to' counts only before ':' or 'is' ('I need
+# an answer to Karen's letter' is a sentence).
+_ANSWER_KW = re.compile(r"(?<![^\W_])(?:" + _rx(
+    r"security" + _S + r"questions?(?:" + _S + r"answers?)?",
+    r"secret" + _S + r"questions?(?:" + _S + r"answers?)?",
+    r"(?:security|secret)" + _S + r"answers?",
+    r"(?:the" + _S + r")?answers?" + _S + r"to",
+    r"maiden" + _S + r"names?", r"nom" + _S + r"de" + _S + r"jeune" + _S + r"fille",
+    r"(?:magic|secret)" + _S + r"words?", r"mots?" + _S + r"(?:magiques?|secrets?)",
+    r"questions?" + _S + r"(?:secretes?|de" + _S + r"securite)",
+    r"reponses?" + _S + r"secretes?") + r")(?![^\W_])", re.I)
+_ANSWER_SAYS = frozenset([":", "=", "-", "is", "was", "are", "est", "c'est", "etait", "sont",
+                          "'s"])
+_ANSWER_SKIP = frozenset("answer answers reponse reponses".split())
+
+
+def _answer_hits(n: str) -> list[tuple[int, int, str]]:
+    out = []
+    for m in _ANSWER_KW.finditer(n):
+        end_c = _clause(n, m.end(), read_on=True)
+        toks = list(_TOK.finditer(n, m.end(), end_c))
+        start = None
+        for i, t in enumerate(toks[:7]):
+            low = t.group().lower()
+            if low in _ANSWER_SAYS:
+                if i + 1 < len(toks):
+                    start = toks[i + 1].start()
+                break
+        if start is None and not m.group().lower().rstrip().endswith(" to"):
+            first = next((t for t in toks if t.group().lower() not in _ANSWER_SKIP), None)
+            if first is not None and (re.match(r"[A-Z]", first.group())
+                                      or any(c.isdigit() for c in first.group())):
+                start = first.start()
+        if start is None:
+            continue
+        s0, e0 = _tail(n, start, end_c)
+        if e0 > s0 and re.search(r"[^\W_]", n[s0:e0]):
+            out.append((s0, e0, ANSWER))
+    return out
 
 
 def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
@@ -1265,7 +1333,7 @@ def find_secrets(text: str, legacy: bool = False) -> list[tuple[int, int, str]]:
 
 
 def _words(n: str) -> list[tuple[int, int, str]]:
-    return _keyword_hits(n)
+    return _keyword_hits(n) + _answer_hits(n)
 
 
 def _shapes(n: str) -> list[tuple[int, int, str]]:
@@ -1273,7 +1341,8 @@ def _shapes(n: str) -> list[tuple[int, int, str]]:
 
 
 def _everything(n: str) -> list[tuple[int, int, str]]:
-    return _key_hits(n) + _keyword_hits(n) + _number_hits(n) + _id_hits(n)
+    return (_key_hits(n) + _keyword_hits(n) + _answer_hits(n) + _number_hits(n)
+            + _id_hits(n))
 
 
 def _find(text: str, scan=_everything) -> list[tuple[int, int, str]]:
@@ -1379,13 +1448,16 @@ def _secret_word_ends(n: str) -> list[int]:
     return out
 
 
-def _code_shapes(n: str, start: int = 0, at_door: bool = False) -> list[tuple[int, int]]:
+def _code_shapes(n: str, start: int = 0, at_door: bool = False,
+                 least: int = 3) -> list[tuple[int, int]]:
     """Every code-shaped value in `n` from `start` on: a word that mixes
     letters and digits, a run of three or more digits (groups joined by a
     space, a dash, a dot or a comma count as one run), three or more digits
     said in words — never a phone number written with its separators.
     `at_door`: also not an amount, a whole date, a dose, an ordinal or a
-    time like '10am'."""
+    time like '10am'. `least=2` (on the way out, F3, round 8): a run of two
+    digits too ('the dog's name followed by 77') — unless it is an amount, a
+    dose, a count of something or a time ('$25', '45 minutes')."""
     spans: list[tuple[int, int]] = []
     for t in re.finditer(r"\S+", n[start:]):
         s0, e0 = start + t.start(), start + t.end()
@@ -1417,9 +1489,15 @@ def _code_shapes(n: str, start: int = 0, at_door: bool = False) -> list[tuple[in
                 continue
             runs[-1].append((gs, ge))
         for run in runs:
-            if not run or sum(ge - gs for gs, ge in run) < 3:
+            digits = sum(ge - gs for gs, ge in run) if run else 0
+            if not run or digits < least:
                 continue
             s1, e1 = run[0][0], run[-1][1]
+            if digits < 3 and (_MONEY_AFTER.match(n, e1) or _MONEY_BEFORE.search(n[max(0, s1 - 2):s1])
+                               or _UNIT_AFTER.match(n, e1) or _CLOCK_AFTER.match(n, e1)
+                               or n[e1:e1 + 1] == ":" and n[e1 + 1:e1 + 2].isdigit()
+                               or n[max(0, s1 - 1):s1] == ":" and n[s1 - 2:s1 - 1].isdigit()):
+                continue
             if at_door and (_DATE_SHAPE.fullmatch(n[s1:e1]) or _MONEY_AFTER.match(n, e1)
                             or _MONEY_BEFORE.search(n[max(0, s1 - 2):s1])
                             or _UNIT_AFTER.match(n, e1)):
@@ -1464,7 +1542,7 @@ def hide_numbers_in_code_note(text: str) -> tuple[str, int]:
     if not isinstance(text, str) or not names_a_code(text):
         return text, 0
     n, src = _normalise(text)
-    spans = _code_shapes(n)
+    spans = _code_shapes(n, least=2)
     if not spans:
         return text, 0
     if src is not None:
@@ -1563,6 +1641,12 @@ def _scan(obj, where: str = "") -> tuple[str, str] | None:
 # JEFFEREY's own words, never a note of the owner's: no number in them is hidden
 # for being near the word 'code' (the directives name PINs and codes).
 _OWN_TEXT = frozenset({"get_directives"})
+# ...and the fields of any answer that are JEFFEREY's own words: its codes, its
+# instructions to the engine (v1 new_regressions D3: forget's how_to_finish
+# hid its own code — 'types the code [hidden: a number in a note that mentions
+# a code]' — in 4 runs of 6). A secret's own shape is still hidden there.
+_OWN_FIELDS = frozenset({"how_to_finish", "confirm", "tell_the_user", "expires", "how",
+                         "how_to_see_more", "action", "advice"})
 
 
 def mask(obj, where: str = "", notes: bool = True) -> tuple[object, list[tuple[str, str]]]:
@@ -1575,11 +1659,11 @@ def mask(obj, where: str = "", notes: bool = True) -> tuple[object, list[tuple[s
     JEFFEREY's own words)."""
     found: list[tuple[str, str]] = []
 
-    def go(o, w):
+    def go(o, w, own=False):
         if isinstance(o, str):
             m, whats = mask_text(o, legacy=True)
             found.extend((w or "text", x) for x in whats)
-            if notes and (names_a_code(o) or whats):
+            if notes and not own and (names_a_code(o) or whats):
                 m, more = hide_numbers_in_code_note(m)
                 found.extend((w or "text", NOTE_NUMBER) for _ in range(more))
             return m
@@ -1598,7 +1682,7 @@ def mask(obj, where: str = "", notes: bool = True) -> tuple[object, list[tuple[s
                     found.append((w or "a field name", why))
                     continue
                 n_before = len(found)
-                masked = go(v, here)
+                masked = go(v, here, own or str(k) in _OWN_FIELDS)
                 if len(found) == n_before:            # nothing in the value alone
                     why = _pair_secret(k, v, alone_checked=True)
                     if why:
@@ -1607,10 +1691,21 @@ def mask(obj, where: str = "", notes: bool = True) -> tuple[object, list[tuple[s
                 out[k] = masked
             return out
         if isinstance(o, (list, tuple)):
-            return [go(v, f"{w}[{i}]") for i, v in enumerate(o)]
+            return [go(v, f"{w}[{i}]", own) for i, v in enumerate(o)]
         return o
 
     return go(obj, where), found
+
+
+@functools.lru_cache(maxsize=1 << 14)
+def shown_text(text: str) -> str:
+    """The words of a note as they would leave the house, with what the door
+    hides taken out (F3, round 8): a topic search matches only these, so a
+    guessed password ('Bluebird77') never finds the note that holds it."""
+    if not isinstance(text, str) or not text:
+        return text or ""
+    shown, _ = mask(text)
+    return _MARK.sub(" ", shown) if isinstance(shown, str) else text
 
 
 # Parts of the store that are JEFFEREY's own bookkeeping, not the owner's words.

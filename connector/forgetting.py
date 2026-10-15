@@ -513,9 +513,19 @@ def _plan(data: dict, section: str, contains, ids, fields, *,
     for it in _items(data, section):
         if eligible and not eligible(it):
             continue
-        if any(w(x) for f in fields for x in _strs(it.get(f))):
+        if any(w(_shown(x)) for f in fields for x in _strs(it.get(f))):
             add(it)
     return plan
+
+
+def _shown(text: str) -> str:
+    """What an engine's words may match (F3, round 8): only what would leave
+    the house, never the part the door hides — forget(contains='Bluebird77')
+    must not tell an engine that a note holds that password."""
+    if not _engine() or not isinstance(text, str):
+        return text
+    import egress
+    return egress.shown_text(text)
 
 
 def _mentions(data: dict, plan: Plan, terms: list[str]) -> None:
@@ -577,7 +587,7 @@ def plan_life(data: dict, contains, ids) -> Plan | str:
             for sec, fields in (("memories", ("text", "when", "tags")),
                                 ("media", ("caption", "when", "tags"))):
                 for it in _items(data, sec):
-                    if any(w(x) for f in fields for x in _strs(it.get(f))):
+                    if any(w(_shown(x)) for f in fields for x in _strs(it.get(f))):
                         plan.remove(sec, it)
     for name in names:
         _cascade(data, plan, name)

@@ -430,17 +430,16 @@ Nobody remembers everything, but almost everybody remembers when shown.
     anyone else, `check_disclosure`. A rule naming that person beats a rule
     for "anyone"; a "no" beats a "yes"; a representation rule permits
     exactly that much and no more; **with no rule at all, silence is a no.**
-    A "no" is for exactly the audience it names ("Bob", "my GP" — every
-    way that one is written) — unless it says anyone: "the public",
-    "members of the public", "nobody but my doctor", "les gens", "le
-    monde", "not a soul"… then it holds for everyone (`holds_for:
-    everyone`); tell them so. A name that only contains such a word ("Le
-    Monde" with its capital, "Mr. Nobody") is a name. A "no" for their
-    family or their children ("ma famille", "my kids", "my daughter")
-    holds for the family key. **A "no" that names an AI** ("any AI",
-    "ChatGPT", "Claude", "Google", "l'IA", "the cloud") **holds for every
-    AI, you included** (`holds_for: every AI`): what it keeps back never
-    reaches you, whatever key you hold. A "no" that names people never
+    A "no" for someone they recorded ("Bob", "my GP") binds that person;
+    one that says anyone ("the public", "nobody but my doctor", "les
+    gens", "le monde", "not a soul") holds for everyone (`holds_for:
+    everyone`). **A "no" for someone nobody knows** ("my lawyer", "the
+    press") **holds for everyone and every AI**; tell them so, and that
+    recording the person makes it narrower. A "no" for their family ("ma
+    famille", "my sister", "the in-laws") holds for the family key. **A
+    "no" that names an AI** ("any AI", "ChatGPT", "JEFFEREY", "the
+    computer", "l'IA") **holds for every AI, you included** (`holds_for:
+    every AI`): what it keeps back never reaches you, whatever key you hold. A "no" that names people never
     applies to their caretaker key 'jefferey': their own agent sees their
     life so it can look after them. Before speaking with them about a sensitive subject, `guidance_for` —
     and follow their words, not your paraphrase of them. Never write a rule

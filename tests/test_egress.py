@@ -1201,9 +1201,11 @@ class APhoneOrReferenceIsSteppedOver(EgressTest):
         # what the PIN is not stays readable: the phone numbers and the words
         # (the alarm and bank notes are private, so they are not in a list).
         # Round 7, D3: a file number in a note that names a PIN is hidden too.
-        for v in ("1 800 555 0199", "Votre NIP, dossier", "call *98 then"):
+        # Round 8, F3: so is a run of two digits ('*98').
+        for v in ("1 800 555 0199", "Votre NIP, dossier", "call *", " then "):
             self.assertIn(v, sent)
         self.assertNotIn("8765", sent)
+        self.assertNotIn("*98", sent)
 
     def test_a_year_or_a_birthday_after_a_code_is_not_the_code(self):
         # Round 4 read the mark as not there, so the next number was 'the

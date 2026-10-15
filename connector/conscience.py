@@ -658,11 +658,20 @@ _ENTRY_WORDS = _wordset(
     "ouverts ouvertes ouverture",
     "accueille accueilles accueillir accueillez accueillons accueillent accueilli accueillie",
     "admit admits admitted admitting",
+    # round 8 (F6): the latch and the bolt, Quebec French débarrer, the
+    # security system's own words, French héberger and the imperative 'entre'
+    "latch latches latched latching unlatch unlatches unlatched unlatching",
+    "bolt bolts bolted bolting unbolt unbolts unbolted unbolting",
+    "debarre debarrer debarrez debarres debarrons debarrent debarrera",
+    "camera cameras cam cams footage detector detectors detecteur detecteurs",
+    "heberge heberger hebergez heberges hebergeons hebergent hebergera",
+    "entre",
 )
 # 'alarm clock' rings in the morning; an 'unlocked iPhone' is a phone; 'Door
 # Dash' brings dinner — the one word beside them says so, and nothing else
 _NOT_THE_DOOR = {"alarm": frozenset({"clock", "clocks"}), "alarms": frozenset({"clock",
                                                                                 "clocks"}),
+                 "bolt": frozenset({"of"}),
                  "unlocked": frozenset({"iphone", "phone", "cellphone", "smartphone", "android",
                                         "pixel", "galaxy", "samsung", "cell", "mobile"}),
                  "door": frozenset({"dash"})}
@@ -676,12 +685,35 @@ _BRING = _wordset("show shows showed showing welcome welcomes welcomed welcoming
                   "bring brings brought bringing send sends sent sending wave waves waved",
                   "waving")
 _BRING_IN = _wordset("in into inside indoors upstairs up through over interieur dedans")
-_HAVE = _wordset("have has had having ask asks asked")         # 'have the kids over'
+_HAVE = _wordset("have has had having ask asks asked asking",        # 'have the kids over'
+                 "get gets got getting")
+_HAVE_IN = _wordset("in inside round around over up")              # (F6, round 8)
 _COME = _wordset("come comes came coming step steps stepped walk walks walked",
                  "move moves moved moving")
-_COME_IN = _wordset("in inside indoors into over by up upstairs")
+_COME_IN = _wordset("in inside indoors into over by up upstairs round around")
 _POP = _wordset("pop pops popped drop drops dropped stop stops")
-_POP_IN = _wordset("in by over")
+_POP_IN = _wordset("in by over round around")
+# 'open' asks unless, within three words, it opens something that is not a
+# way in (F6, round 8: 'Open the front for the plumber' was allowed)
+_OPENS_ELSE = _wordset("account accounts app apps application applications file files",
+                       "email emails mail link links letter letters parcel parcels",
+                       "package packages box boxes jar jars tab tabs browser browsers",
+                       "document documents attachment attachments pdf pdfs statement",
+                       "statements bottle bottles can cans envelope envelopes")
+_SPARE = _wordset("spare spares")
+_NOT_A_SPARE_KEY = _wordset("tire tires tyre tyres wheel change time room rooms bedroom bed",
+                            "beds parts part battery batteries bulb bulbs cash money ribs",
+                            "moment minute minutes cent cents dime pair blanket sheets towel",
+                            "towels")
+_STAY_WHEN = _wordset("night nights overnight tonight weekend weekends couch sofa",
+                      "week nuit nuits soir semaine canape")
+_PUT = _wordset("put puts putting")
+_BATHROOM = _wordset("bathroom bathrooms washroom washrooms toilet toilets restroom loo",
+                     "lavatory toilettes toilette wc")
+_USE = _wordset("use uses used using")
+_LOOK = _wordset("look looks looked looking")
+_AROUND = _wordset("around round through")
+_TOUR = _wordset("tour tours toured touring")
 _OPEN = _wordset("open opens opened opening")
 _LEAVE = _wordset("leave leaves leaving left keep keeps kept prop props propped")
 _LEFT_OPEN = _wordset("open unlocked ajar")
@@ -702,18 +734,21 @@ _SHOW = _wordset("show shows showed showing visit visits visiter visite")
 _HOUSE = _wordset("house home condo apartment place property unit maison appartement")
 _KNOWN = (_ENTRY_WORDS | _LET | _LET_IN_FAR | _LET_IN_NEAR | _BRING | _BRING_IN | _COME
           | _COME_IN | _POP | _OPEN | _LEAVE | _LEFT_OPEN | _WINDOW | _DISABLE | _OFF_VERB
-          | _SECURITY | _STAY | _NIGHT | _SHOW | _HOUSE)
+          | _SECURITY | _STAY | _NIGHT | _SHOW | _HOUSE | _HAVE | _HAVE_IN | _SPARE | _STAY_WHEN
+          | _PUT | _BATHROOM | _USE | _LOOK | _AROUND | _TOUR
+          | frozenset("him her them me man in let ring".split()))
 
 
 def _entry_words_of(description: str) -> list[str]:
-    """The words of a description in one spelling: look-alike letters read
-    as Latin, accents off, lower case; digits written for letters ('d00r',
-    'a1arm', '1n') and spaced-out letters ('u n l o c k', 'd.o.o.r') read
-    back as the word they spell."""
-    t = unicodedata.normalize("NFKC", str(description or ""))
-    t = "".join(ch for ch in t if unicodedata.category(ch) != "Cf").translate(_ENTRY_FOLD)
-    t = "".join(ch for ch in unicodedata.normalize("NFKD", t) if not unicodedata.combining(ch))
-    t = t.casefold().translate(_ENTRY_FOLD)
+    """The words of a description in one spelling, read through the shared
+    fold (grounding.fold, round 8): look-alike letters read as Latin
+    (Cyrillic, Greek, Armenian, Cherokee, small capitals), accents off, lower
+    case; digits or symbols written for letters ('d00r', 'a1arm', '1n', '|et'),
+    a capital I for l ('Iet him in', 'UnIock'), a split word ('le t him in')
+    and spaced-out letters ('u n l o c k', 'd.o.o.r') read back as the word
+    they spell."""
+    t = grounding.fold(str(description or ""), _KNOWN | grounding.FOLD_WORDS)
+    t = t.translate(_ENTRY_FOLD)
     words: list[str] = []
     tight: list[bool] = []          # only one space or dot before this word
     end = 0
@@ -753,6 +788,10 @@ def entry_words(description: str) -> str | None:
     or what is let in."""
     w = _entry_words_of(description)
     n = len(w)
+    # the Ring with its capital, as the doorbell camera is written ('Turn off
+    # the Ring'); 'Sell the ring' is jewellery
+    ring_device = bool(re.search(r"\b(?:the|my|our|his|her|that)\s+Ring\b",
+                                 grounding.fold_map(str(description or ""))[0]))
     far: list[int | None] = [None] * (n + 1)          # the next 'in' after each word
     for k in range(n - 1, -1, -1):
         far[k] = k if w[k] in _LET_IN_FAR else far[k + 1]
@@ -768,21 +807,48 @@ def entry_words(description: str) -> str | None:
 
     for i, x in enumerate(w):
         nxt = w[i + 1] if i + 1 < n else ""
+        prev = w[i - 1] if i else ""
         if x in _ENTRY_WORDS and nxt not in _NOT_THE_DOOR.get(x, ()):
             return x
+        # round 8 (F6): the spare (a key), the Ring, the security system,
+        # maintenance mode, using the bathroom
+        if x in _SPARE and nxt not in _NOT_A_SPARE_KEY:
+            return x
+        if x == "ring" and (ring_device or nxt in ("camera", "cameras", "doorbell", "cam",
+                                                  "cams", "alarm", "device", "system")):
+            return "the ring"
+        if x == "security" and nxt in ("system", "systems", "panel", "company"):
+            return "security " + nxt
+        if x == "maintenance" and nxt == "mode":
+            return "maintenance mode"
+        if x in _BATHROOM and any(w[k] in _USE for k in range(max(0, i - 3), i)):
+            return said(max(0, i - 3), i)
         found = None
         if x in _LET:
             found = far[i + 1] if far[i + 1] is not None else ahead(i, _LET_IN_NEAR, 6)
         elif x in _BRING:
             found = ahead(i, _BRING_IN, 6)
         elif x in _HAVE:
-            found = ahead(i, frozenset({"over"}), 4)
+            found = ahead(i, _HAVE_IN, 4)
+            if found is not None and w[found] == "in" and found + 1 < n \
+                    and w[found + 1] in ("touch", "mind"):
+                found = None                         # 'get in touch', 'keep in mind'
         elif x in _COME:
             found = ahead(i, _COME_IN, 2)
         elif x in _POP:
             found = ahead(i, _POP_IN, 1)
         elif x in _OPEN:
-            found = i + 1 if nxt in ("up", "house") else ahead(i, _WINDOW, 4)
+            # 'open' asks, unless within three words it opens what is no way in
+            if ahead(i, _OPENS_ELSE, 3) is None:
+                found = i
+        elif x in _PUT:
+            if ahead(i, frozenset({"up"}), 4) is not None:
+                found = ahead(i, _STAY_WHEN, 8)
+        elif x in _LOOK:
+            if ahead(i, _AROUND, 1) is not None:
+                found = ahead(i, _HOUSE, 4)
+        elif x in _TOUR:
+            found = ahead(i, _HOUSE, 4)
         elif x in _LEAVE:
             found = ahead(i, _LEFT_OPEN, 6)
         elif x in _DISABLE:
@@ -791,7 +857,9 @@ def entry_words(description: str) -> str | None:
             if ahead(i, frozenset({"off", "down"}), 5) is not None:
                 found = ahead(i, _SECURITY, 7)
         if found is None and x in _STAY:
-            found = ahead(i, _NIGHT, 3)
+            found = ahead(i, _NIGHT | _STAY_WHEN, 3)
+            if found is None and x in ("dormir", "dort", "dorment", "coucher", "couche"):
+                found = ahead(i, frozenset({"chez", "ici"}), 1)
         if found is None and x in _SPEND:
             found = ahead(i, frozenset({"night", "nights", "nuit"}), 3)
         if found is None and x in _SHOW:
@@ -2401,6 +2469,43 @@ class Conscience:
         return seen, held
 
     @staticmethod
+    def _prio_text(p: dict) -> str:
+        return " ".join(str(p.get(k) or "") for k in ("context", "higher", "lower"))
+
+    @staticmethod
+    def searched(text, rd: dict | None = None) -> str:
+        """The words a topic search may match (F3, round 8): for anyone but
+        the owner at his keyboard, only what would leave the house — never
+        the part the door hides ('Bluebird77' must not find 'Netflix
+        password: Bluebird77')."""
+        rd = rd or provenance.reader()
+        if not rd.get("audiences"):
+            return str(text or "")
+        import egress
+        return egress.shown_text(str(text or ""))
+
+    def visible_priorities(self, rd: dict | None = None) -> tuple[list[dict], int]:
+        """His values whoever reads this result may see, and how many his
+        rules hold back (F2, round 8): a no on a subject — 'Never tell my
+        health to any AI' — also holds back a value whose subject or words
+        touch it ('sugar-free over taste' for 'my diabetes diet' went to
+        every AI through get_conscience, priorities_for and who_am_i)."""
+        import rules as _rules
+        rd = rd or provenance.reader()
+        ps = [p for p in self.data.get("priorities") or [] if isinstance(p, dict)]
+        if not rd.get("audiences"):
+            return ps, 0                 # the owner himself, at his keyboard
+        seen, held = [], 0
+        for p in ps:
+            text = self._prio_text(p)
+            if _rules.held_back(self.data, rd["audiences"], text,
+                                ["values"] + grounding.sensitivity(text)):
+                held += 1
+                continue
+            seen.append(p)
+        return seen, held
+
+    @staticmethod
     def _fact_view(f: dict, reason: str | None = None) -> dict:
         """A fact as an engine reads it: what it says, and how far to trust it."""
         v = {k: f[k] for k in ("id", "fact", "category", "added", "visibility") if k in f}
@@ -2745,13 +2850,14 @@ class Conscience:
         """His values, most certain first — about a subject (whole words:
         'car' is not 'caregiver'), or all of them. A value he holds about
         everything is listed last."""
-        ps = [p for p in self.data["priorities"] if isinstance(p, dict)]
+        rd = provenance.reader()
+        ps, _ = self.visible_priorities(rd)
         if context:
             q = grounding.expand(grounding.content(context))
             if not q:
                 return []
             ps = [p for p in ps
-                  if grounding.content(p.get("context", "")) & q
+                  if grounding.content(self.searched(p.get("context", ""), rd)) & q
                   or grounding.normalise(p.get("context")) in grounding.CATCH_ALL]
         general = lambda p: grounding.normalise(p.get("context")) in grounding.CATCH_ALL  # noqa: E731
         return [self._prio_view(p) for p in
@@ -3493,8 +3599,8 @@ class Conscience:
         # the order he told them
         end = max(0, len(facts) - off)
         page = facts[max(0, end - lim):end]
-        prios = sorted((p for p in self.data["priorities"] if isinstance(p, dict)),
-                       key=lambda p: -float(p.get("confidence") or 0))
+        shown, prios_held = self.visible_priorities(rd)
+        prios = sorted(shown, key=lambda p: -float(p.get("confidence") or 0))
         goals, goals_held, more_goals = self._goals_for(rd)
         notices = self.notices()
         out = {
@@ -3518,7 +3624,7 @@ class Conscience:
             out["how_to_see_more"] = (f"Older facts: call again with offset={off + lim}, "
                                       f"or ask explain_basis about the subject you need.")
         private = sum(1 for _, why in held if why == "private")
-        ruled = sum(1 for _, why in held if why == "rules")
+        ruled = sum(1 for _, why in held if why == "rules") + prios_held
         if private or ruled or goals_held:
             out["held_back"] = {
                 "private": private, "by_his_rules": ruled,
@@ -3584,10 +3690,12 @@ class Conscience:
             return {"topic": t, "priorities": [], "facts": [], "note": problem}
         tw = grounding.expand(grounding.content(t))
         rows = []
-        for p in self.data["priorities"]:
-            if not isinstance(p, dict):
-                continue
-            m = grounding.context_match(p.get("context", ""), tw)
+        rd = provenance.reader()
+        prios, prios_held = self.visible_priorities(rd)
+        for p in prios:
+            ctx = p.get("context", "")
+            m = grounding.context_match(ctx if grounding.normalise(ctx) in grounding.CATCH_ALL
+                                        else self.searched(ctx, rd), tw)
             if m:
                 rows.append(((0 if m[0] == "about" else 1, provenance.pending(p),
                               -float(p.get("confidence") or 0)), self._prio_view(p, m[1])))
@@ -3609,14 +3717,13 @@ class Conscience:
             out["note"] = ("The key this connection holds may not read the owner's "
                            "facts, so none are included.")
             return out
-        rd = provenance.reader()
         seen, held = self.visible_facts(rd, bulk=False)
         # anyone but the owner's own house gets a private fact only for a
         # subject that names its kind (verify I-28)
         asked = None if rd["owner"] else t
         scored = []
         for f in seen:
-            m = grounding.fact_match(f.get("fact", ""), f.get("category", ""),
+            m = grounding.fact_match(self.searched(f.get("fact", ""), rd), f.get("category", ""),
                                      f.get("sensitivity") or [], tw, asked)
             if m:
                 scored.append(((-m[0], provenance.pending(f)), f, m[1]))
@@ -3627,7 +3734,8 @@ class Conscience:
             out["more_facts"] = len(scored) - off - lim
             out["how_to_see_more"] = f"Call again with offset={off + lim}."
         kept = sum(1 for f, _ in held
-                   if grounding.fact_match(f.get("fact", ""), f.get("category", ""),
+                   if grounding.fact_match(self.searched(f.get("fact", ""), rd),
+                                           f.get("category", ""),
                                            f.get("sensitivity") or [], tw, asked))
         if kept:
             out["held_back"] = {"count": kept, "why": (

@@ -421,7 +421,10 @@ class DraftsKeepHisRules(LifeTest):
         # returned the PTSD fact; check_disclosure allowed 'Karen Novak'.
         r = self.py("""
             import jefferey_mcp as m, access
-            mcp_call(m, "add_person", {"name": "Karen", "relationship": "ex-wife"})
+            # (round 8, F1: Karen is his, recorded at his own console — a no for
+            # someone an AI wrote down holds for everyone and every AI)
+            with access.owner_console():
+                m.life.add_person("Karen", "ex-wife")
             mcp_call(m, "set_rule", {"kind": "disclosure", "tags": "health", "audience": "karen",
                                      "allow": False, "instruction": "Never tell Karen about my health."})
             # a yes and how to speak of him are his to write (round 8, S1): from an
@@ -1759,13 +1762,19 @@ class ANoForNobodyPlainIsANoForEveryone(LifeTest):
     names only them (R2, round 6: round 5 made every audience it did not
     recognise 'everyone', and blinded his own caretaker); and 'Le Monde' is
     no longer 'anyone' for a yes. tests/test_corpus_disclosure.py holds
-    every audience the skeptics named."""
+    every audience the skeptics named.
+
+    Round 8 (F1): those plain ones name only them once he has recorded who
+    they are at his own console (the neighbours, the bank, Mrs. Patel, Le
+    Monde, below); before that, nobody knows them, and a no for them holds
+    for everyone and every AI (test_corpus_disclosure, UNKNOWN). 'my sister'
+    is a family word: it holds for the family key (FAMILY there)."""
 
     NOBODY_PLAIN = ["members of the public", "the entire world", "anyone at all", "all people",
                     "every person", "everyone in the world", "the world at large",
                     "anyone who asks", "les gens", "quiconque", "le monde entier",
                     "tout le monde sauf moi"]
-    PLAIN = ["the neighbours", "my sister", "the bank", "Mrs. Patel", "Le Monde"]
+    PLAIN = ["the neighbours", "the bank", "Mrs. Patel", "Le Monde"]
 
     def test_a_no_for_nobody_plain_holds_his_health_back_and_a_plain_no_does_not_spread(self):
         self.py("""
@@ -1773,6 +1782,10 @@ class ANoForNobodyPlainIsANoForEveryone(LifeTest):
             with access.owner_console():
                 jc.life.add_memory("Diagnosed with type 2 diabetes in June.", visibility="family")
                 jc.life.add_memory("The orb made her laugh.", visibility="family")
+                jc.life.add_person("the Okafors", "neighbours")
+                jc.life.add_person("RBC", "bank")
+                jc.life.add_person("Mrs. Patel", "neighbour")
+                jc.life.add_person("Le Monde", "newspaper")
             out(1)
         """)
         r = self.py("""

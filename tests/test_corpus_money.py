@@ -35,10 +35,36 @@ The decision (D5, round 7), for a registered membership (a name with
   * A name made to look like one he pays is 'ask_owner' with a phishing
     warning (PHISH).
 
+Round 8 (F4) — money after a cancellation, and look-alike bills
+(roundD_verdicts.json v2 D5 unsafe_cases and new_regressions):
+
+  * After mark_cancelled, a charge at that membership's place that names the
+    membership or sits in the fee band (15% below to double the fee) is
+    charged_after_cancel and claimed in full, as before round 7; any other
+    charge there after the cancellation asks him (CANCELLED below). Round 7
+    asked 'Is this your membership going up?' and claimed nothing.
+  * A duplicate claim — a second charge inside the cadence — needs a
+    membership word in its name or the very same amount as the first;
+    otherwise it is his question. Rows that claimed the fee with tax on top
+    of the fee ('CAA SOUTH CENTRAL ONT' $120 then $135.60) ask now.
+  * Once a charge of a membership is on file, the agreed amount is the
+    amount last charged: a different one asks, even when it is the fee with
+    some tax ('AMAZON PRIME' $99, then $111.87 a year later).
+  * French lines of business (assurance, voyages, essence, carburant,
+    pharmacie, optique, pneus, épicerie, station) are another business, like
+    insurance, travel and gas.
+  * Statement names are read through the shared fold (a Cyrillic 'CОSTCO' is
+    made to look like Costco: a phishing question) and lose a payment
+    processor's prefix (PAYPAL *, PP*, SQ *, SP *, TST*, STRIPE*) before they
+    are matched. A variant of a registered name (the same first word:
+    'GOODLIFE CLUBS' for 'GOODLIFE FITNESS') at the fee inside the cadence
+    asks 'Is this a second bill?'.
+
 A plain plan (no membership word: 'Costco' $65 yearly, Norton, Netflix)
-keeps the I-38 rule: a second charge inside a long period is a second bill,
-whatever the amount — and when the amount is not the agreed one, he is asked
-first. Its bill under a shorter form of its name at another price ('ROGERS'
+keeps the I-38 rule: a second charge inside a long period is a second bill —
+claimed when it is at the first one's amount or names a membership word,
+and otherwise his question (round 8, F4; round 7 claimed it with 'ask him
+first'). Its bill under a shorter form of its name at another price ('ROGERS'
 for 'Rogers internet', 29% more) is 'ask_owner' too.
 """
 
@@ -115,10 +141,12 @@ CHECKS: list[tuple] = [
         ("GOODLIFE FITNESS", 25.00, "2026-09-05", "unexpected_merchant", 0.0, "")], 54.99),
     # round 4 verify-b: a plain registration (no membership word) keeps the
     # plain-plan rule, and asks first when the amount is not the agreed one
+    # (round 8, F4: a second charge inside the year with no membership word and
+    # not at the first one's amount is his question, not a claim)
     ("plain 'Costco' yearly plan", [("Costco", 65.00, "yearly")], [
         ("COSTCO", 65.00, "2026-08-01", "expected", 0.0, ""),
-        ("COSTCO.CA", 89.99, "2026-09-20", "duplicate", 89.99, ASK),
-        ("COSTCO", 120.31, "2026-09-03", "duplicate", 120.31, ASK),
+        ("COSTCO.CA", 89.99, "2026-09-20", "ask_owner", 0.0, QUESTION),
+        ("COSTCO", 120.31, "2026-09-03", "ask_owner", 0.0, QUESTION),
         ("COSTCO GAS", 70.10, "2026-09-12", "unexpected_merchant", 0.0, "")], None),
     # round 4 verify-c (skep/gu.py): real rises and double bills of the fee
     ("Prime 79 -> 99 a year later", [("Amazon Prime membership", 79.00, "yearly")], [
@@ -301,9 +329,11 @@ CHECKS: list[tuple] = [
     ("Prime 99 -> 129 a year later", [PRIME], [
         ("AMAZON PRIME", 99.00, "2025-10-01", "expected", 0.0, ""),
         ("AMAZON PRIME", 129.00, "2026-10-01", "ask_owner", 0.0, QUESTION)], 0.0),
-    ("Prime with sales tax is the fee", [PRIME], [
+    # (round 8, F4: once $99 is on file, $99 is the agreed amount — the fee
+    # with tax a year later is his to say about)
+    ("Prime with sales tax a year after the fee", [PRIME], [
         ("AMAZON PRIME", 99.00, "2025-10-01", "expected", 0.0, ""),
-        ("AMAZON PRIME", 111.87, "2026-10-01", "expected", 0.0, "")], 0.0),
+        ("AMAZON PRIME", 111.87, "2026-10-01", "ask_owner", 0.0, QUESTION)], 0.0),
     ("Prime with Quebec tax, first bill", [PRIME], [
         ("AMAZON PRIME", 113.83, "2026-10-01", "expected", 0.0, "")], 0.0),
     ("CAA-Québec billed twice, in French", [("CAA-Québec adhésion", 95.00, "yearly")], [
@@ -317,13 +347,15 @@ CHECKS: list[tuple] = [
     ("CAA renewal twice in two weeks", [CAA], [
         ("CAA SOUTH CENTRAL ONT", 120.00, "2026-09-01", "expected", 0.0, ""),
         ("CAA SOUTH CENTRAL ONT", 120.00, "2026-09-15", "duplicate", 120.00, "")], 120.00),
+    # (round 8, F4: no membership word and not the same amount as the first:
+    # his question, not a claim)
     ("CAA again with tax", [CAA], [
         ("CAA SOUTH CENTRAL ONT", 120.00, "2026-03-01", "expected", 0.0, ""),
-        ("CAA SOUTH CENTRAL ONT", 135.60, "2026-09-15", "duplicate", 120.00, "")], 120.00),
+        ("CAA SOUTH CENTRAL ONT", 135.60, "2026-09-15", "ask_owner", 0.0, QUESTION)], 0.0),
     ("gym billed again ten days later, with tax", [("GoodLife Fitness membership", 54.99,
                                                     "monthly")], [
         ("GOODLIFE FITNESS", 54.99, "2026-09-01", "expected", 0.0, ""),
-        ("GOODLIFE FITNESS", 62.14, "2026-09-11", "duplicate", 54.99, "")], 54.99),
+        ("GOODLIFE FITNESS", 62.14, "2026-09-11", "ask_owner", 0.0, QUESTION)], 0.0),
     ("a card test and a year paid ahead at the gym",
      [("GoodLife Fitness membership", 54.99, "monthly")], [
         ("GOODLIFE FITNESS", 54.99, "2026-09-01", "expected", 0.0, ""),
@@ -358,6 +390,57 @@ CHECKS: list[tuple] = [
     ("a look-alike gym", [("GoodLife Fitness membership", 54.99, "monthly")], [
         ("GOODLIFE FITNESS", 54.99, "2026-09-01", "expected", 0.0, ""),
         ("G00DLIFE FITNESS", 54.99, "2026-09-03", "ask_owner", 0.0, PHISH)], 0.0),
+    # ---------------------------------------------------------- round 8 (F4)
+    # v2 D5 unsafe_cases: the fee with 11% or 13% tax after the fee, with no
+    # membership word, was a $65 duplicate claimed without asking
+    ("the fee with tax after the fee, under shopping names", [COSTCO], [
+        ("COSTCO MEMBERSHIP", 65.00, "2026-08-01", "expected", 0.0, ""),
+        ("COSTCO.CA", 72.15, "2026-09-03", "ask_owner", 0.0, QUESTION),
+        ("COSTCO", 73.45, "2026-09-10", "ask_owner", 0.0, QUESTION)], 0.0),
+    # ...French insurance at the fee was a $95 duplicate (v2 new_regressions)
+    ("CAA-Québec, then its insurance at the fee", [("CAA-Québec adhésion", 95.00, "yearly")], [
+        ("CAA-QUEBEC", 95.00, "2026-01-05", "expected", 0.0, ""),
+        ("CAA-QUEBEC ASSURANCE", 95.00, "2026-03-01", "ask_owner", 0.0, QUESTION)], 0.0),
+    *[(f"CAA, then {m} at the fee", [CAA], [
+        ("CAA MEMBERSHIP", 120.00, "2026-02-01", "expected", 0.0, ""),
+        (m, 120.00, "2026-09-03", "ask_owner", 0.0, QUESTION)], 0.0)
+      for m in ("CAA VOYAGES", "CAA ASSURANCES", "CAA STATION")],
+    *[(f"Costco, then {m} at the fee", [COSTCO], [
+        ("COSTCO MEMBERSHIP", 65.00, "2026-02-01", "expected", 0.0, ""),
+        (m, 65.00, "2026-09-03", "ask_owner", 0.0, QUESTION)], 0.0)
+      for m in ("COSTCO ESSENCE", "COSTCO CARBURANT", "COSTCO PHARMACIE", "COSTCO OPTIQUE",
+                "COSTCO PNEUS", "COSTCO EPICERIE")],
+    # ...a rise that lands on the fee with tax read 'as agreed. Quiet.'
+    ("gym 54.99 -> 63.24, the fee with 15% tax", [("GoodLife Fitness membership", 54.99,
+                                                   "monthly")], [
+        ("GOODLIFE FITNESS", 54.99, "2026-08-01", "expected", 0.0, ""),
+        ("GOODLIFE FITNESS", 54.99, "2026-09-01", "expected", 0.0, ""),
+        ("GOODLIFE FITNESS", 63.24, "2026-10-01", "ask_owner", 0.0, QUESTION)], 0.0),
+    ("Prime registered with its tax, then more", [("Amazon Prime", 111.87, "yearly")], [
+        ("AMAZON PRIME", 111.87, "2025-10-01", "expected", 0.0, ""),
+        ("AMAZON PRIME", 128.65, "2026-10-01", "ask_owner", 0.0, QUESTION)], 0.0),
+    ("the gym's fee with tax, every month", [("GoodLife Fitness membership", 54.99,
+                                              "monthly")], [
+        ("GOODLIFE FITNESS", 62.14, "2026-08-01", "expected", 0.0, ""),
+        ("GOODLIFE FITNESS", 62.14, "2026-09-01", "expected", 0.0, "")], 0.0),
+    # ...look-alikes the decision promised to catch
+    ("a Cyrillic Costco at the fee", [COSTCO], [
+        ("COSTCO MEMBERSHIP", 65.00, "2026-02-01", "expected", 0.0, ""),
+        ("C\u041eSTCO MEMBERSHIP", 65.00, "2026-09-03", "ask_owner", 0.0, PHISH)], 0.0),
+    ("the membership through PayPal", [COSTCO], [
+        ("COSTCO MEMBERSHIP", 65.00, "2026-02-01", "expected", 0.0, ""),
+        ("PAYPAL *COSTCOMEMBER", 65.00, "2026-09-03", "duplicate", 65.00, "")], 65.00),
+    ("the gym through Square and Stripe", [("GoodLife Fitness membership", 54.99, "monthly")], [
+        ("GOODLIFE FITNESS", 54.99, "2026-09-01", "expected", 0.0, ""),
+        ("SQ *GOODLIFE FITNESS", 54.99, "2026-09-03", "duplicate", 54.99, ""),
+        ("STRIPE*GOODLIFE FITNESS", 54.99, "2026-10-01", "expected", 0.0, "")], 54.99),
+    ("a second bill under a variant name", [("GoodLife Fitness membership", 54.99, "monthly")], [
+        ("GOODLIFE FITNESS", 54.99, "2026-09-01", "expected", 0.0, ""),
+        ("GOODLIFE CLUBS", 54.99, "2026-09-06", "ask_owner", 0.0, QUESTION)], 0.0),
+    ("a variant name a month on is a place not in his register",
+     [("GoodLife Fitness membership", 54.99, "monthly")], [
+        ("GOODLIFE FITNESS", 54.99, "2026-08-01", "expected", 0.0, ""),
+        ("GOODLIFE CLUBS", 54.99, "2026-09-06", "unexpected_merchant", 0.0, "")], None),
     # the large-amount warning stays on (round 4 verify-b)
     ("large charges where he holds memberships", [PRIME, CAA], [
         ("AMAZON.CA", 1499.99, "2026-09-03", "unexpected_merchant", 0.0, LARGE),
@@ -481,12 +564,14 @@ STATEMENTS: list[tuple] = [
         ("GOODLIFE FITNESS", 54.99, "2026-09-01"), ("GOODLIFE FITNESS", 79.99, "2026-10-01")],
      [("GOODLIFE FITNESS", 54.99, "2026-09-01", "duplicate", 54.99),
       ("GOODLIFE FITNESS", 79.99, "2026-10-01", "ask_owner", 0.00)], 54.99),
+    # (round 8, F4: 'AMZN MKTP CA' is a variant of the Amazon name, at the fee,
+    # inside the year: 'Is this a second bill?')
     ("Prime and Amazon shopping", [PRIME], [
         ("AMAZON PRIME", 99.00, "2026-02-01"), ("AMAZON.CA", 104.50, "2026-03-03"),
         ("AMAZON.CA PRIME", 89.99, "2026-03-09"), ("AMZN MKTP CA", 99.00, "2026-04-02")],
      [("AMAZON.CA", 104.50, "2026-03-03", "ask_owner", 0.00),
       ("AMAZON.CA PRIME", 89.99, "2026-03-09", "ask_owner", 0.00),
-      ("AMZN MKTP CA", 99.00, "2026-04-02", "unexpected_merchant", 0.00)], 0.00),
+      ("AMZN MKTP CA", 99.00, "2026-04-02", "ask_owner", 0.00)], 0.00),
     ("CAA under two names in one year", [CAA], [
         ("CAA SOUTH CENTRAL ONT", 120.00, "2026-02-01"), ("CAA ONTARIO MBR", 120.00, "2026-08-01")],
      [("CAA ONTARIO MBR", 120.00, "2026-08-01", "duplicate", 120.00)], 120.00),
@@ -497,6 +582,37 @@ STATEMENTS: list[tuple] = [
     ("Costco under two names on one statement", [COSTCO], [
         ("COSTCO MEMBERSHIP", 65.00, "2026-09-01"), ("COSTCO WHOLESALE W551", 73.45, "2026-09-20")],
      [("COSTCO WHOLESALE W551", 73.45, "2026-09-20", "ask_owner", 0.00)], 0.00),
+]
+
+
+# Round 8 (F4): after mark_cancelled (v2 new_regressions D5 [MEDIUM]):
+# (what it is, registration, the charge before, cancelled on, the charge
+#  after, verdict, recoverable, dispute pack)
+CANCELLED: list[tuple] = [
+    ("the gym at a new price", ("GoodLife Fitness membership", 54.99, "monthly"),
+     ("GOODLIFE FITNESS", 54.99, "2026-08-01"), "2026-09-01",
+     ("GOODLIFE FITNESS", 59.99, "2026-10-01"), "charged_after_cancel", 59.99, 59.99),
+    ("the gym's annual fee", ("GoodLife Fitness membership", 54.99, "monthly"),
+     ("GOODLIFE FITNESS", 54.99, "2026-08-01"), "2026-09-01",
+     ("GOODLIFE FITNESS ANNUAL FEE", 49.99, "2026-10-01"), "charged_after_cancel", 49.99, 49.99),
+    ("the gym's fee itself", ("GoodLife Fitness membership", 54.99, "monthly"),
+     ("GOODLIFE FITNESS", 54.99, "2026-08-01"), "2026-09-01",
+     ("GOODLIFE FITNESS", 54.99, "2026-10-01"), "charged_after_cancel", 54.99, 54.99),
+    ("Costco renewed at $70", ("Costco Membership", 65.00, "yearly"),
+     ("COSTCO MEMBERSHIP", 65.00, "2025-10-01"), "2026-03-01",
+     ("COSTCO MEMBERSHIP", 70.00, "2026-10-01"), "charged_after_cancel", 70.00, 70.00),
+    ("Prime renewed at $129", ("Amazon Prime", 99.00, "yearly"),
+     ("AMAZON PRIME", 99.00, "2025-10-01"), "2026-03-01",
+     ("AMAZON PRIME", 129.00, "2026-10-01"), "charged_after_cancel", 129.00, 129.00),
+    ("a plain plan, as before", ("Netflix", 16.49, "monthly"),
+     ("NETFLIX.COM", 16.49, "2026-08-01"), "2026-09-01",
+     ("NETFLIX.COM", 18.99, "2026-10-01"), "charged_after_cancel", 18.99, 18.99),
+    ("a smoothie at the gym after it", ("GoodLife Fitness membership", 54.99, "monthly"),
+     ("GOODLIFE FITNESS", 54.99, "2026-08-01"), "2026-09-01",
+     ("GOODLIFE FITNESS", 12.50, "2026-10-01"), "ask_owner", 0.0, 0.0),
+    ("groceries at the warehouse after it", ("Costco Membership", 65.00, "yearly"),
+     ("COSTCO MEMBERSHIP", 65.00, "2025-10-01"), "2026-03-01",
+     ("COSTCO WHOLESALE W551", 212.45, "2026-10-01"), "ask_owner", 0.0, 0.0),
 ]
 
 
@@ -616,6 +732,37 @@ class AMembershipIsMatchedByItsAmountAndItsName(_Money):
         fake = self.guard([COSTCO]).review_statement([
             {"merchant": "C0STCO MEMBERSHIP", "amount": 65.00, "date": "2026-09-03"}])
         self.assertIn("made to look like one you pay", fake["summary"])
+
+    def test_a_charge_after_a_cancelled_membership_is_claimed_again(self):
+        wrong = []
+        for title, reg, before, on, after, verdict, rec, pack in CANCELLED:
+            g = self.guard([reg])
+            g.check_charge(*before)
+            g.mark_cancelled(reg[0], on)
+            r = g.check_charge(*after)
+            got = (r["verdict"], r["recoverable"], g.dispute_pack(reg[0])["amount_in_dispute"])
+            if got != (verdict, rec, pack):
+                wrong.append((title, got, "want", (verdict, rec, pack), r["what_happened"][:160]))
+            if verdict == "ask_owner" and not (r.get("question") and r["question"] in
+                                               r["what_happened"]):
+                wrong.append((title, "asks no plain question", r["what_happened"][:160]))
+            st = self.guard([reg])
+            st.check_charge(*before)
+            st.mark_cancelled(reg[0], on)
+            s = st.review_statement([{"merchant": after[0], "amount": after[1],
+                                      "date": after[2]}])
+            if round(s["recoverable_total"], 2) != round(rec, 2):
+                wrong.append((title, "statement", s["recoverable_total"], s["summary"][:120]))
+        self.assertEqual(wrong, [], "\n".join(map(repr, wrong)))
+
+    def test_a_second_bill_under_a_variant_name_is_asked_about_plainly(self):
+        g = self.guard([("GoodLife Fitness membership", 54.99, "monthly")])
+        g.check_charge("GOODLIFE FITNESS", 54.99, "2026-09-01")
+        r = g.check_charge("GOODLIFE CLUBS", 54.99, "2026-09-06")
+        self.assertEqual(r["verdict"], "ask_owner", r)
+        self.assertEqual(r["question"], "Is this a second bill?", r)
+        self.assertIn("GoodLife Fitness membership", r["what_happened"])
+        self.assertEqual(r["recoverable"], 0.0)
 
     def test_the_same_charge_checked_again_asks_whether_it_shows_twice(self):
         # money-14: one at a time, a second identical charge cannot be told

@@ -3434,22 +3434,21 @@ class Representative:
                     problems.append({"subject": subject, "why": (
                         f"it touches '{subject}', which his own rule keeps from this person")})
             # read in any case, short names too (D6, round 7: 'li has hiv',
-            # 'ed has ms so he can't come', 'Hi all, Ed has M.S.')
-            dw = grounding.any_case_words(body)
+            # 'ed has ms so he can't come', 'Hi all, Ed has M.S.'), and the
+            # fact's person in any case too (F5, round 8: 'jo is on chemo …'
+            # typed in small letters; 'Ed has M S'; 'li is poz')
+            names = tuple(str(p.get("name") or "") for p in provenance.his_people(self.c.data))
             for f in self.c.data.get("facts") or []:
                 if not isinstance(f, dict):
                     continue
                 if f.get("visibility", "engines") == "engines" and not f.get("sensitivity"):
                     continue
                 said = f.get("fact", "")
-                fw = grounding.any_case_words(said)
-                shared = fw & dw
                 # the person it is about, by name, with a word of what makes
-                # it private ('Jo … chemo'); or two of its words and at least
-                # half of them ('Ed has MS' from 'Ed has MS and uses a cane')
-                about = grounding.subject_names(said) & dw
-                if (about and grounding.sensitive_content(said) & dw) or (
-                        len(fw) >= 2 and len(shared) >= max(2, -(-len(fw) // 2))):
+                # it private ('Jo … chemo') or of his health or money; or two
+                # of its words and at least half of them ('Ed has MS' from
+                # 'Ed has MS and uses a cane')
+                if grounding.draft_repeats(said, body, names):
                     what = " and ".join(grounding.CLASS_WORDS_PLAIN.get(k, k)
                                         for k in f.get("sensitivity") or []) or "him"
                     problems.append({"fact_id": f.get("id"), "why": (

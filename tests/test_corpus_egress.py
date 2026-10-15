@@ -47,6 +47,26 @@ in clear ('My PIN is 4821. The new one is 5932'). Now:
     whole date, a dose, an ordinal or a time like '10am' is not code-shaped
     there. A value in the next sentence counts ('ask Karen. It is tulip99').
 
+Round 8 (F3) — codes and secret answers. The round-7 skeptic found secrets
+no keyword named going out in clear when he kept them himself, and a guessed
+password confirmed by a search (roundD_verdicts.json v1 D3). Now:
+
+  * The keywords gain opener, unlock, a safe that opens, 'secret number',
+    'the numbers for', chiffre secret, code secret, and their spaced-out or
+    leet forms read through the shared fold ('P I N', 'p@ssword', 'pa$$word',
+    'passw0rd').
+  * ANSWER words — security question, secret question, 'answer to', maiden
+    name, nom de jeune fille, magic word, secret word, mot magique, mot
+    secret, passphrase — hide the whole value after them on the way out, and
+    are refused from an engine at the door. The value is what follows ':',
+    'is' or '=' (or, right after the word, a capitalised name or a word with
+    a digit), so 'She kept her maiden name when she married' is a sentence.
+  * In a note that names a code, every run of two digits or more is hidden on
+    the way out ('the dog's name followed by 77'); a two-digit amount, dose,
+    count or time is not ('it costs $25', 'wait time 45 minutes'). Rows whose
+    two-digit numbers now stay home changed for that reason.
+  * Every topic search matches only what would be shown (test_safe_defaults).
+
 Outcomes:
   MARK    refused at the door with the 'already has something hidden' message;
           if an older version kept it, it still never goes out with the
@@ -83,7 +103,8 @@ CASES: list[tuple[str, str, list[str], list[str]]] = [
     ("Votre NIP, dossier 8765, est 4321", SECRET, ["4321", "8765"], ["Votre NIP, dossier"]),
     ("My PIN, tel 4824", SECRET, ["4824"], []),
     ("My debit card PIN: call 4825", SECRET, ["4825"], []),
-    ("Voicemail PIN: call *98 then 4823", SECRET, ["4823"], ["call *98 then"]),
+    # (round 8, F3: '98' is two digits in a note that names a PIN: it stays home)
+    ("Voicemail PIN: call *98 then 4823", SECRET, ["4823", "98"], ["call *", "then"]),
     ("My bank PIN (ref 5678) is 4822", SECRET, ["4822", "5678"], ["My bank PIN (ref"]),
     ("The alarm code (call 613-555-0199 if it rings) is 4821", SECRET, ["4821"],
      ["613-555-0199"]),
@@ -184,8 +205,9 @@ CASES: list[tuple[str, str, list[str], list[str]]] = [
      ["1-800-769-2511", "ticket"]),
     ("Forgot my PIN, called RBC at 1-800-769-2511, case 58213", ASK, ["58213"],
      ["1-800-769-2511", "case"]),
+    # (round 8, F3: '10' is two digits in a note that names a PIN: it stays home)
     ("Lost my bank card PIN, phoned 1-800-769-2511 on Monday, new card arrives in 7 to 10 "
-     "business days", BENIGN, [], ["1-800-769-2511"]),
+     "business days", KEPT, ["10 business"], ["1-800-769-2511"]),
     # verify-b: still missed in both rounds
     ("My PIN [hidden] call 4821", MARK, ["4821"], []),
     ("Codes: garage 4821, alarm 7731, shed 1234", SECRET, ["4821", "7731", "1234"], ["Codes:"]),
@@ -265,13 +287,49 @@ CASES: list[tuple[str, str, list[str], list[str]]] = [
     ("Alarm: call ADT first. Then 4821#", ASK, ["4821"], ["Alarm: call ADT first."]),
     # D3 on the way out: kept from an AI (nothing code-shaped after the word),
     # but every number in the note is hidden all the same
-    ("My blood pressure was 140 over 90 and my PIN is fine", KEPT, ["140"],
-     ["over 90 and my PIN is fine"]),
+    # (round 8, F3: '90' is two digits in a note that names a PIN: it stays home)
+    ("My blood pressure was 140 over 90 and my PIN is fine", KEPT, ["140", "90"],
+     ["over", "and my PIN is fine"]),
     ("Remind me to change my PIN on 2026-11-02", KEPT, ["2026-11-02"],
      ["Remind me to change my PIN on"]),
+    # (round 8, F3: '10' is two digits in a note that names a PIN: it stays home)
     ("Lost my bank card PIN, phoned 1-800-769-2511 on Monday, new card arrives in 7 to 10 "
-     "business days", BENIGN, [], ["1-800-769-2511"]),
+     "business days", KEPT, ["10 business"], ["1-800-769-2511", "new card arrives in 7 to"]),
     ("Anna calls on Sundays at 1030", BENIGN, [], []),
+    # ---------------------------------------------------------- round 8 (F3)
+    # v1 D3 unsafe_cases: taken from an engine, out in clear when he kept them
+    ("Garage door opener: 4821", SECRET, ["4821"], ["Garage door opener:"]),
+    ("iPhone unlock: 482193", SECRET, ["482193"], ["iPhone unlock:"]),
+    ("The safe opens with 32-17-8", SECRET, ["32-17-8"], ["The safe opens with"]),
+    ("My secret number for the bank card is 4821", SECRET, ["4821"],
+     ["My secret number for the bank card is"]),
+    ("The numbers for the bank machine are 4821", SECRET, ["4821"],
+     ["The numbers for the bank machine are"]),
+    ("Le chiffre secret de ma carte : 4821", SECRET, ["4821"], ["Le chiffre secret de ma carte"]),
+    ("Mon code secret : 4821", SECRET, ["4821"], ["Mon code secret"]),
+    ("P I N 4821", SECRET, ["4821"], []), ("p@ssword: Hunter22", SECRET, ["Hunter22"], []),
+    ("pa$$word: Hunter22", SECRET, ["Hunter22"], []),
+    ("passw0rd is Hunter22", SECRET, ["Hunter22"], []),
+    ("Security question answer: Fluffy", SECRET, ["Fluffy"], ["Security question answer:"]),
+    ("Mother's maiden name for the bank: Kovacs", SECRET, ["Kovacs"],
+     ["Mother's maiden name for the bank:"]),
+    ("The magic word for the computer is tulip", SECRET, ["tulip"],
+     ["The magic word for the computer is"]),
+    ("The answer to my secret question is Fluffy", SECRET, ["Fluffy"], []),
+    ("Secret question: first pet. Answer to it: Rex the Second", SECRET, ["Rex the Second"], []),
+    ("Nom de jeune fille de ma m\u00e8re : Kovacs", SECRET, ["Kovacs"], []),
+    ("Mot magique : tulipe jaune", SECRET, ["tulipe jaune"], ["Mot magique"]),
+    ("Le mot secret est tournesol", SECRET, ["tournesol"], ["Le mot secret est"]),
+    ("Secret word: bluebird", SECRET, ["bluebird"], ["Secret word:"]),
+    ("Mother's maiden name Kovacs", SECRET, ["Kovacs"], []),
+    ("The password is the dog's name followed by 77", KEPT, ["77"],
+     ["The password is the dog's name followed by"]),
+    # ...and sentences with those words that hold no answer
+    ("She kept her maiden name when she married", BENIGN, [], []),
+    ("I need an answer to Karen's letter by Friday", BENIGN, [], []),
+    ("Voicemail password: call 1-800-555-0199 to reset it, it costs $25", BENIGN, [], []),
+    ("Password help line 1-800-555-0199, wait time 45 minutes, option 3", BENIGN, [], []),
+    ("The garage door opener needs a new battery", BENIGN, [], []),
 ]
 
 # verify-c's own corpus (sk5/corp_mine.py): benign notes. Round 7 (D3): a

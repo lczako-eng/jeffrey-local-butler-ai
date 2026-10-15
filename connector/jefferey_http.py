@@ -1110,7 +1110,8 @@ class RuleIn(BaseModel):
 def set_rule(r: RuleIn) -> dict:
     """Write one of the owner's standing rules, in their words. Only at their
     word. From you a no (disclosure, allow=false) holds at once, noted by the
-    AI; any other rule is a proposal that changes nothing until he confirms it."""
+    AI; any other rule is a proposal that changes nothing until he confirms it.
+    A no for someone he has not recorded holds for everyone and every AI."""
     try:
         return rules.set_rule(r.kind, r.tags, r.instruction, r.audience, r.allow)
     except ValueError as e:

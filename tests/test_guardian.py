@@ -1018,10 +1018,15 @@ class AfterTheFixes(Temp):
         g = self.guard()
         g.expect_charge("Norton", 119.99, "yearly")
         self.assertEqual(g.check_charge("NORTON", 119.99, "2026-03-01")["verdict"], "expected")
+        # round 8 (F4): a second bill inside the year is claimed only at the
+        # first one's amount or under a membership word; at another price it
+        # is his question ('Is this a second bill, …?'), with nothing claimed
         for amt, d in ((59.99, "2026-06-01"), (129.99, "2026-08-01")):
             r = g.check_charge("NORTON", amt, d)
-            self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", amt), amt)
+            self.assertEqual((r["verdict"], r["recoverable"]), ("ask_owner", 0.0), amt)
             self.assertIn("second bill", r["what_happened"])
+        r = g.check_charge("NORTON", 119.99, "2026-09-01")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", 119.99))
         # a monthly plan is still allowed a new price
         g.expect_charge("Spotify", 12.42)
         g.check_charge("Spotify", 12.42, "2026-08-05")
@@ -1246,10 +1251,13 @@ class ShoppingIsNotTheMembership(Temp):
         # (round 6 claimed it with 'ask him first'; D5 claims nothing)
         self.assertEqual(g.dispute_pack("Costco Membership")["amount_in_dispute"], 65.00)
         # ...and a plain yearly plan keeps the I-38 rule: a second charge
-        # inside the year is a second bill, whatever the amount
+        # inside the year is a second bill — claimed at the first one's
+        # amount, his question at another (round 8, F4)
         g.expect_charge("Norton 360", 119.99, "yearly")
         g.check_charge("NORTON 360", 119.99, "2026-08-01")
         self.assertEqual(g.check_charge("NORTON 360", 59.99, "2026-09-01")["verdict"],
+                         "ask_owner")
+        self.assertEqual(g.check_charge("NORTON 360", 119.99, "2026-09-02")["verdict"],
                          "duplicate")
 
 

@@ -632,8 +632,13 @@ class OnlyTheCaretakerReadsHisRules(Child):
                 ("list_rules", {}), ("check_disclosure", {"audience": "karen", "tags": "health"}),
                 ("guidance_for", {"tags": "health"}))})
         """
+        # (round 8, F1: Karen is one of his people, recorded at his own console —
+        # a no for someone nobody knows holds for every AI, his caretaker too,
+        # and then its words are not handed to the caretaker either)
         self.py("""
-            import jefferey_mcp as m
+            import access, jefferey_mcp as m
+            with access.owner_console():
+                m.life.add_person("Karen Novak", "ex-wife")
             mcp_call(m, "set_rule", {"kind": "disclosure", "tags": "health", "audience": "karen",
                      "allow": False, "instruction": "Never tell Karen about my PTSD."})
             out(1)

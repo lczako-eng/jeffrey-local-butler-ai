@@ -89,6 +89,228 @@ def normalise(text) -> str:
     return _normalise(str(text or ""))
 
 
+# ------------------------------------------------------------------- fold
+# Round 8 (engineer 2): ONE reader for letters that look like Latin ones,
+# shared by every reader that still reads words — who a 'no' is for (F1),
+# the health words (F2), the words that announce a secret (F3, egress), the
+# names on a card statement (F4, guardian), a draft (F5) and the door words
+# (F6, conscience). Each round before, every reader kept its own table and a
+# skeptic found the letter it missed: 'Сlaude' with a Cyrillic С, 'Unlօck
+# the dօօr' in Armenian, 'Ꮮet him in' in Cherokee, 'ʟet the plumber ɪn' in
+# small capitals, 'Cl4ude', 'p@ssword', 'Iet him in', '|et the man |n', 'P I
+# N', 'le t him in'.
+#
+# What is read, letter by letter: compatible forms (NFKC: full-width and
+# mathematical letters, ligatures), Cyrillic, Greek, Armenian and Cherokee
+# letters that look like Latin ones, every LATIN LETTER SMALL CAPITAL, digits
+# of every script, dashes and quotes; zero-width characters are dropped and,
+# unless asked to keep them, accents.
+#
+# What is read word by word — and ONLY when the result is a word the reader
+# knows, so 'Hunter22', 'gpt4o', 'A1C' and 'If' stay themselves: digits and
+# @ $ | ! written for letters, a capital I written for l, letters spaced out
+# or dotted ('C l a u d e', 'A.I.'), a word split by a space ('le t'), and a
+# hyphenated name ('Chat-GPT').
+def _pairs(src: str, dst: str) -> dict:
+    assert len(src) == len(dst), (src, dst)
+    return dict(zip(src, dst))
+
+
+_LOOK = {
+    # Cyrillic
+    **_pairs("АВЕКМНОРСТХУІЈЅаеорсухіјѕԁһӏԛԝвкмнтүӀԜҮЅԌ",
+             "ABEKMHOPCTXYIJSaeopcyxijsdhlqwbkmhtylWYSG"),
+    # Greek
+    **_pairs("ΑΒΕΖΗΙΚΜΝΟΡΤΥΧαβεικνορτυχγϲϳ", "ABEZHIKMNOPTYXabeikvoptuxycj"),
+    # Armenian
+    **_pairs("օսհոցզռյգաՕՍՏԼ", "ouhngqnjqwOUSL"),
+}
+# Cherokee capitals that look like Latin ones, and their small forms
+_CHEROKEE = {chr(cp): v for cp, v in (
+    (0x13A0, "D"), (0x13A1, "R"), (0x13A2, "T"), (0x13A5, "i"), (0x13A9, "Y"), (0x13AA, "A"),
+    (0x13AB, "J"), (0x13AC, "E"), (0x13B3, "W"), (0x13B7, "M"), (0x13BB, "H"), (0x13C0, "G"),
+    (0x13C2, "h"), (0x13C3, "Z"), (0x13CF, "b"), (0x13D2, "R"), (0x13D4, "W"), (0x13D5, "S"),
+    (0x13D9, "V"), (0x13DA, "S"), (0x13DE, "L"), (0x13DF, "C"), (0x13E2, "P"), (0x13E6, "K"),
+    (0x13F3, "G"), (0x13F4, "B"))}
+_LOOK.update(_CHEROKEE)
+_LOOK.update({chr(0xAB70 + ord(c) - 0x13A0): v.lower() for c, v in _CHEROKEE.items()
+              if 0x13A0 <= ord(c) < 0x13F0})
+_LOOK.update({chr(0x13F8 + ord(c) - 0x13F0): v.lower() for c, v in _CHEROKEE.items()
+              if 0x13F0 <= ord(c) <= 0x13F5})
+_DASH_CHARS = frozenset("‐‑‒–—―−﹘﹣－")
+_QUOTE_CHARS = frozenset("‘’‚‛′ʼ`´")
+_SPECIAL = {"ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ø": "o", "Ø": "O", "ß": "ss",
+            "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ı": "i", "ȷ": "j"}
+_SMALL_CAP = "LATIN LETTER SMALL CAPITAL "
+
+
+@functools.lru_cache(maxsize=1 << 14)
+def _fold_char(ch: str, accents: bool) -> str:
+    if unicodedata.category(ch) == "Cf":
+        return ""                                 # zero-width spaces, soft hyphens
+    if ch in _LOOK:
+        return _LOOK[ch]
+    if ch.isdecimal():
+        try:
+            return str(unicodedata.decimal(ch))
+        except ValueError:
+            pass
+    out = []
+    for c in unicodedata.normalize("NFKC", ch):
+        if c.isascii():
+            out.append(c)
+        elif c in _LOOK:
+            out.append(_LOOK[c])
+        elif c in _DASH_CHARS:
+            out.append("-")
+        elif c in _QUOTE_CHARS:
+            out.append("'")
+        elif c in _SPECIAL:
+            out.append(_SPECIAL[c])
+        elif unicodedata.name(c, "").startswith(_SMALL_CAP) and \
+                len(unicodedata.name(c)) == len(_SMALL_CAP) + 1:
+            out.append(unicodedata.name(c)[-1].lower())
+        elif not accents and unicodedata.combining(c):
+            continue
+        elif not accents:
+            base = "".join(x for x in unicodedata.normalize("NFKD", c)
+                           if not unicodedata.combining(x))
+            out.append("".join(_LOOK.get(x, x) for x in base) or c)
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+_LEET = {"0": "o", "1": "li", "2": "z", "3": "e", "4": "a", "5": "s", "6": "gb", "7": "t",
+         "8": "b", "9": "g", "@": "a", "$": "s", "|": "li", "!": "il", "I": "l"}
+_LEET_TOKEN = re.compile(r"(?:[^\W_]|[@$|!])+")
+_LEET_CHARS = frozenset(_LEET)
+_HYPHENED = re.compile(r"(?<![^\W_])[^\W_]+(?:-[^\W_]+)+(?![^\W_])")
+_SPACED_RUN = re.compile(r"(?<![^\W_])[^\W\d_](?:(?:\. |[ .\-·])[^\W\d_]){1,15}\.?(?![^\W_])")
+_LONE = frozenset("a i y o e u à á è é ô".split())
+_SPLIT = re.compile(r"(?<!\S)([^\W\d_]{1,12}) ([^\W\d_])(?=[\s.,;:!?]|$)"
+                    r"|(?<!\S)([^\W\d_]) ([^\W\d_]{1,12})(?=[\s.,;:!?]|$)")
+
+
+def _knows(known, w: str) -> bool:
+    return (w in known) if isinstance(known, frozenset) else bool(known(w))
+
+
+def _deleet(tok: str, known) -> str | None:
+    """The word a token with digits or symbols for letters spells, if the
+    reader knows it — same length, letter for letter — or None."""
+    if not any(c.isalpha() for c in tok) or _knows(known, tok.lower()):
+        return None
+    at = [i for i, c in enumerate(tok) if c in _LEET]
+    if not at or len(at) > 8:
+        return None
+    options = [(_LEET[tok[i]] + ("i" if tok[i] == "I" else "")) for i in at]
+    best = None
+
+    def walk(k: int, cur: list[str]) -> bool:
+        nonlocal best
+        if k == len(at):
+            w = "".join(cur).lower()
+            if _knows(known, w):
+                best = "".join(cur)
+                return True
+            return False
+        for o in options[k]:
+            cur[at[k]] = o
+            if walk(k + 1, cur):
+                return True
+        cur[at[k]] = tok[at[k]]
+        return False
+
+    walk(0, list(tok))
+    return best
+
+
+def _edit(t: str, src: list[int] | None, repl: dict[int, str], drop: set[int]
+          ) -> tuple[str, list[int] | None]:
+    if not repl and not drop:
+        return t, src
+    if src is None:
+        src = list(range(len(t)))
+    out, where = [], []
+    for i, ch in enumerate(t):
+        if i in drop:
+            continue
+        out.append(repl.get(i, ch))
+        where.append(src[i])
+    return "".join(out), where
+
+
+def fold_map(text: str, known=None, accents: bool = False) -> tuple[str, list[int]]:
+    """`text` read as Latin letters (see above), case kept, and where each
+    character of the result came from in `text`. `known` (a frozenset of
+    lower-case words, or a function of one) says which words this reader
+    knows; without it only letters are folded, never words."""
+    text = str(text or "")
+    src: list[int] | None
+    if text.isascii():
+        t, src = text, None                       # built only if a word is changed
+    else:
+        chars: list[str] = []
+        src = []
+        for i, ch in enumerate(text):
+            f = ch if ch.isascii() else _fold_char(ch, accents)
+            chars.append(f)
+            src.extend([i] * len(f))
+        t = "".join(chars)
+    if known is None:
+        return t, (src if src is not None else list(range(len(t))))
+    # 'Chat-GPT' is ChatGPT, 'in-laws' in-laws, when the reader knows the word
+    drop = set()
+    for m in _HYPHENED.finditer(t) if "-" in t else ():
+        if _knows(known, m.group().replace("-", "").lower()):
+            drop |= {m.start() + k for k, c in enumerate(m.group()) if c == "-"}
+    t, src = _edit(t, src, {}, drop)
+    # digits and symbols for letters, a capital I for l
+    repl = {}
+    for m in _LEET_TOKEN.finditer(t) if not _LEET_CHARS.isdisjoint(t) else ():
+        tok = m.group()
+        if not _LEET_CHARS.isdisjoint(tok):
+            w = _deleet(tok, known)
+            if w:
+                repl.update({m.start() + k: b for k, (a, b) in enumerate(zip(tok, w)) if a != b})
+    t, src = _edit(t, src, repl, set())
+    # letters spaced out or dotted: 'C l a u d e', 'A.I.', 'P I N'
+    drop = set()
+    for m in _SPACED_RUN.finditer(t):
+        letters = [k for k, c in enumerate(m.group()) if c.isalpha()]
+        if _knows(known, "".join(m.group()[k] for k in letters).lower()):
+            drop |= {m.start() + k for k in range(len(m.group())) if k not in letters}
+    t, src = _edit(t, src, {}, drop)
+    # a word split by a space: 'le t him in'
+    drop = set()
+    for m in _SPLIT.finditer(t):
+        a, b = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+        lone = b if m.group(1) else a
+        if lone.lower() in _LONE or _knows(known, a.lower()) and _knows(known, b.lower()):
+            continue
+        if _knows(known, (a + b).lower()):
+            drop.add(m.start() + len(a))
+    t, src = _edit(t, src, {}, drop)
+    return t, (src if src is not None else list(range(len(t))))
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _fold(text: str, known) -> str:
+    t, _ = fold_map(text, known)
+    return re.sub(r"\s+", " ", t.translate(_QUOTES).lower()).strip()
+
+
+def fold(text, known=None) -> str:
+    """The text in one spelling for every reader (round 8): look-alike
+    letters read as Latin, accents and zero-width characters off, lower
+    case, one space; digits or symbols for letters, a capital I for l,
+    spaced-out, dotted, split and hyphenated words read back as the word
+    they spell when it is one of `known` (by default FOLD_WORDS: the words
+    of an audience, of his health and money, of a secret and of the door)."""
+    return _fold(str(text or ""), FOLD_WORDS if known is None else known)
+
+
 @functools.lru_cache(maxsize=1 << 17)
 def _words(t: str) -> tuple[str, ...]:
     out = []
@@ -401,6 +623,139 @@ def sensitive_content(text) -> set[str]:
     return set(_sensitive_content(str(text or "")))
 
 
+# --- a draft names the person in any case (F5, round 8) --------------------
+# Round 7 read the DRAFT in any case but still needed the FACT to spell its
+# person's name with a capital, so 'jo is on chemo for her breast cancer …'
+# and 'ED HAS MS …', typed as an elderly owner often types, let 'Jo is on
+# chemo' and 'Ed has MS' go to the neighbours; and 'Ed has M S', 'Ed has
+# multiple sclerosis', 'jo is having chemotherapy', 'li is poz' and 'Lі has
+# HІV' (Cyrillic і) did not repeat 'Ed has MS', 'Jo is on chemo' or 'Li has
+# HIV'. Now the person of a fact is found in any case: the names of people
+# he recorded, its capitalised words, and — for a fact written all in small
+# letters or all in capitals — its first word and every word that is not a
+# common word. Abbreviations are read however they are dotted or spaced
+# (m.s, M. S., M S, M-S are ms; h.i.v is hiv), a short list of synonyms is
+# read as one word, and a draft that names the person with a word of what
+# makes the fact private — or any word of his health or his money — is the
+# fact repeated. Friction is accepted.
+_COMMON = frozenset("""
+    about above across after again against ago all almost alone along already also always
+    among another any anything around asked away back bad be became because become been
+    before began behind being believe best better between big bit both bought bring brought
+    but buy call called came can cannot car care case cause certain change check child city
+    close come comes coming could couple course cut day days did different do does doing done
+    door down during each early either else end enough even evening ever every everything
+    face fact family far feel felt few find fine first five found four friday friend friends
+    from front full gave general get gets getting give given go goes going gone good got great
+    group had half hand hard has have having head hear heard help her here high him his home
+    hope hospital hour hours house how idea important into its just keep kept kind knew know
+    known large last late later least left less let life like likely line little live lives
+    long look looked looking lot lots love made make makes making man many may maybe mean
+    means meet met might mind minute minutes miss moment monday month months more morning
+    most mother move much must name near need needs never new news next nice night nine
+    nobody none nor now number off often old once one only open other out over own part past
+    pay people perhaps person place plan play point pretty probably put quite rather read
+    ready real really right room round said same saturday saw say says second see seem seemed
+    seems seen sent set seven several she should show side since six small so some someone
+    something sometimes soon sorry start started still stop story sunday sure take taken
+    talk tell ten than thank thanks that the their them then there these they thing things
+    think this those though thought three through thursday time times today together told
+    tomorrow too took town tried try trying tuesday turn two under until upon use used uses
+    using usual very visit wait want wanted wants was watch water way week weekend weeks
+    well went were what wednesday when where whether which while who whole why will wish
+    with within without woman word words work worked would year years yes yesterday yet
+    young your
+    went back went relapse again good bad worse better fine okay ok
+    avec avoir bien bon bonne cela chez comme dans depuis deux dire elle encore entre est
+    etait etre fait faire fois hier ici jamais jour jours leur lui mais meme mois moins
+    nous peu peut plus pour quand rien semaine sans sera sont sous suis tous tout tres trop
+    une vers vient voir vous
+""".split()) | STOP
+# Abbreviations a draft may write dotted or spaced, read as one word
+_DRAFT_ABBR = frozenset("""ms hiv aids copd ra aa bp ptsd adhd ocd als ibs uti dvt chf ckd tb
+    std sti mri icu er""".split())
+# A few words that mean the same thing, read as one on both sides
+_DRAFT_SAME = {"chemotherapy": "chemo", "poz": "hiv", "rehabilitation": "rehab",
+               "leukemia": "cancer", "leukaemia": "cancer", "lymphoma": "cancer",
+               "melanoma": "cancer", "carcinoma": "cancer", "sarcoma": "cancer",
+               "myeloma": "cancer", "tumour": "cancer", "tumor": "cancer",
+               "oncology": "cancer", "oncologist": "cancer", "cancers": "cancer",
+               "mastectomy": "cancer", "radiotherapy": "radiation"}
+_DRAFT_PHRASES = (("multiple sclerosis", "ms"), ("sclerose en plaques", "ms"),
+                  ("hiv positive", "hiv"), ("hiv+", "hiv"))
+_DRAFT_LEX_EXTRA = frozenset("""ms hiv aids copd ra aa ptsd adhd ocd als ibs uti chemo cancer
+    rehab lupus crohn colitis celiac epilepsy seizure seizures shingles hepatitis cirrhosis
+    kidney liver transplant angina pacemaker glaucoma cataract cataracts macular osteoporosis
+    gout fibromyalgia migraine migraines ulcer hernia thyroid autism psychosis overdose
+    radiation surgery operation stroke heart sick ill illness disease diagnosed
+    sclerosis bipolar alcoholic relapse sober""".split())
+
+
+def _draft_prepared(text: str) -> str:
+    t = fold_map(text)[0]                             # look-alike letters, case kept
+    return re.sub(r"(?<![^\W_])Ms\.?(?=\s+[A-Z])", " ", t)   # 'Ms Wu' is a title
+
+
+@functools.lru_cache(maxsize=1 << 14)
+def _draft_words(text: str) -> frozenset:
+    t = fold(_draft_prepared(text), _DRAFT_ABBR | FOLD_WORDS)
+    for p, w in _DRAFT_PHRASES:
+        t = t.replace(p, f" {w} ")
+    out = set()
+    for w in _any_case(t):
+        out.add(_DRAFT_SAME.get(w, w))
+    return frozenset(out)
+
+
+def draft_words(text) -> set[str]:
+    """The words of a draft or a fact as check_draft compares them (F5):
+    any case, look-alike letters read as Latin, abbreviations however they
+    are dotted or spaced, a few synonyms as one word."""
+    return set(_draft_words(str(text or "")))
+
+
+@functools.lru_cache(maxsize=1 << 12)
+def _fact_people(fact: str, people: tuple) -> frozenset:
+    words_ = _draft_words(fact)
+    out = {_DRAFT_SAME.get(w, w) for w in _subject_names(_draft_prepared(fact))}
+    for name in people:                               # the people he recorded
+        nw = {stem(w) for w in _words(fold(name)) if len(w) >= 2 and w not in _TITLES}
+        if nw & words_:
+            out |= nw
+    letters = [c for c in fact if c.isalpha()]
+    if letters and (all(c.islower() for c in letters) or all(c.isupper() for c in letters)):
+        first = next(iter(_words(fold(fact))), "")
+        if first and first not in _COMMON:
+            out.add(stem(first) if len(first) > 2 else first)
+        out |= {w for w in words_ if w not in _COMMON and stem(w) not in _COMMON
+                and not w.isdigit()}
+    return frozenset(out)
+
+
+def draft_repeats(fact, draft, people=()) -> bool:
+    """Does this draft repeat this private fact (F5)? It names the fact's
+    person — in any case — together with a word of what makes the fact
+    private, or any word of his health or his money; or it repeats two of
+    the fact's words and at least half of them."""
+    fact, draft = str(fact or ""), str(draft or "")
+    fw, dw = _draft_words(fact), _draft_words(draft)
+    shared = fw & dw
+    if len(fw) >= 2 and len(shared) >= max(2, -(-len(fw) // 2)):
+        return True
+    who = _fact_people(fact, tuple(people))
+    about = who & dw
+    if not about:
+        return False
+    names_only = {w for w in who if w not in _DRAFT_LEX_EXTRA
+                  and w not in _SENSE_WORDS["health"] and w not in _SENSE_WORDS["money"]}
+    sens = ({_DRAFT_SAME.get(w, w) for w in _sensitive_content(fold_map(fact)[0])}
+            | (fw & _DRAFT_LEX_EXTRA)) - names_only
+    if not sens:
+        sens = fw - names_only - _COMMON
+    lex = _DRAFT_LEX_EXTRA | _SENSE_WORDS["health"] | _SENSE_WORDS["money"]
+    return bool(sens & dw) or bool((dw - about) & lex) or bool(about & lex & sens)
+
+
 # A few everyday words that mean the same subject, so 'booking a flight'
 # reaches a value about travel and 'a caregiver for Mom' reaches one about
 # Mom's care. Only ever added to what was ASKED, never to what is stored.
@@ -579,6 +934,76 @@ _SENSE_PATTERNS = {
                re.compile(r"\b(?:elementary|primary|junior|middle|public|catholic) school\b"
                           r"|\belementary\b")),
 }
+# F2, round 8: his health is also his lab results and measures, and the
+# medicines most prescribed in Canada, by their generic and brand names and
+# in French ('My A1C was 8.2 at the last checkup' and 'I take Ozempic every
+# Sunday' went to every AI past 'Never tell my health to any AI'). Written
+# without accents: a fact is read through the fold, accents off, as well.
+_HEALTH_LEX = """
+    a1c hba1c inr ldl hdl cholesterol cholesterol triglyceride triglycerides glucose
+    glycemie insulin insuline egfr psa bp bmi imc creatinine hemoglobin haemoglobin
+    ferritin tsh potassium inr warfarin
+    metformin metformine glucophage ozempic wegovy rybelsus semaglutide victoza saxenda
+    liraglutide trulicity dulaglutide mounjaro tirzepatide jardiance empagliflozin
+    empagliflozine forxiga farxiga dapagliflozin dapagliflozine invokana canagliflozin
+    januvia janumet sitagliptin sitagliptine trajenta linagliptin synjardy xigduo
+    gliclazide diamicron glyburide glimepiride pioglitazone lantus basaglar toujeo
+    tresiba levemir humalog novorapid fiasp glargine degludec
+    atorvastatin atorvastatine lipitor rosuvastatin rosuvastatine crestor simvastatin
+    simvastatine zocor pravastatin ezetimibe ezetrol fenofibrate lipidil repatha
+    evolocumab levothyroxine synthroid eltroxin
+    ramipril altace perindopril coversyl lisinopril zestril enalapril vasotec candesartan
+    atacand losartan cozaar valsartan diovan irbesartan avapro telmisartan micardis
+    olmesartan olmetec amlodipine norvasc nifedipine adalat diltiazem cardizem tiazac
+    verapamil hydrochlorothiazide chlorthalidone indapamide furosemide furosemide lasix
+    spironolactone aldactone metoprolol lopressor betaloc bisoprolol monocor atenolol
+    tenormin carvedilol coreg propranolol inderal nebivolol digoxin digoxine lanoxin
+    amiodarone cordarone nitroglycerin isosorbide
+    apixaban rivaroxaban dabigatran pradaxa edoxaban lixiana clopidogrel plavix
+    ticagrelor brilinta warfarine coumadin eliquis xarelto
+    pantoprazole pantoloc tecta omeprazole losec esomeprazole nexium rabeprazole pariet
+    lansoprazole dexlansoprazole dexilant famotidine ranitidine
+    sertraline zoloft citalopram celexa escitalopram cipralex lexapro fluoxetine prozac
+    paroxetine paxil venlafaxine effexor desvenlafaxine pristiq duloxetine cymbalta
+    bupropion wellbutrin zyban mirtazapine remeron trazodone desyrel amitriptyline elavil
+    nortriptyline quetiapine seroquel olanzapine zyprexa risperidone risperdal
+    aripiprazole abilify lamotrigine lamictal valproate divalproex epival depakote
+    carbamazepine tegretol gabapentin gabapentine neurontin pregabalin pregabaline lyrica
+    topiramate topamax levetiracetam keppra phenytoin dilantin lorazepam ativan clonazepam
+    rivotril alprazolam xanax diazepam valium oxazepam temazepam zopiclone imovane
+    zolpidem ambien sublinox
+    salbutamol ventolin albuterol fluticasone flovent advair symbicort budesonide
+    pulmicort formoterol salmeterol tiotropium spiriva breo trelegy montelukast singulair
+    prednisone prednisolone methylprednisolone hydrocortisone
+    allopurinol zyloprim colchicine febuxostat methotrexate hydroxychloroquine plaquenil
+    sulfasalazine adalimumab humira etanercept enbrel infliximab remicade
+    tamsulosin tamsulosine flomax finasteride proscar dutasteride avodart oxybutynin
+    solifenacin vesicare mirabegron myrbetriq tolterodine detrol sildenafil viagra
+    tadalafil cialis alendronate fosamax risedronate actonel denosumab prolia zoledronic
+    aclasta donepezil aricept memantine ebixa rivastigmine exelon galantamine reminyl
+    levodopa carbidopa sinemet pramipexole mirapex ropinirole requip
+    amoxicillin amoxicilline amoxil clavulin azithromycin azithromycine zithromax
+    clarithromycin biaxin cephalexin keflex ciprofloxacin ciprofloxacine cipro
+    levofloxacin levaquin doxycycline nitrofurantoin macrobid trimethoprim
+    sulfamethoxazole septra metronidazole flagyl clindamycin dalacin valacyclovir
+    valtrex acyclovir oseltamivir tamiflu
+    tramadol tramacet ultram codeine hydromorphone dilaudid oxycontin percocet fentanyl
+    buprenorphine suboxone naloxone celecoxib celebrex naproxen aleve ibuprofen advil
+    motrin diclofenac voltaren meloxicam mobicox acetaminophen acetaminophene tylenol
+    estradiol estrace progesterone prometrium medroxyprogesterone provera levonorgestrel
+    mirena norethindrone testosterone androgel tamoxifen nolvadex letrozole femara
+    anastrozole arimidex exemestane aromasin bicalutamide casodex enzalutamide xtandi
+    ondansetron zofran domperidone metoclopramide cyclobenzaprine flexeril baclofen
+    lioresal methylphenidate ritalin concerta lisdexamfetamine vyvanse varenicline
+    champix oxycodone morphine methadone lithium
+    sante medecin medicament medicaments maladie
+"""
+_HEALTH_LEX_PHRASES = ("blood sugar", "sugar level", "sugar levels", "my sugars",
+                       "blood work", "bloodwork", "lab results", "taux de sucre",
+                       "tension arterielle", "pression arterielle", "prise de sang")
+_SENSE_WORDS["health"] = _SENSE_WORDS["health"] | _stems(_HEALTH_LEX)
+_SENSE_PHRASES["health"] = _SENSE_PHRASES["health"] + _HEALTH_LEX_PHRASES
+
 # A category the owner (or an AI) gave a fact that already says what it is.
 _CATEGORY = {
     "health": _stems("health medical medication medications medicine"),
@@ -600,8 +1025,11 @@ _PHRASE_FORMS = {cls: tuple(f" {_joined(p)} " for p in ps)
 def _sensitivity(text: str, category: str) -> tuple[str, ...]:
     t = _normalise(text)
     ws = _words(t)
-    st = {stem(w) for w in ws}
-    joined = f" {' '.join(ws)} "
+    # ...and read through the fold (round 8): 'Оzempic' with a Cyrillic О,
+    # 'glycémie' without its accent, '0zempic'
+    fws = _words(fold(text))
+    st = {stem(w) for w in ws} | {stem(w) for w in fws}
+    joined = f" {' '.join(ws)} {' '.join(fws)} "
     cat = {stem(w) for w in _words(category)}
     found = set()
     for cls in CLASSES:
@@ -820,8 +1248,10 @@ _PART_BREAK = re.compile(r"\s*(?:[,;/&+|]|\b(?:and|or|but|except(?: for)?|other 
 
 
 def _plain_words(text: str) -> str:
-    n = normalise(text)
-    n = "".join(c for c in unicodedata.normalize("NFKD", n) if not unicodedata.combining(c))
+    """An audience in one spelling, read through the fold (round 8: 'Сlaude'
+    with a Cyrillic С, 'C l a u d e', 'Cl4ude', 'ma sœur', 'my sister' with a
+    zero-width space), accents off, lower case."""
+    n = fold(text)
     return re.sub(r"[^\w'\- ,;/&+|]", " ", n)
 
 
@@ -909,37 +1339,62 @@ def is_anyone(audience) -> bool:
 # a little word before it ('the AI', 'any AI', "l'IA", 'my assistant').
 AI_READER = "any ai"          # in every audience list of a key that reaches an engine
 _AI_WORDS = frozenset("""ai ais a.i a.i. ia ias chatbot chatbots chatbot's bot bots robot
-    robots chatgpt gpt gpts gpt4 gpt-4 gpt-4o gpt-5 gpt5 openai claude anthropic gemini
+    robots chatgpt gpt gpts gpt4 gpt-4 gpt-4o gpt4o gpt-5 gpt5 openai claude anthropic gemini
     bard copilot llama llamas hermes llm llms grok mistral deepseek perplexity
-    engine engines moteur moteurs google microsoft meta""".split())
+    engine engines moteur moteurs google microsoft meta
+    jefferey jeffrey jeffery butler ollama model models modele modeles computer computers
+    ordinateur ordinateurs machine machines alexa siri cortana mixtral qwen gemma phi""".split())
 _AI_PHRASES = frozenset(" ".join(p.split()) for p in """
-    artificial intelligence|intelligence artificielle|the cloud|cloud|le cloud|the assistant|
-    assistant|assistants|ai assistant|virtual assistant|assistant virtuel|google|microsoft|
-    meta|open ai|chat gpt|language model|language models|large language model|
-    machine learning|siri|alexa|cortana""".split("|") if p.strip())
+    artificial intelligence|intelligence artificielle|intelligences artificielles|the cloud|
+    cloud|le cloud|the assistant|assistant|assistants|ai assistant|virtual assistant|
+    assistant virtuel|google|microsoft|meta|open ai|chat gpt|language model|language models|
+    large language model|machine learning|siri|alexa|cortana|le chat|local model|
+    the local model""".split("|") if p.strip())
+# A word that starts with an engine's name is that engine ('gpt4o', 'llama3',
+# 'claude-raw' read as 'claude raw', 'hermes3').
+_AI_STEM = re.compile(r"^(?:gpt|chatgpt|claude|llama|gemini|mistral|mixtral|hermes|qwen|gemma"
+                      r"|deepseek|ollama|copilot|grok|openai|anthropic)[a-z0-9.]*$")
 
 
-def names_ai(audience) -> bool:
+def _audience_words(part: str) -> list[str]:
+    """The words of one part of an audience, its little words off the front:
+    hyphens as spaces ('AI-powered', 'claude-raw'), possessives as the word
+    ("AI's"), "l'IA" as 'ia'."""
+    ws = []
+    for w in part.replace("-", " ").split():
+        w = w.strip(".'")
+        if w.endswith("'s"):
+            w = w[:-2]
+        if w.startswith(("l'", "d'")):
+            w = w[2:]
+        if w:
+            ws.append(w)
+    while ws and (ws[0] in _DETERMINERS or ws[0] in _QUANTIFIERS or ws[0] in _STRONGER
+                  or ws[0] in ("other", "others", "autre", "autres")):
+        ws = ws[1:]
+    return ws
+
+
+def names_ai(audience, extra=()) -> bool:
     """Does this audience name an AI, an engine or a company that makes one
     ('ChatGPT', 'any AI', "l'IA", 'chatbots', 'artificial intelligence',
-    'Google', 'the cloud', 'the public and ChatGPT')?"""
+    'Google', 'the cloud', 'the public and ChatGPT', 'JEFFEREY', 'the local
+    model', 'my computer', 'Сlaude', "AI's", 'claude-raw')? `extra`: the
+    names of the engines reading right now."""
     raw = _plain_words(re.sub(r"(?i)(?<![^\W_])a\.\s?i(?![^\W_])\.?", "ai", str(audience or "")))
     if not raw.strip():
         return False
+    more = {str(x).lower() for x in extra or () if x}
     for part in _PART_BREAK.split(raw):
-        ws = [w.strip(".'") for w in part.split() if w]
-        ws = [w[2:] if w.startswith(("l'", "d'")) else w for w in ws]
-        ws = [w for w in ws if w]
-        while ws and (ws[0] in _DETERMINERS or ws[0] in _QUANTIFIERS or ws[0] in _STRONGER
-                      or ws[0] in ("other", "others", "autre", "autres")):
-            ws = ws[1:]
+        ws = _audience_words(part)
         if not ws:
             continue
-        if set(ws) & _AI_WORDS or " ".join(ws) in _AI_PHRASES \
-                or any(w.startswith(("gpt-", "chatgpt")) for w in ws):
+        if set(ws) & (_AI_WORDS | more) or " ".join(ws) in _AI_PHRASES \
+                or any(_AI_STEM.match(w) for w in ws):
             return True
-        if any(" ".join(ws[i:i + n]) in _AI_PHRASES for n in (2, 3)
-               for i in range(len(ws) - n + 1)):
+        whole = part.replace("-", " ").split()            # 'Le Chat', with its 'le'
+        if any(" ".join(x[i:i + n]) in _AI_PHRASES for x in (ws, whole) for n in (2, 3)
+               for i in range(len(x) - n + 1)):
             return True
     return False
 
@@ -948,29 +1403,79 @@ def names_ai(audience) -> bool:
 # Round 7 decision: a rule that says NO to his family, or to the people who
 # read through his family's key — his children, grandchildren and relatives
 # — binds the family key, in English and in French ('ma famille', 'mes
-# enfants', 'my kids', 'my daughter', 'ma fille', 'mon fils'). A possessive
-# ("my son's teacher") is someone else.
-_FAMILY_MEMBERS = frozenset("""family families famille familles kids kid children child
-    childrens enfant enfants grandchildren grandchild grandkids grandkid grandson grandsons
-    granddaughter granddaughters petits-enfants petit-enfant petits petit-fils petite-fille
-    petites-filles relatives relative proches parente descendants daughter daughters son sons
-    fille filles fils""".split())
+# enfants', 'my kids', 'my daughter', 'ma fille', 'mon fils'). Round 8 (F1):
+# every kinship word, in English and French — wife, husband, partner,
+# spouse, sister, brother, nephew, niece, cousin, aunt, uncle, mother,
+# father, mom, mum, dad, parents, any in-law, step-, grand-, great-; femme,
+# mari, conjoint, sœur, frère, neveu, nièce, cousin(e), tante, oncle, mère,
+# père, belle-, beau-, demi-, petit(e)- … A part of an audience is the
+# family when, past its little words, it is kinship words only, with perhaps
+# a name after them ('my brother Mike'). A possessive or a 'de' is someone
+# else ("my son's teacher", 'la femme de ménage', 'le mari de Karen').
+_KIN = frozenset("""family families relatives relative kin kinfolk wife wives husband husbands
+    spouse spouses partner partners son sons daughter daughters child children childrens kid
+    kids baby babies mother mothers father fathers mom moms mum mums mommy mummy mama dad
+    dads daddy papa parent parents brother brothers sister sisters sibling siblings nephew
+    nephews niece nieces cousin cousins aunt aunts auntie aunty uncle uncles grandson
+    grandsons granddaughter granddaughters grandchild grandchildren grandkid grandkids
+    grandmother grandmothers grandfather grandfathers grandma grandmas grandpa grandpas
+    granny grannies nana grandparent grandparents stepson stepsons stepdaughter
+    stepdaughters stepchild stepchildren stepmother stepfather stepbrother stepbrothers
+    stepsister stepsisters stepmom stepdad inlaw inlaws fiance fiancee twin twins godson
+    goddaughter godchild godmother godfather descendants
+    famille familles proches parente parents parent femme epouse epoux mari maris conjoint
+    conjointe conjoints fils fille filles enfant enfants bebe mere meres pere peres maman
+    frere freres soeur soeurs neveu neveux niece cousine cousines tante tantes oncle oncles
+    mamie mamy papi papy pepere memere""".split())
+_KIN_MODIFIERS = frozenset("""in law laws step great grand half ex late older younger elder
+    eldest oldest youngest little big own dear beloved whole entire extended immediate close
+    grands grande grandes belle belles beau beaux demi petit petite petits petites arriere
+    aine ainee cadet cadette cher chere chers cheres all toute tout tous toutes member members
+    membres""".split())
+_FAMILY_MEMBERS = _KIN          # (round 7's name for the list)
+
+
+_FAM_DET = frozenset("""the a an my our his her their your le la les un une des du de ma mon
+    mes ta ton tes sa son ses notre nos votre vos leur leurs""".split())
+
+
+def _family_part(part: str, raw_part: str = "") -> bool:
+    """Is this one part of an audience his family (see above)?"""
+    if re.search(r"\w's\b", part):
+        return False                       # 'my son's teacher' is the teacher
+    ws = []
+    for w in part.replace("-", " ").split():
+        if w.startswith(("l'", "d'")) and len(w) > 2:
+            if ws:
+                return False               # 'le fils d'Anna' is Anna's son
+            w = w[2:]
+        ws.append(w.strip("'."))
+    ws = [w for w in ws if w]
+    while len(ws) > 1 and ws[0] in _FAM_DET:
+        ws = ws[1:]                        # 'son médecin' is 'his doctor'
+    names = {fold(w) for w in raw_part.replace("-", " ").split() if re.match(r"[A-Z][a-z]", w)}
+    kin = False
+    for w in ws:
+        if w in _KIN:
+            kin = True
+        elif w in _KIN_MODIFIERS or w in _FAM_DET and w not in ("de", "du", "des"):
+            continue                       # 'all the family', 'my own sister'
+        elif kin and w in names:
+            continue                       # 'my brother Mike'
+        else:
+            return False                   # 'la femme de ménage', 'my business partner'
+    return kin
 
 
 def names_family(audience) -> bool:
     """Does this audience name his family, or the people who use the family
-    key ('ma famille', 'my kids', 'the grandchildren', 'my daughter')?"""
+    key ('ma famille', 'my kids', 'the grandchildren', 'my daughter', 'my
+    sister', 'the in-laws', 'ma belle-fille', 'my brother Mike')?"""
     raw = _plain_words(audience)
-    for part in _PART_BREAK.split(raw):
-        ws = [w for w in part.split() if w]
-        if any(w.endswith("'s") for w in ws):
-            continue                       # 'my son's teacher' is the teacher
-        for i, w in enumerate(ws):
-            if w in ("son", "sons") and i + 1 < len(ws) and not (
-                    i and ws[i - 1] in ("my", "the", "our", "his", "her", "their", "a")):
-                continue                   # French 'son médecin' is 'his doctor'
-            if w in _FAMILY_MEMBERS:
-                return True
+    raws = _PART_BREAK.split(str(audience or ""))
+    for k, part in enumerate(_PART_BREAK.split(raw)):
+        if _family_part(part.strip(), raws[k] if len(raws) > k else ""):
+            return True
     return False
 
 
@@ -1013,6 +1518,64 @@ def rule_names(audience, people=()) -> frozenset:
     out.discard("")
     out.discard(SELF)
     return frozenset(out)
+
+
+# ------------------------------- an audience no one knows is everyone (F1)
+# Round 8: a 'no' whose audience — or any part of it before 'but', 'except'
+# or 'other than', which say who MAY hear it — is not a person he recorded
+# himself, not the name of one of his keys, and not a group JEFFEREY knows
+# (an anyone-word, a family word, an AI word) holds for everyone and every
+# AI. Round 7 let a no for 'my lawyer', 'Bob' or 'the press' bind only a
+# reader of that very name, which in practice was nobody.
+_EXCEPT = re.compile(r"(?<![^\W_])(?:but|except(?:\s+for)?|other\s+than|apart\s+from|aside\s+from"
+                     r"|besides|mais|sauf|hormis|excepte|a\s+part|à\s+part)(?![^\W_])", re.I)
+_SELF_WORDS = frozenset("me myself moi i".split())
+
+
+def person_key(name, relationship="") -> tuple[str, str]:
+    """A person he recorded, the way an audience is compared with them."""
+    return (norm_audience(fold(name)), norm_audience(fold(relationship)))
+
+
+@functools.lru_cache(maxsize=1 << 12)
+def _unknown_parts(audience: str, people: tuple, keys: frozenset) -> tuple[str, ...]:
+    text = " ".join(audience.split())
+    whole = _plain_words(text).strip(" .,;:!")
+    if whole in _ANYONE_PHRASES or norm_audience(text) == "anyone":
+        return ()                               # 'all and sundry', 'tom dick and harry'
+    m = _EXCEPT.search(text)
+    if m:
+        text = text[:m.start()]                 # 'nobody but my doctor': the doctor may
+    raws = [p for p in _PART_BREAK.split(text) if p and p.strip(" ,;/&+|")]
+    out = []
+    for rp in raws:
+        ws = _audience_words(_plain_words(rp))
+        if not ws:
+            continue
+        if is_anyone(rp) or names_ai(rp) or names_family(rp):
+            continue                            # a group JEFFEREY knows
+        joined = " ".join(ws)
+        if joined in _SELF_WORDS:
+            continue
+        n = norm_audience(fold(rp))
+        if n in keys or joined in keys or joined.replace(" ", "-") in keys:
+            continue                            # one of his keys
+        nw = set(ws) - _TITLES
+        if any(n and (n == pn or n == rel) or joined == pn or (rel and joined == rel)
+               or (nw and nw <= (set(pn.replace(".", " ").split()) - _TITLES))
+               for pn, rel in people if pn):
+            continue                            # a person he recorded
+        out.append(rp.strip(" ,;/&+|"))
+    return tuple(out)
+
+
+def unknown_parts(audience, people=(), keys=()) -> tuple[str, ...]:
+    """The parts of a 'no''s audience nobody knows (F1): not a person he
+    recorded (`people`: person_key tuples of the people HE recorded), not
+    one of his keys' names, not an anyone-, family- or AI-word. Empty when
+    every part is known."""
+    return _unknown_parts(str(audience or ""), tuple(people),
+                          frozenset(norm_audience(k) for k in keys))
 
 
 _ADDRESSED = re.compile(r"^(.*?)<\s*([^<>\s]+@[^<>\s]+)\s*>\s*$")
@@ -1076,3 +1639,21 @@ def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
         s.discard("")
         s.discard(SELF)
     return frozenset(broad), frozenset(strict)
+
+
+# ----------------------------------------------------- the fold's own words
+# The words the shared fold may read back from digits, symbols, spaced-out
+# or split letters (see fold): those of an audience, of his health and
+# money, of a secret and of the door. A reader may pass its own.
+FOLD_WORDS = frozenset(
+    {w for w in _AI_WORDS if w.isalpha()}
+    | {w for p in _AI_PHRASES for w in p.split()} | {p.replace(" ", "") for p in _AI_PHRASES}
+    | _KIN | {"inlaws", "inlaw", "stepson", "stepdaughter", "grandson", "granddaughter",
+              "grandchildren", "grandkids", "noone", "nobody", "everyone", "anyone"}
+    | {w for p in _ANYONE_PHRASES for w in p.split() if w.isalpha()}
+    | set(_HEALTH_LEX.split()) | set().union(*_SENSE_WORDS.values())
+    | set("""password passwords passwd passcode passcodes passphrase pin pins nip code codes
+          digicode combination combinaison combo mdp pwd unlock opener secret
+          let lets in inside into up open opens door doors lock locks locked unlock unlocked
+          unlocking key keys gate garage alarm alarms enter entry porte portes cle cles
+          serrure entrer rentrer ouvre ouvrir""".split()))

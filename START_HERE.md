@@ -336,7 +336,14 @@ tell ChatGPT", "not Google" — holds for **every** AI, your own JEFFEREY
 included: only you, at your own keyboard, still see it. A rule about people
 ("never tell anyone") does not keep it from your own JEFFEREY, which needs to
 know your life to look after you. A rule about your family or your children
-("ma famille", "my kids", "my daughter") holds for the key your family uses.
+("ma famille", "my kids", "my daughter", "my sister", "the in-laws") holds for
+the key your family uses.
+
+A rule about someone JEFFEREY does not know — "never tell my lawyer", "not
+the press" — holds for **everyone and every AI** until that person is one of
+your people: tell JEFFEREY who they are, then `/confirm` it yourself. JEFFEREY
+tells you so when you make the rule; once they are yours, it is about them
+alone.
 
 ---
 

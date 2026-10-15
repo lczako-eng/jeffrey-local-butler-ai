@@ -76,6 +76,8 @@ import time
 import unicodedata
 from typing import Any, Callable
 
+import grounding
+
 # ===================================================================== words
 QUIET = frozenset({"expected", "amount_decreased", "refund"})
 INFORMATIONAL = frozenset({"unexpected_merchant"})
@@ -190,6 +192,7 @@ restaurant resto bar grill pub kitchen bakery deli pizza sushi pharmacy pharmaci
 drug drugs gas fuel station essence carwash wash parking hotel inn motel resort
 travel tours airport duty bank insurance financial rewards gift gifts golf ski
 sports optical dental clinic salon spa food foods liquor beer wine catering
+assurance assurances voyage voyages carburant optique pneu pneus epicerie
 """.split())
 _PRICE_BAND = (0.5, 2.0)        # a new price, not a different purchase
 # A membership is a fee for the right to shop somewhere (Costco, Amazon
@@ -314,11 +317,26 @@ def _m(x: float) -> str:
 
 # ===================================================================== names
 def _fold(s: Any) -> str:
-    """Lower-case with accents off; every script is kept, so a Chinese or
-    Cyrillic name stays itself instead of collapsing to nothing."""
-    s = unicodedata.normalize("NFKD", str(s or ""))
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    return s.casefold()
+    """Lower-case with accents off, read through the shared fold (round 8,
+    F4): a Cyrillic or Greek letter that looks like a Latin one is read as
+    that letter ('CОSTCO' is COSTCO — and made to look like it, see
+    _looks_like); every other script is kept, so a Chinese name stays itself
+    instead of collapsing to nothing."""
+    return grounding.fold_map(str(s or ""))[0].casefold()
+
+
+def _other_alphabet(s: Any) -> bool:
+    """Does this name write a letter of another alphabet where a Latin one
+    looks the same (a Cyrillic О in 'CОSTCO')?"""
+    return any(ch in grounding._LOOK or (not ch.isascii() and ch.isalpha() and
+                                         unicodedata.name(ch, "").startswith(
+                                             grounding._SMALL_CAP))
+               for ch in str(s or ""))
+
+
+# A registered name glued to a fee word on a statement ('PAYPAL *COSTCOMEMBER',
+# 'AMAZONPRIME'): read as the two words (F4, round 8).
+_GLUED_FEE = ("membership", "members", "member", "renewal", "prime")
 
 
 _URL = re.compile(r"^(?:[a-z0-9-]+\.)*([a-z0-9-]+)\.(?:com|ca|net|org|co|io|tv|us|uk|"
@@ -341,7 +359,15 @@ def _segment_tokens(seg: str) -> list[str]:
 
 
 def _clean(tokens: list[str]) -> list[str]:
-    raw = [_SYNONYMS.get(t, t) for t in tokens]
+    split = []
+    for t in tokens:
+        for suf in _GLUED_FEE:
+            if t.isalpha() and t.endswith(suf) and len(t) - len(suf) >= 4:
+                split += [t[:-len(suf)], suf]
+                break
+        else:
+            split.append(t)
+    raw = [_SYNONYMS.get(t, t) for t in split]
     out: list[str] = []
     for i, t in enumerate(raw):
         has_digit = any(ch.isdigit() for ch in t)
@@ -956,6 +982,9 @@ class Guardian:
         cores = self._cores(e)
         if not cores:
             return None
+        if _other_alphabet(merchant) and any(
+                c in cores for f in _forms(merchant) for c in list(f) + ["".join(f)]):
+            return "letters of another alphabet stand where Latin letters should be"
         toks = [t.strip("#,;:()[]*'\"") for t in _fold(merchant).split()]
         for t in toks:
             if not t:
@@ -1014,6 +1043,55 @@ class Guardian:
             return {"kind": "plan", "of": hint}
         return None
 
+    def _dated_ask(self, merchant: Any, amount: float | None, date: str | None,
+                   entry: dict | None, hint: dict | None, ask: dict | None, group,
+                   lines=()) -> dict | None:
+        """The questions that depend on the day (F4, round 8): at the place
+        of a membership he cancelled, anything after the cancellation that is
+        not the membership itself; a variant of a registered name at the fee
+        inside the cadence ('GOODLIFE CLUBS' five days after 'GOODLIFE
+        FITNESS')."""
+        if entry is not None or ask is not None or amount is None or amount <= 1.00:
+            return ask
+        if (hint is not None and _is_membership(hint) and not hint.get("active", True)
+                and hint.get("cancelled_on") and (date is None or date > hint["cancelled_on"])):
+            return {"kind": "after_cancel", "of": hint}
+        if date is None:
+            return None
+        return self._variant_ask(merchant, amount, date, group, lines)
+
+    def _variant_ask(self, merchant: Any, amount: float, date: str, group,
+                     lines=()) -> dict | None:
+        forms = _forms(merchant)
+        first = forms[0][0] if forms and forms[0] else ""
+        if len(first) < 4 or first in _GENERIC_CORE or first in _OTHER_BUSINESS:
+            return None
+        for e in self._entries():
+            if (e.get("merged_into") or not e.get("active", True)
+                    or not e.get("amount_known", True) or (e.get("amount") or 0) <= 0
+                    or e.get("cadence") not in CADENCES):
+                continue
+            if not any(f and f[0] == first for f in self._entry_forms(e)):
+                continue
+            gap = CADENCES[e["cadence"]][1]
+            target = "e:" + e["id"]
+            before = [r for r in self._charges() if not r.get("unreadable") and r.get("date")
+                      and r.get("verdict") == "expected"] + [
+                l for l in lines if l.get("date") and l is not None]
+            prior = None
+            for r in before:
+                if r["date"] >= date or _days(date, r["date"]) >= gap:
+                    continue
+                if group(r["merchant"], r["amount"])[0] != target:
+                    continue
+                if prior is None or r["date"] > prior["date"]:
+                    prior = r
+            if prior is not None and (_exact_fee(e["amount"], amount)
+                                      or _same_amount(prior["amount"], amount)):
+                return {"kind": "variant", "of": e,
+                        "prior": {"amount": prior["amount"], "date": prior["date"]}}
+        return None
+
     def _ranked(self, merchant: Any, amount: float | None = None) -> list[tuple[float, dict]]:
         """Register entries this name may be, with how surely. A name that
         only starts with an entry's name, then names another business or a
@@ -1032,8 +1110,14 @@ class Guardian:
                 continue                 # 'COSTCO.NET' is never Costco (D5)
             if self._member_amount(e, amount):
                 # a membership: a clear name and the fee itself, nothing else
-                # is the membership (D5, round 7); the rest is his to say
-                if (not self._is_fee(e, merchant, amount)
+                # is the membership (D5, round 7); the rest is his to say —
+                # except after he cancelled it: then a charge there that names
+                # the membership or sits in the fee band IS it, charged after
+                # the cancellation (F4, round 8)
+                cancelled = not e.get("active", True) and e.get("cancelled_on")
+                after = cancelled and best >= STRONG and not set(extra) & _OTHER_BUSINESS and (
+                    _words_of(merchant) & _ASK_WORDS or _near_fee(e["amount"], amount))
+                if ((not self._is_fee(e, merchant, amount) and not after)
                         or (scam and not _SCAM.search(_fold(e.get("merchant", ""))))):
                     best = HINT
             elif self._only_a_likeness(e, extra, amount, scam):
@@ -1733,6 +1817,8 @@ class Guardian:
             counts: dict[tuple, int] = {}
             for line in parsed:
                 g, entry, hint, ask = group(line["merchant"], line["amount"])
+                ask = self._dated_ask(line["merchant"], line["amount"], line["date"], entry,
+                                      hint, ask, group, parsed)
                 line.update(group=g, entry=entry, hint=hint, ask=ask)
                 line["member_shop"] = (entry is None and hint is not None and ask is None
                                        and _is_membership(hint))
@@ -1748,8 +1834,10 @@ class Guardian:
             for idx, rec in enumerate(stored):
                 if rec.get("unreadable"):
                     continue
-                g, _, _, ask = group(rec["merchant"], rec["amount"])
+                g, r_entry, r_hint, ask = group(rec["merchant"], rec["amount"])
                 if g in members:
+                    ask = self._dated_ask(rec["merchant"], rec["amount"], rec.get("date"),
+                                          r_entry, r_hint, ask, group, parsed)
                     cents = int(round(rec["amount"] * 100))
                     if (keep and rec.get("date_uncertain")
                             and (g, cents, rec.get("date")) in given):
@@ -1948,6 +2036,10 @@ class Guardian:
                          f"{name} {_m(amt)} on {d}, on or before the cancellation date "
                          f"({c_on}). Nothing to do.", True)
             before = f" (This is dated on or before the cancellation date, {c_on}.)"
+            if _is_membership(entry) and reg > 0 and not _exact_fee(reg, amt):
+                # before the cancellation, only the fee itself is the membership
+                return Guardian._question({"kind": "membership", "of": entry, "words": []},
+                                          it, when)
 
         if not entry.get("amount_known", True):
             return V("unexpected_merchant", 0.3, 0.0,
@@ -1999,8 +2091,10 @@ class Guardian:
             long = cad in CADENCES and CADENCES[cad][0] >= 91
             # measured from the last charge that was itself accepted: an extra
             # bill must not push the next real renewal into looking early
+            # (a charge still waiting for his answer is not the first bill either)
             same = [p for p in prior if (long or member or _same_amount(p["amount"], amt))
-                    and p.get("_verdict") not in ("duplicate", "possible_card_testing")]
+                    and p.get("_verdict") not in ("duplicate", "possible_card_testing",
+                                                  "ask_owner")]
             if same:
                 p = same[-1]
                 gap = _days(d, p["date"])
@@ -2022,6 +2116,12 @@ class Guardian:
                                 f"{p['date']}." + ("" if alike else
                                                    " That is a second bill inside the same "
                                                    "period."))
+                    # a second bill is claimed only with a membership word in its
+                    # name or at the very amount of the first (F4, round 8);
+                    # otherwise it is his question
+                    if not alike and not _words_of(it["merchant"]) & _ASK_WORDS:
+                        return Guardian._question(
+                            {"kind": "second", "of": entry, "prior": p}, it, when)
                     recover = amt
                     if member and amt > reg:
                         # never more than the fee he agreed to, for one bill
@@ -2035,6 +2135,16 @@ class Guardian:
                     if maybe:
                         v["maybe_shopping"] = True
                     return v
+        if member and d is not None:
+            # once a charge of the membership is on file, the agreed amount is
+            # the amount last charged (F4, round 8): a different one asks,
+            # even when it is the fee with some tax
+            since = str(entry.get("updated") or "")
+            last = [p for p in prior if p.get("_verdict") == "expected"
+                    and ("rec" not in p or str(p["rec"].get("seen") or "") >= since)]
+            if last and not _same_amount(last[-1]["amount"], amt):
+                return Guardian._question({"kind": "changed", "of": entry, "prior": last[-1]},
+                                          it, when)
         if exact:
             taxed = "" if _same_amount(amt, reg) else " (the fee with sales tax)"
             return V("expected", 0.0, 0.0,
@@ -2075,7 +2185,30 @@ class Guardian:
         name, fee = e["merchant"], e.get("amount") or 0.0
         cad = _CADENCE_SAID.get(e.get("cadence"), e.get("cadence") or "")
         said = f"{_m(amt)} at '{it['merchant']}'{when}."
-        if ask["kind"] == "lookalike":
+        if ask["kind"] in ("second", "variant"):
+            p = ask["prior"]
+            q = ("Is this a second bill?" if ask["kind"] == "variant" else
+                 "Is this a second bill, or something you bought there?")
+            text = (f"{said} {name} already charged {_m(p['amount'])} on {p['date']}, and it "
+                    f"is billed {cad}" + (f"; this name is not quite its own" if
+                                          ask["kind"] == "variant" else "")
+                    + f". {q} Nothing is claimed until you say.")
+            sev = 0.6
+        elif ask["kind"] == "changed":
+            p = ask["prior"]
+            q = (f"Is this your membership going up, or something you bought?"
+                 if amt > p["amount"] + 0.01 else
+                 f"Is this your membership, or something you bought there?")
+            text = (f"{said} {name} charged {_m(p['amount'])} last time ({p['date']}), so that "
+                    f"is the amount agreed now, and this is different. {q} Nothing is claimed "
+                    f"until you say.")
+            sev = 0.5
+        elif ask["kind"] == "after_cancel":
+            q = "Is this something you bought there, or are they still charging you?"
+            text = (f"{said} You cancelled {name} on {e.get('cancelled_on')}. {q} Nothing is "
+                    f"claimed until you say.")
+            sev = 0.6
+        elif ask["kind"] == "lookalike":
             q = "Did you sign up for something there?"
             text = (f"{said} That name is made to look like {name}, but it is not how {name} "
                     f"bills you: {ask['how']}. Names like this are how phishing sites take "
@@ -2195,7 +2328,9 @@ class Guardian:
         for idx, rec in enumerate(self._charges()):
             if rec.get("unreadable"):
                 continue
-            g, _, _, ask = group(rec["merchant"], rec["amount"])
+            g, r_entry, r_hint, ask = group(rec["merchant"], rec["amount"])
+            ask = self._dated_ask(rec["merchant"], rec["amount"], rec.get("date"), r_entry,
+                                  r_hint, ask, group, ())
             if g == target:
                 items.append(dict(self._item(rec, idx), ask=ask))
             elif entry is not None and ask and ask["of"].get("id") == entry.get("id"):
