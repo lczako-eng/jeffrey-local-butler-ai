@@ -390,10 +390,13 @@ class TheScanKnowsHowPeopleWriteSecrets(EgressTest):
                                 ("misc", "046.454.286"), ("city", "Ottawa")]}
             out({"res": res, "profile": jc.dispatch_tool("get_profile", {})})
         """, JEFFEREY_CLIENT="jefferey")
-        stored = {f: x.get("stored") for f, x in r["res"].items()}
-        self.assertEqual(stored.pop("city"), True)
-        self.assertEqual([f for f, ok in stored.items() if ok], [], r["res"])
-        self.assertEqual(r["profile"], {"city": "Ottawa"})
+        # round 8 (S2): from an AI an ordinary detail is kept, waiting beside his
+        # own (pending); a secret-shaped one is not kept at all
+        kept = {f: bool(x.get("stored") or x.get("pending")) for f, x in r["res"].items()}
+        self.assertEqual(kept.pop("city"), True)
+        self.assertEqual([f for f, ok in kept.items() if ok], [], r["res"])
+        self.assertEqual(r["profile"], {"noted_by_ai_not_confirmed": {"city": {
+            "value": "Ottawa", "noted_by": "noted by the AI, not yet confirmed by him"}}})
         for v in ("4111", "4821", "Hunter22", "046.454.286"):
             self.assertNotIn(v, self.store_text())
         self.assertIn("vault", r["res"]["house code"]["reason"])
@@ -984,7 +987,9 @@ class AfterTheFixes(EgressTest):
         """, JEFFEREY_CLIENT="jefferey")
         for n, stored in r["refused"].items():
             self.assertFalse(stored, n)
-        self.assertTrue(r["plate"].get("stored"), r["plate"])
+        # a plate is not an identity document: kept — from an AI, beside his
+        # own details until he confirms it (round 8, S2)
+        self.assertTrue(r["plate"].get("pending"), r["plate"])
 
     def test_old_profile_keys_written_as_one_word_stay_home(self):
         r = self.py("""

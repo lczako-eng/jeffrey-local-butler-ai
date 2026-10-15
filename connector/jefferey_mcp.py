@@ -246,8 +246,9 @@ def forget(contains: str = "", ids: list[str] | None = None, confirm: str = "") 
     Two steps, never a guess: without `confirm` nothing is removed — you get
     exactly what would go (with ids) and a one-time code. Read that list to
     the owner; only if he says yes, call again with confirm=<code>. Anything
-    big (more than three things, or more than one kind) can only be approved
-    by the owner himself — the result says how. Never argue with a forget; tell him exactly what went."""
+    of his own (he stored or confirmed it) and anything big (more than three
+    things, or more than one kind) can only be approved by the owner himself
+    — the result says how. Never argue with a forget; tell him exactly what went."""
     return conscience.forget_fact(contains, ids, confirm)
 
 
@@ -280,7 +281,8 @@ def priorities_for(context: str = "") -> list:
 def add_goal(goal: str) -> dict:
     """Register a long-term goal the user has approved (e.g. 'reduce monthly
     expenses by 15%'). Goals drive the Opportunity Engine: what can be done
-    today to move these forward, within permissions."""
+    today to move these forward, within permissions. From you it is noted by
+    the AI, not yet confirmed by him, and shown so, until he confirms it."""
     return conscience.add_goal(goal)
 
 
@@ -291,8 +293,9 @@ def close_goal(contains: str = "", ids: list[str] | None = None, confirm: str = 
     Two steps, never a guess: without `confirm` nothing is removed — you get
     exactly what would go (with ids) and a one-time code. Read that list to
     the owner; only if he says yes, call again with confirm=<code>. Anything
-    big (more than three things, or more than one kind) can only be approved
-    by the owner himself — the result says how."""
+    of his own (he stored or confirmed it) and anything big (more than three
+    things, or more than one kind) can only be approved by the owner himself
+    — the result says how."""
     return conscience.close_goal(contains, ids, confirm)
 
 
@@ -325,9 +328,9 @@ def log_action(category: str, description: str, outcome: str, amount: float | No
                authorization_id: str = "") -> dict:
     """Write down an act just performed on the owner's behalf, citing the
     authorization_id authorize_action gave you. No silent actions, ever. An
-    act with no valid approval is kept but marked 'not approved' for the
-    owner to see; outcomes JEFFEREY writes itself (permission changes,
-    approvals) are refused."""
+    act with no valid approval, or that is not what was approved, is kept
+    but marked 'not approved' for the owner to see; outcomes JEFFEREY writes
+    itself (permission changes, approvals) are refused."""
     return conscience.log_action(category, description, outcome, amount, authorization_id)
 
 
@@ -390,8 +393,9 @@ def resolve_opportunity(contains: str = "", outcome: str = "done",
     or by whole words in them. Two steps, never a guess: without `confirm` nothing is removed — you get
     exactly what would go (with ids) and a one-time code. Read that list to
     the owner; only if he says yes, call again with confirm=<code>. Anything
-    big (more than three things, or more than one kind) can only be approved
-    by the owner himself — the result says how."""
+    of his own (he stored or confirmed it) and anything big (more than three
+    things, or more than one kind) can only be approved by the owner himself
+    — the result says how."""
     return conscience.resolve_opportunity(contains, outcome, ids, confirm)
 
 
@@ -525,9 +529,9 @@ def set_profile_field(field: str, value: str, confirm: str = "") -> dict:
     """Store one of the OWNER's own details Jefferey may reuse on forms (name,
     address, phone, email, date of birth, employer...). Sensitive identifiers
     are refused by design, and so is anything about someone else (a buyer's
-    or a relative's name). A change to who he is (his name or date of birth)
-    waits for his own yes: tell him what would change, and he types /approve
-    and the code himself in 'Talk to JEFFEREY on this Mac'."""
+    or a relative's name). What you store is noted by the AI, beside his own
+    and never instead of it: his forms use only what he confirmed himself
+    (/pending and /confirm in 'Talk to JEFFEREY on this Mac')."""
     return rep.set_profile_field(field, value, confirm)
 
 
@@ -544,8 +548,9 @@ def forget_profile_field(field: str, confirm: str = "") -> dict:
     """Delete one profile detail, by its exact name. Two steps, never a guess: without `confirm` nothing is removed — you get
     exactly what would go (with ids) and a one-time code. Read that list to
     the owner; only if he says yes, call again with confirm=<code>. Anything
-    big (more than three things, or more than one kind) can only be approved
-    by the owner himself — the result says how."""
+    of his own (he stored or confirmed it) and anything big (more than three
+    things, or more than one kind) can only be approved by the owner himself
+    — the result says how."""
     return rep.forget_profile_field(field, confirm)
 
 
@@ -666,7 +671,8 @@ def add_person(name: str, relationship: str, notes: str = "",
     The same name with a different relationship is a separate person
     (possible_duplicate_of tells you); the same person gets new notes ADDED,
     never replaced. Tell him which happened. Everyone is private until he
-    shares them himself."""
+    shares them himself. A person you add is noted by the AI, not yet
+    confirmed by him; a change to someone he recorded is a proposal for him."""
     return life.add_person(name, relationship, notes, important_dates)
 
 
@@ -676,7 +682,8 @@ def update_person(person_id: str, name: str = "", relationship: str = "",
                   notes: str = "", important_dates: str = "") -> dict:
     """Change one person, by id (from who_am_i or add_person). New notes and
     dates are added, dated; a changed name or relationship keeps what it was
-    in the notes. Only what he told you."""
+    in the notes. Only what he told you. For someone he recorded it is a
+    proposal: nothing changes until he confirms it himself."""
     return life.update_person(person_id, name, relationship, notes, important_dates)
 
 
@@ -745,8 +752,9 @@ def forget_life(contains: str = "", ids: list[str] | None = None,
     whole words in what was said about them. Two steps, never a guess: without `confirm` nothing is removed — you get
     exactly what would go (with ids) and a one-time code. Read that list to
     the owner; only if he says yes, call again with confirm=<code>. Anything
-    big (more than three things, or more than one kind) can only be approved
-    by the owner himself — the result says how. A forgotten person is
+    of his own (he stored or confirmed it) and anything big (more than three
+    things, or more than one kind) can only be approved by the owner himself
+    — the result says how. A forgotten person is
     never asked about again. Never argued with."""
     return life.forget_life(contains, ids, confirm)
 
@@ -924,8 +932,9 @@ def conscience_exclude(contains: str = "", ids: list[str] | None = None,
     they are. Two steps, never a guess: without `confirm` nothing is removed — you get
     exactly what would go (with ids) and a one-time code. Read that list to
     the owner; only if he says yes, call again with confirm=<code>. Anything
-    big (more than three things, or more than one kind) can only be approved
-    by the owner himself — the result says how."""
+    of his own (he stored or confirmed it) and anything big (more than three
+    things, or more than one kind) can only be approved by the owner himself
+    — the result says how."""
     return rules.exclude(contains, ids, confirm)
 
 
@@ -938,26 +947,27 @@ def set_rule(kind: str, tags: str, instruction: str, audience: str = "me",
     to respond when THEY raise this), 'representation' (how to speak of them
     to others). tags: the subject ('health', 'father', 'money', 'karen').
     audience: 'me', 'anyone', or a named person/group. Only ever at the
-    owner's word; never write a rule for them."""
+    owner's word; never write a rule for them. From you a no (disclosure,
+    allow=false) holds at once, noted by the AI; any other rule is a proposal
+    that changes nothing until he confirms it himself."""
     return rules.set_rule(kind, tags, instruction, audience, allow)
 
 
 @door(mcp.tool())
 @gate("facts.write")
 def remove_rule(rule_id_or_text: str = "", confirm: str = "") -> dict:
-    """Delete a rule by its id (from list_rules), or by whole words of it.
-    Two steps, never a guess: without `confirm` nothing is removed — you get
-    exactly what would go (with ids) and a one-time code. Read that list to
-    the owner; only if he says yes, call again with confirm=<code>. Anything
-    big (more than three things, or more than one kind) can only be approved
-    by the owner himself — the result says how. Never argued with."""
+    """Ask to delete a rule by its id (from list_rules), or by whole words of
+    it. From you it is a proposal: nothing is removed until he confirms it
+    himself, and no code completes it for you — the result says how. Never
+    argued with."""
     return rules.remove_rule(rule_id_or_text, confirm)
 
 
 @door(mcp.tool())
 @gate("rules.read")
 def list_rules(kind: str = "") -> list:
-    """Every standing rule the owner has written, in plain language."""
+    """Every standing rule the owner has written, in plain language. A rule
+    that holds for you comes back without his own words."""
     return rules.listed(kind)
 
 

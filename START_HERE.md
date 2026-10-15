@@ -232,11 +232,14 @@ strange web address) he asks about too, and warns you it may be a trick.
 ### Forgetting, and bringing back
 
 Ask any AI to forget something and JEFFEREY first shows it exactly what would
-go; nothing goes until you say yes. A small thing (up to three, of one kind)
-goes on your word in the chat. Anything bigger — or forgetting a person, with
-their moments — needs your own hands: the AI tells you a short code;
+go; nothing goes until you say yes. Something an AI noted down itself, that
+you never confirmed (up to three, of one kind), goes on your word in the
+chat. Anything **you** told JEFFEREY or confirmed yourself — a fact, a
+moment, a person, a rule, a goal, a detail on your forms — and anything
+bigger needs your own hands, however small: the AI tells you a short code;
 double-click **`Forget or bring back.command`** and type `ok` and the number
-(or the code); it shows you the list once more, and you type yes. The same
+(or the code); it shows you the list once more, and you type the three
+numbers it shows you. The same
 window lists everything removed in the last three
 months — `back` and the number puts it back — and can **erase** words
 everywhere, for good: from your memories, the copies, and the record of what
@@ -268,10 +271,17 @@ any model name Ollama has.
 
 No AI can raise this — not Claude, not ChatGPT, not the one on your Mac. You
 type it yourself in this window, JEFFEREY reads it back in plain words, and
-nothing changes until you answer. To give more (raise a permission, give or
-widen a key, confirm or share), he shows three numbers — type them and press
-return. Nothing pasted counts, so a message someone sends you can never say
-yes for you:
+nothing changes until you answer. To give more or to change what is yours
+(raise a permission, give or widen a key, confirm, share, approve, erase,
+bring back, put back a copy, say yes to a charge), he shows three numbers —
+type them and press return. Nothing pasted counts, so a message someone
+sends you can never say yes for you. The same goes for the buttons and the
+commands below: they only work with you at the keyboard, and `--yes` is
+not accepted any more. One thing this cannot stop: an AI program that is
+allowed to type commands on this Mac (some "agents" can) could read the
+three numbers off the screen and type them itself. So never let an AI run
+commands on the Mac that holds your memories. This ends when confirming
+moves to your fingerprint (Touch ID).
 
 | Type | It means |
 |---|---|
@@ -283,11 +293,14 @@ yes for you:
 | `/permit groceries recommend` | back to bringing you options; you decide |
 | `/charges` | payments an AI asked to add to your agreed list: yes or no |
 | `/keys`, `/grant family`, `/scope remove family media.read`, `/revoke gpt-raw` | who holds a key, and changing it |
-| `/approve CODE` | yes to a change an AI asked for that waits for you — a big removal, or a change to your name or date of birth on forms |
+| `/approve CODE` | yes to a removal an AI asked for that waits for you — a big one, or something of your own |
 | `/scope add jefferey paperwork.write` | give your own JEFFEREY back the filling of forms, if you had taken it away |
 
-Moving money, gift cards, crypto, phone calls in your voice and the doors are
-never allowed, whatever you type. Anything that repeats (a subscription) he
+Moving money, gift cards, crypto, phone calls in your voice, the doors — and
+your home itself: the house, its keys, its security, its cameras, who comes
+in (`home`, `my house`, `home security`, `guests`, `la maison`…) — are never
+allowed, whatever you type. Buying for the home (groceries, household
+supplies) is not the home itself. Anything that repeats (a subscription) he
 always brings to you. And whatever you have allowed, anything about getting
 into your home — a door, a gate, the garage, a key, a lock, a code, the
 alarm, the intercom, or letting someone in (even the cat) — he brings to you
@@ -298,6 +311,12 @@ first. It is your door: you decide.
 Whatever an AI writes down is kept private, and marked **"noted by the AI,
 not yet confirmed"** — even when it is word for word what you said. It is
 still used, but it is not *your words* until you say so, with your own hands.
+An AI never changes what is yours: a person it writes down is not someone
+you know until you confirm them; a change it asks for to someone you
+recorded, to your rules or to the details on your forms waits for you and
+changes nothing until you confirm it; a goal it writes down is marked as the
+AI's in your brief. A "no" an AI writes down for you (never tell Bob about
+my money) holds at once — a no only keeps more at home.
 Your health, money, children, the safety of your home and other people's
 secrets are never sent to a plain Claude or ChatGPT. Only you let more people
 see something:
@@ -307,7 +326,7 @@ see something:
 | `/remember Anna calls on Sundays` | keep exactly these words, as your own |
 | `/pending` | what an AI noted down, or asked to share, that waits for your OK — numbered |
 | `/confirm 2` (or `/confirm 1 3`, or `/confirm all`) | yes, those are right: now they are your own words |
-| `python connector/conscience.py confirm` | the same, without starting a conversation |
+| `python connector/conscience.py confirm` | the same, without starting a conversation (only at your keyboard, typing the three numbers it shows) |
 | `/share m-1a2b3c family` | your family's key may read this moment (`private` takes it back) |
 | `/legacy`, `/legacy open executor`, `/legacy seal` | what you meant for after: sealed until you open it, to the keys you name |
 | `/grant mira family.read` | give one family member her own key, so your rules about Mira apply to her |

@@ -1088,8 +1088,10 @@ class AfterTheFixes(Temp):
         asked = []
 
         def typed(prompt):
+            # (round 8, S6: his yes is the number shown at that moment)
             asked.append(prompt)
-            return "yes"
+            return "".join(c for c in prompt.split("type the number", 1)[1].split("and", 1)[0]
+                           if c.isdigit())
         guardian.review_at_the_keyboard(owner, input_fn=typed, out=lambda *a: None)
         self.assertTrue(any("Make this change?" in q for q in asked), asked)
         self.assertEqual(next(e for e in owner.expected_charges()

@@ -600,7 +600,7 @@ class TheSideHeIsOnIsTheSideTheModelSaid(PaperworkTest):
         r = self.py("""
             import jefferey_chat as jc
             for f, v in (("full name", %r), ("address", %r), ("phone", %r), ("email", %r)):
-                jc.dispatch_tool("set_profile_field", {"field": f, "value": v})
+                his(f, v)       # his own details, set by him (round 8, S2)
             import jefferey_mcp as m
             os.environ["JEFFEREY_HTTP_TOKENS"] = %r
             import jefferey_http as h
@@ -645,7 +645,7 @@ class TheSideHeIsOnIsTheSideTheModelSaid(PaperworkTest):
         r = self.py("""
             import jefferey_chat as jc
             for f, v in (("full name", %r), ("address", %r), ("phone", %r)):
-                jc.dispatch_tool("set_profile_field", {"field": f, "value": v})
+                his(f, v)       # his own details, set by him (round 8, S2)
             import jefferey_mcp as m
             res = []
             for i, (names, box, said, _) in enumerate(%r):
@@ -664,7 +664,7 @@ class TheSideHeIsOnIsTheSideTheModelSaid(PaperworkTest):
         r = self.py("""
             import jefferey_chat as jc
             for f, v in (("full name", %r), ("address", %r), ("phone", %r)):
-                jc.dispatch_tool("set_profile_field", {"field": f, "value": v})
+                his(f, v)       # his own details, set by him (round 8, S2)
             import jefferey_mcp as m
             p = make_form("bos.pdf", [{"name": n} for n in ["Seller name", "Seller address",
                           "Buyer name", "Buyer address", "Phone", "Vehicle VIN", "Price"]])

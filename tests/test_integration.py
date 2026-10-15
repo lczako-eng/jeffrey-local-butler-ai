@@ -192,8 +192,15 @@ class TheRegisterIsTheOwners(Child):
             a = jc.dispatch_tool("expect_charge", {"merchant": "PAYPAL *SPOTIFYAB", "amount": 12.42})
             b = jc.dispatch_tool("expect_charge", {"merchant": "Crave", "amount": 22.59})
             no_tty = jc.owner_charges("/charges", answer=lambda p: "yes", tty=False)
-            answers = iter(["", "oui", "non"])      # return asks again; oui; non
-            jc.owner_charges("/charges", answer=lambda p: next(answers), tty=True)
+            # return asks again; then the number shown (round 8, S6: a yes is the
+            # number on the screen at that moment, not 'oui'); then non
+            import re
+            answers = iter(["", "the number", "non"])
+            def typed(p):
+                a = next(answers)
+                return "".join(re.findall(r"\d", p.split("type the number", 1)[1].split("and", 1)[0])) \
+                    if a == "the number" else a
+            jc.owner_charges("/charges", answer=typed, tty=True)
             reg = {x["merchant"]: x.get("status", "agreed") for x in jc.guard.expected_charges()}
             out({"no_tty": no_tty, "reg": reg, "waiting": jc.guard.pending_changes()})
         """)

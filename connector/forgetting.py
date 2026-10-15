@@ -35,7 +35,15 @@ it keeps five rules:
    may still hold. A forgotten name goes on a list (as a fingerprint, not the
    name) so JEFFEREY never asks about that person again.
 
-Owner commands (his own terminal; no AI can run these):
+What is HIS — anything he stored or confirmed himself — is never forgotten
+because an AI asked, whatever the count (S5, round 8): an AI's own code only
+forgets its own notes that still wait for him.
+
+Owner commands (his own terminal; no AI can run these). Each one that
+changes something wants him at the keyboard (S6, round 8): stdin and stdout
+terminals, the number shown on the screen typed back, --yes ignored. An
+agent with a shell and a pseudo-terminal can still do what he can, until
+Touch ID (I-43):
     python connector/forgetting.py                  the 'Forget or bring back' menu
     python connector/forgetting.py waiting          what an AI asked to remove
     python connector/forgetting.py approve <code>   remove it (it can still be put back)
@@ -98,11 +106,25 @@ KINDS = {
     "_notices": ("notice", "notices"),
     "expected_charges": ("expected charge", "expected charges"),
     "charges_seen": ("charge seen", "charges seen"),
+    "profile_notes": ("profile detail an AI noted", "profile details an AI noted"),
+    "rule_proposals": ("rule an AI asked for", "rules an AI asked for"),
 }
+
+# S5 (round 8): what is HIS — anything he stored or confirmed himself, or
+# kept before JEFFEREY recorded who said what — is never forgotten because
+# an AI asked, whatever the count: the code then works only at his own
+# keyboard. An AI's two-step code completes only the forgetting of its own
+# notes that still wait for him. (Before, forget('resuscitated') gave
+# needs_owner false, and the AI's own code removed his confirmed words.)
+HIS_SECTIONS = frozenset({"facts", "memories", "media", "people", "rules", "goals",
+                          "profile"})
+HIS_OWN = ("it is his own — he stored or confirmed it himself — so only he can let it "
+           "go")
 
 # Which key may read each kind of thing: a preview never shows words to a
 # key that could not read them anyway.
 READ_SCOPE = {"facts": "facts.read", "rules": "facts.read", "profile": "facts.read",
+              "profile_notes": "facts.read",
               "conscience_included": "facts.read", "goals": "goals.read",
               "opportunities": "goals.read", "observations": "goals.read",
               "priorities": "priorities.read", "corrections": "priorities.read",
@@ -324,8 +346,8 @@ def _what(section: str, item: dict) -> str:
     elif section == "rules":
         tags = ", ".join(_strs(g("tags")))
         t = g("instruction", "") + (f" (about {tags})" if tags else "")
-    elif section == "profile":
-        t = f"{g('field')}: {g('value')}"
+    elif section in ("profile", "profile_notes"):
+        t = f"{g('label') or g('field')}: {g('value')}"
     elif section == "people":
         t = g("name", "") + (f" ({g('relationship')})" if g("relationship") else "")
     elif section == "memories":
@@ -370,9 +392,18 @@ def _kept_from_reader(c, section: str, item: dict) -> str | None:
     other read (verify I-11: forget(contains='night') showed a rented engine
     'Takes donepezil 10mg at night' word for word, while explain_basis held
     it back under his rule)."""
+    if c is not None and section == "rules":
+        # his rules are read only by a key that may read them (rules.read);
+        # and the words of a rule that holds for whoever reads are never
+        # handed to it (S1, round 8: 'Never tell any AI that I have HIV')
+        try:
+            import provenance
+            import rules as _rules
+            return ("his own words for a rule that holds for this connection"
+                    if _rules.binds(item, provenance.reader(), c.data) else None)
+        except Exception:
+            return "private"
     if c is None or section in ("rules", "priorities", "corrections"):
-        # his rules are read only by a key that may read them (rules.read),
-        # and every rule about his health says 'health'
         return None
     try:
         import provenance
@@ -750,7 +781,12 @@ def _legacy(tool: str, changes: list[dict], done: bool) -> dict:
     if tool == "remove_rule":
         return {"removed": n()}
     if tool == "forget_profile_field":
-        return {"removed": changes[0]["id"] if done and changes else None}
+        if not (done and changes):
+            return {"removed": None}
+        ch = changes[0]
+        # an AI's note for a detail is named by the detail it is for (S2)
+        return {"removed": (ch.get("before") or {}).get("field")
+                if ch["section"] == "profile_notes" else ch["id"]}
     if tool == "forget_life":
         return {"memories_removed": n("memories", "remove"),
                 "media_removed": n("media", "remove"),
@@ -769,6 +805,27 @@ def run(c: Conscience, tool: str, make_plan: Callable[[], Plan | str],
     if isinstance(plan, str):
         return refusal(tool, plan)
     return ask(c, tool, plan)
+
+
+def _engine() -> bool:
+    """An engine key is asking (not the owner's own hands, nor his own tools)."""
+    try:
+        import access
+        return not access.owners_hands()
+    except Exception:
+        return True
+
+
+def _his(section: str, item) -> bool:
+    """Is this his own (S5)? Everything in his profile is (an AI's value waits
+    beside it, in profile_notes); elsewhere, anything that is not an AI's
+    note still waiting for him."""
+    if section not in HIS_SECTIONS or not isinstance(item, dict):
+        return False
+    if section == "profile":
+        return True
+    import provenance
+    return provenance.his(item)
 
 
 def ask(c: Conscience, tool: str, plan: Plan) -> dict:
@@ -790,6 +847,8 @@ def ask(c: Conscience, tool: str, plan: Plan) -> dict:
     if tool == "set_profile_field" or any(
             ch["section"] == "profile" and ch["id"] in IDENTITY_KEYS for ch in plan.changes):
         why = "it changes who he is on every form and letter"
+    elif _engine() and any(_his(ch["section"], ch["before"]) for ch in plan.changes):
+        why = HIS_OWN
     elif count > AI_MAX_ITEMS:
         why = f"it is {count} things"
     elif len(sections) > 1:
@@ -892,10 +951,14 @@ def confirm_code(c: Conscience, tool: str, code: str) -> dict:
         return refusal(tool, "That code was given to a different key. Nothing was "
                              "removed.")
     if not e.get("needs_owner"):
-        # The day's limit again, now: what was done since the list was shown
-        # counts (verify I-01). Over it, the same code waits for the owner.
-        why = _over_the_day(c, tool, len(e.get("changes") or []), but=e["code"],
-                            waiting=False)
+        # What became his since the list was shown (he confirmed it) is his
+        # now (S5); and the day's limit again, now: what was done since the
+        # list was shown counts (verify I-01). Either way the same code then
+        # waits for the owner.
+        mine = _engine() and any(_his(ch["section"], _find(c.data, ch["section"], ch["id"]))
+                                 for ch in e.get("changes") or [])
+        why = HIS_OWN if mine else _over_the_day(c, tool, len(e.get("changes") or []),
+                                                 but=e["code"], waiting=False)
         if why:
             pend = _Pending(c)
             taken = pend.take(e["code"])
@@ -1043,6 +1106,34 @@ def _carry_out(c: Conscience, entry: dict, by_owner: bool) -> dict:
     return res
 
 
+def remove_now(c: Conscience, section: str, items: list[dict], tool: str,
+               asked_by: str) -> None:
+    """The owner's own yes, given at his keyboard to something an AI asked
+    for (S1: taking one of his rules away): done now, as an approved removal
+    is — a copy pinned first, the removed list (he can put it back), the
+    action log by id — with no code. Changes memory; the caller saves."""
+    changes = [{"section": section, "id": _id(section, it), "action": "remove",
+                "change": None, "after": None, "before": copy.deepcopy(it)} for it in items]
+    if not changes:
+        return
+    c.pin_snapshot(f"before {tool}")
+    now = time.time()
+    keep_until = now + TRASH_KEEP_DAYS * 86400
+    code = "".join(secrets.choice(_ALPHABET) for _ in range(6))
+    _Trash(c).put({"code": code, "at": _cs._now(), "ts": now, "tool": tool,
+                   "asked_by": asked_by, "by": "owner",
+                   "changes": [{k: ch[k] for k in ("section", "id", "action", "change",
+                                                   "before")} for ch in changes],
+                   "names": [], "keep_until_ts": keep_until})
+    _apply(c.data, changes)
+    ids = [str(ch["id"]) for ch in changes]
+    _log(c.data, f"removed {_count_words(Counter(ch['section'] for ch in changes))} (ids "
+                 f"{', '.join(ids[:12])}). Asked for through '{tool}' by '{asked_by}'; "
+                 f"confirmed by the owner at his own keyboard.",
+         f"kept in the removed list until {_day(keep_until)}; the owner can put it back "
+         f"with 'Forget or bring back'")
+
+
 def _apply(data: dict, changes: list[dict]) -> None:
     for ch in changes:
         sec = ch["section"]
@@ -1127,25 +1218,31 @@ def exclude(c: Conscience, contains: str = "", ids=None, confirm: str = "") -> d
         c.data, "conscience_included", contains, ids, ("ref", "note")), confirm)
 
 
-def remove_rules(c: Conscience, rule_id_or_text: str = "", confirm: str = "") -> dict:
-    def make():
-        s = rule_id_or_text.strip() if isinstance(rule_id_or_text, str) else ""
-        plan = Plan()
-        exact = [r for r in _items(c.data, "rules") if s and str(r.get("id", "")).casefold() == s.casefold()]
-        if exact:
-            for r in exact:
-                plan.remove("rules", r)
-            return plan
-        bad = too_vague(s)
-        if bad:
-            return bad
-        w, key = Words(s), _squash(s)
-        for r in _items(c.data, "rules"):
-            if (w(r.get("instruction")) or any(_squash(t) == key for t in _strs(r.get("tags")))
-                    or _squash(r.get("audience", "")) == key):
-                plan.remove("rules", r)
+def plan_rules(c: Conscience, rule_id_or_text: str = "") -> Plan | str:
+    """Which rules a remove_rule would take: by id, or by whole words of the
+    rule, an exact tag or its audience."""
+    s = rule_id_or_text.strip() if isinstance(rule_id_or_text, str) else ""
+    plan = Plan()
+    exact = [r for r in _items(c.data, "rules") if s and str(r.get("id", "")).casefold() == s.casefold()]
+    if exact:
+        for r in exact:
+            plan.remove("rules", r)
         return plan
-    return run(c, "remove_rule", make, confirm)
+    bad = too_vague(s)
+    if bad:
+        return bad
+    w, key = Words(s), _squash(s)
+    for r in _items(c.data, "rules"):
+        if (w(r.get("instruction")) or any(_squash(t) == key for t in _strs(r.get("tags")))
+                or _squash(r.get("audience", "")) == key):
+            plan.remove("rules", r)
+    return plan
+
+
+def remove_rules(c: Conscience, rule_id_or_text: str = "", confirm: str = "") -> dict:
+    """The owner's own two steps. From an engine, a removal is a proposal
+    instead (rules.remove_rule, S1)."""
+    return run(c, "remove_rule", lambda: plan_rules(c, rule_id_or_text), confirm)
 
 
 def forget_profile(c: Conscience, field: str, key: str, confirm: str = "") -> dict:
@@ -1157,6 +1254,11 @@ def forget_profile(c: Conscience, field: str, key: str, confirm: str = "") -> di
         it = _find(c.data, "profile", key)
         if it is not None:
             plan.remove("profile", it)
+        else:
+            # only what an AI noted for this detail, waiting beside his (S2)
+            for n in _items(c.data, "profile_notes"):
+                if n.get("field") == key:
+                    plan.remove("profile_notes", n)
         return plan
     return run(c, "forget_profile_field", make, confirm)
 
@@ -1626,11 +1728,22 @@ def _say(res: dict) -> None:
     print(f"  You can put this back until {res.get('kept_until')}, here.")
 
 
-def console_approve(c: Conscience, which: str, answer=input, yes: bool = False) -> dict | None:
+def _at_keyboard(answer, tty, yes: bool = False, what: str = "") -> bool:
+    """S6 (round 8): his yes only at a terminal, with the number shown now —
+    never --yes, never a script with stdin from somewhere else."""
+    import answers as _answers
+    if yes:
+        print("  " + _answers.YES_IGNORED)
+    return _answers.confirm_by_code(print, answer, tty, what)
+
+
+def console_approve(c: Conscience, which: str, answer=None, yes: bool = False,
+                    tty: bool | None = None) -> dict | None:
     """The owner approves a waiting request at his own keyboard — after he
     has seen exactly what it removes. A code read out to him by an AI is
     never carried out unseen (verify I-01: '/approve CODE' removed at once,
-    without showing the list)."""
+    without showing the list), and never by a script (S6: --yes is ignored;
+    he types back the number shown)."""
     rows = waiting(c)
     s = str(which or "").strip()
     row = next((r for r in rows if str(r["number"]) == s or r["code"] == _clean_code(s)), None)
@@ -1646,22 +1759,16 @@ def console_approve(c: Conscience, which: str, answer=input, yes: bool = False) 
         print(f"         {_kind(sec)}: {what}" + (f"  — {change}" if change else ""))
     if not row["items"]:
         print("         (nothing on it is still there)")
-    if not yes:
-        try:
-            import answers as _answers
-            _answers.flush_typeahead()      # a pasted 'yes' never counts
-            a = answer("  Do this? It can still be put back. Type yes and press return: ")
-        except EOFError:
-            a = ""
-        if a.strip().lower() not in ("yes", "y", "oui", "o"):
-            print("  Nothing was removed.")
-            return None
+    if not _at_keyboard(answer, tty, yes, "Do this? It can still be put back."):
+        print("  Nothing was removed.")
+        return None
     res = approve(c, row["code"])
     _say(res)
     return res
 
 
-def console_erase(c: Conscience, words: str, answer=input, yes: bool = False) -> dict | None:
+def console_erase(c: Conscience, words: str, answer=None, yes: bool = False,
+                  tty: bool | None = None) -> dict | None:
     pre = erase(c, words, dry_run=True)
     if pre.get("refused"):
         print("  " + pre["reason"])
@@ -1672,14 +1779,9 @@ def console_erase(c: Conscience, words: str, answer=input, yes: bool = False) ->
     for kind, what in pre.get("items", [])[:SHOW_MAX]:
         print(f"      {kind}: {what}")
     print("\n  This cannot be undone — not from the removed list, not from a copy.")
-    if not yes:
-        try:
-            a = answer("  Erase it everywhere, for good? Type yes and press return: ")
-        except EOFError:
-            a = ""
-        if a.strip().lower() not in ("yes", "y"):
-            print("  Nothing was erased.")
-            return None
+    if not _at_keyboard(answer, tty, yes, "Erase it everywhere, for good?"):
+        print("  Nothing was erased.")
+        return None
     try:
         r = erase(c, words)
     except StoreProblem as e:
@@ -1689,8 +1791,31 @@ def console_erase(c: Conscience, words: str, answer=input, yes: bool = False) ->
     return r
 
 
-def menu(c: Conscience, answer=input) -> int:
+def console_bring_back(c: Conscience, which, answer=None, tty: bool | None = None) -> dict | None:
+    """Put a removed thing back — he sees what, and says so himself (S6)."""
+    entries = removed(c)
+    s = str(which).strip()
+    row = next((r for r in entries if str(r["number"]) == s or r["file"] == s
+                or (s and _clean_code(s) == r.get("code"))), None)
+    if row is not None:
+        print(f"  This puts back what went {row['when'][3:]}:")
+        for sec, what, change in row["items"][:SHOW_MAX]:
+            print(f"         {_kind(sec)}: {what}" + (f"  — {change}" if change else ""))
+        if not _at_keyboard(answer, tty, False, "Put it back?"):
+            print("  Nothing was put back.")
+            return None
+    res = bring_back(c, which)
+    _say(res)
+    return res
+
+
+def menu(c: Conscience, answer=None) -> int:
     """'Forget or bring back' — the owner's own window."""
+    import answers as _answers
+    if not _answers.person_at_keyboard() and answer is None:
+        print("  " + _answers.NOT_AT_KEYBOARD)
+        return 1
+    ask = answer or (lambda p: _answers.read_tty(p) or "")
     print("\n  FORGET OR BRING BACK\n")
     w = _print_waiting(c)
     print()
@@ -1701,7 +1826,7 @@ def menu(c: Conscience, answer=input) -> int:
           "\n         erase           erase words everywhere, for good"
           "\n         just return     change nothing\n")
     try:
-        choice = answer("  > ").strip()
+        choice = ask("  > ").strip()
     except EOFError:
         choice = ""
     verb, _, rest = choice.partition(" ")
@@ -1712,9 +1837,9 @@ def menu(c: Conscience, answer=input) -> int:
         if verb in ("ok", "approve") and rest:
             console_approve(c, rest, answer)
         elif verb in ("back", "bring") and rest:
-            _say(bring_back(c, rest.replace("back", "").strip() or rest))
+            console_bring_back(c, rest.replace("back", "").strip() or rest, answer)
         elif verb == "erase":
-            words = rest or answer("  Which words? (for example a name): ")
+            words = rest or ask("  Which words? (for example a name): ")
             console_erase(c, words, answer)
         else:
             print("  Nothing was changed.")
@@ -1733,13 +1858,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("waiting", parents=[common])
     a = sub.add_parser("approve", parents=[common])
     a.add_argument("code")
-    a.add_argument("--yes", action="store_true", help="do not ask first")
+    a.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)   # ignored (S6)
     sub.add_parser("removed", parents=[common])
     b = sub.add_parser("bring-back", parents=[common])
     b.add_argument("which")
     e = sub.add_parser("erase", parents=[common])
     e.add_argument("words", nargs="+")
-    e.add_argument("--yes", action="store_true", help="do not ask first")
+    e.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)   # ignored (S6)
     args = ap.parse_args(argv)
     c = Conscience.for_surface(Path(args.path).expanduser() if args.path else None)
     try:
@@ -1758,9 +1883,8 @@ def main(argv: list[str] | None = None) -> int:
             res = console_approve(c, args.code, yes=args.yes)
             return 1 if res is None or res.get("refused") else 0
         elif args.cmd == "bring-back":
-            res = bring_back(c, args.which)
-            _say(res)
-            return 1 if res.get("refused") else 0
+            res = console_bring_back(c, args.which)
+            return 1 if res is None or res.get("refused") else 0
         elif args.cmd == "erase":
             return 0 if console_erase(c, " ".join(args.words), yes=args.yes) else 1
     except StoreProblem as exc:

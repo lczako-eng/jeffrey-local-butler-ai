@@ -36,8 +36,13 @@ Owner commands (the owner's own terminal; no AI can run these):
     python connector/conscience.py check            how are my memories?
     python connector/conscience.py history          the copies kept
     python connector/conscience.py restore <n>      put copy <n> back
+    python connector/conscience.py confirm          say yes to what an AI noted
     python connector/conscience.py edit             change it by hand, checked
     python connector/conscience.py dismiss          I have read the notices
+'restore' and 'confirm' want him at the keyboard (S6, round 8): stdin and
+stdout terminals, the number shown on the screen typed back, --yes ignored.
+An agent with a shell and a pseudo-terminal can still do what he can, until
+Touch ID (I-43).
 """
 
 from __future__ import annotations
@@ -540,6 +545,17 @@ _NEVER = (
      "speaking for the owner on the phone, in his voice or at the door"),
     (re.compile(r"\b(?:unlock\w*|locks?|alarms?|garage ?doors?|garage ?openers?|doors?)$"),
      "letting anyone into the house"),
+    # S9 (round 8): his home itself — the house, its security, its keys, who
+    # comes in — in English and French, any wording that ends with one of
+    # these ('my home', 'home security', 'house guests', 'la maison'). What
+    # one buys for the home ('household supplies', 'groceries') is not the
+    # home itself. (Accents are taken off before this is read.)
+    (re.compile(r"\b(?:homes?|houses?|maisons?|condos?|condominiums?|apartments?"
+                r"|appartements?|propert(?:y|ies)|proprietes?|security|securite"
+                r"|visitors?|visiteurs?|guests?|invites?|keys?|cles?|clefs?"
+                r"|entry|entries|entrees?|access|acces|portes?|cameras?"
+                r"|smart ?homes?|domotique)$"),
+     "his home itself: who comes in, its keys, doors and security"),
 )
 # Inside a description: never a 'never' (R10, round 6). The words of a
 # description are an engine's, and reading them for 'never' refused ordinary
@@ -893,7 +909,10 @@ class Conscience:
     ID_PREFIX = {"facts": "f", "priorities": "pr", "goals": "g",
                  "corrections": "c", "observations": "ob", "opportunities": "op",
                  "memories": "m", "media": "md", "people": "p", "rules": "r",
-                 "conscience_included": "in"}
+                 "conscience_included": "in",
+                 # what an AI asked to change in his rules and his profile, waiting
+                 # for his own yes (S1, S2 — round 8)
+                 "rule_proposals": "rp", "profile_notes": "pf"}
 
     def __init__(self, path: Path | str = DEFAULT_STORE):
         self._init_fields(path)
@@ -2435,7 +2454,11 @@ class Conscience:
             c = (s * _STATED_WEIGHT + f) / (_STATED_WEIGHT + f + a)
         else:
             c = (f + 1) / (f + a + 2)
-        cap = 0.99 if provenance.owner_backed(p) else UNCONFIRMED_CAP
+        # S7 (round 8): an AI's note never says it is surer than 0.6 for him,
+        # however many corrections or turns it counts (twelve of them reached
+        # 0.8, and one MCP correction 0.67)
+        cap = (0.99 if provenance.owner_backed(p) else
+               ENGINE_CONFIDENCE_CAP if provenance.engine_note(p) else UNCONFIRMED_CAP)
         return round(max(0.05, min(cap, c)), 2)
 
     @staticmethod
@@ -2672,12 +2695,21 @@ class Conscience:
             self._legacy_seen(p, True)
             p["for"] = int(p.get("for") or 0) + 1
         else:
-            self._legacy_seen(p, False)
-            p["against"] = int(p.get("against") or 0) + 1
+            # S7 (round 8): an AI's correction never wears down a value he
+            # stated or confirmed himself — twelve of them took his 'the car'
+            # from 0.6 to 0.15. It is written down, and he is asked; it does
+            # not count against him.
+            mine = engine and provenance.owner_backed(p)
+            if not mine:
+                self._legacy_seen(p, False)
+                p["against"] = int(p.get("against") or 0) + 1
+            else:
+                entry["not_counted"] = "against a value he stated or confirmed himself"
             legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else None
             strong_old = bool(legacy) and (_real_number(legacy.get("confidence")) or 0) >= 0.8
-            if p.get("stated") or strong_old:
-                said = "said" if p.get("stated") else "has long held"
+            if p.get("stated") or strong_old or mine:
+                said = ("said" if p.get("stated") else "confirmed" if mine
+                        else "has long held")
                 q = (f"He {said} that for {p['context']}, {p['higher']} matters more than "
                      f"{p['lower']}. This time he chose {hi} over {lo}. Ask him, once "
                      f"and plainly, whether that has changed; nothing was reversed.")
@@ -2727,10 +2759,41 @@ class Conscience:
 
     # ------------------------------------------------------------ goals
     def add_goal(self, goal: str) -> dict:
-        entry = {"goal": goal.strip(), "added": _now(), "active": True}
+        """One of his goals. Written by an AI it waits for him (S4, round 8):
+        kept and shown, labelled 'noted by the AI, not yet confirmed by him'
+        in the brief and the conscience, until he confirms it himself — an
+        AI's 'Send $3,000 bail for my grandson' showed as his own goal."""
+        text = str(goal or "").strip()
+        if not text:
+            return _refusal("add_goal", "There is no goal to keep: it is empty.")
+        src = provenance.source(text=text)
+        entry = {"goal": text, "added": _now(), "active": True, "source": src,
+                 "status": provenance.status_for(src)}
         self.data["goals"].append(entry)
         self._save()
-        return entry
+        out = {k: v for k, v in entry.items() if k != "source"}
+        if entry["status"] == "pending":
+            out["noted_by"] = provenance.NOTED_BY_AI
+            out["note"] = ("Noted by the AI, not yet confirmed by him: it is shown as such in "
+                           "his brief until he confirms it himself (/pending, then /confirm "
+                           "in 'Talk to JEFFEREY on this Mac'). Never call it his goal before "
+                           "he does.")
+        return out
+
+    @staticmethod
+    def _goal_view(g: dict) -> dict:
+        """A goal as an engine reads it, and whether it is his yet."""
+        v = {k: g[k] for k in ("id", "goal", "added", "active") if k in g}
+        if provenance.pending(g):
+            v["unconfirmed"] = True
+            v["noted_by"] = provenance.NOTED_BY_AI
+        return v
+
+    @staticmethod
+    def _goal_line(g: dict) -> str:
+        """A goal in one line of the brief, labelled when an AI wrote it."""
+        text = str(g.get("goal") or "")
+        return f"{text} ({provenance.NOTED_BY_AI})" if provenance.pending(g) else text
 
     def close_goal(self, contains: str = "", ids=None, confirm: str = "") -> dict:
         """Two steps, like every change that takes something away
@@ -2755,7 +2818,9 @@ class Conscience:
         """Why this can never be approved, whatever is set — or None. Only
         the CATEGORY decides (R10, round 6): a description is an engine's
         words, and reading them for 'never' refused ordinary errands."""
-        words = re.sub(r"[^a-z0-9]+", " ", (category or "").lower()).strip()
+        bare = "".join(ch for ch in unicodedata.normalize("NFKD", str(category or ""))
+                       if not unicodedata.combining(ch))       # 'propriété', 'clés'
+        words = re.sub(r"[^a-z0-9]+", " ", bare.lower()).strip()
         for rx, why in _NEVER:
             if rx.search(words):
                 return why
@@ -2888,6 +2953,11 @@ class Conscience:
         p = dict(raw)
         lvl = str(p.get("level") or "").strip().lower()
         p["level"] = lvl if lvl in self.LEVELS else "recommend"
+        if p["level"] == "act" and self._never(self._cat(category)):
+            # 'act' saved where it can never be (his home itself, S9, or a
+            # door, a transfer, a call) reads as what it always was: he decides
+            p["level"] = "recommend"
+            p["never_act"] = True
         for k in ("cap", "floor"):
             if p.get(k) is None:
                 continue
@@ -3093,6 +3163,19 @@ class Conscience:
                     f"cost {_money(amt, a.get('currency') or DEFAULT_CURRENCY)}"), None
         return None, a
 
+    def _not_what_was_approved(self, done: str, approved: str) -> str | None:
+        """Why an act written down is not the act that was approved — or None
+        (S8, round 8). Read by the same words the gate reads: what was done
+        would itself have asked the owner first (his doors, keys, codes and
+        alarm, letting someone in, money moved, a call as him) and what was
+        approved would not; or the two share no word that means anything."""
+        if self._ask_first(done) and not self._ask_first(approved):
+            return ("what was done is something only he decides, and what was approved "
+                    "was not")
+        if not (grounding.content(done) & grounding.content(approved)):
+            return "the two have nothing in common"
+        return None
+
     def log_action(self, category: str, description: str, outcome: str,
                    amount: float | None = None, authorization_id: str = "") -> dict:
         """Every executed act is written down. No silent actions, ever — and
@@ -3123,12 +3206,30 @@ class Conscience:
         aid = str(authorization_id or "").strip()
         problem, auth = (self._approval_problem(aid, cat, amt) if aid
                          else ("no approval was cited", None))
+        mismatch = None
         if auth is not None:
+            # The approval is used either way: it never covers a second act.
+            auth["used"] = _now()
+            mismatch = self._not_what_was_approved(entry["description"],
+                                                   str(auth.get("description") or ""))
+        if auth is not None and mismatch:
+            # S8 (round 8): an approval for 'Feed the cat at 6' covered a
+            # logged 'Unlocked the front door and let the plumber in' as
+            # approved:true. Only what was approved is approved.
+            entry.update(authorization_id=aid, approved=False,
+                         approved_for=str(auth.get("description") or "")[:300],
+                         note=(f"Not an approved act: what was done is not what was approved "
+                               f"({mismatch}). The owner sees this line marked that way."))
+            self._note("action_mismatch", (
+                f"An AI wrote in your action log ('{cat}') that it did something under an "
+                f"approval you had given for something else: what was done is not what "
+                f"was approved. It is marked 'not approved' there — look at it in your "
+                f"brief, and ask JEFFEREY what happened."))
+        elif auth is not None:
             # What was approved stands beside what was done, so the owner
             # sees at a glance whether they are the same thing (verify I-45).
             entry.update(authorization_id=aid, approved=True,
                          approved_for=str(auth.get("description") or "")[:300])
-            auth["used"] = _now()
         else:
             entry.update(authorization_id=aid or None, approved=False,
                          note=f"Not an approved act: {problem}. The owner sees this "
@@ -3345,7 +3446,7 @@ class Conscience:
         notices = self.notices()
         out = {
             "orb": self.orb_state(),
-            "active_goals": [g["goal"] for g in goals],
+            "active_goals": [self._goal_line(g) for g in goals],
             "opportunities": self._shown_opportunities()[:10],
             "recent_actions": acts,
             "recent_observations": obs,
@@ -3402,7 +3503,7 @@ class Conscience:
             "facts": [self._fact_view(f) for f in page],
             # verify I-11, I-41: goals are his too ('Find a memory clinic for my
             # Alzheimer's'), and 200 of them made an 89 KB system prompt
-            "active_goals": goals,
+            "active_goals": [self._goal_view(g) for g in goals],
             "corrections_learned_from": len(self.data["corrections"]),
             "notices": notices[-NOTICES_SHOWN:],
         }
@@ -3535,7 +3636,8 @@ class Conscience:
         return out
 
     # ------------------------------------------------------- waiting for him
-    _CONFIRMABLE = ("facts", "priorities", "memories", "media")
+    _CONFIRMABLE = ("facts", "priorities", "memories", "media", "goals", "people", "rules",
+                    "rule_proposals", "profile_notes")
 
     def pending_items(self) -> list[dict]:
         """What waits for the owner's own yes: things an AI wrote down in its
@@ -3582,6 +3684,70 @@ class Conscience:
                             "what": f.get("fact", ""),
                             "why": f"an AI asked to make it '{ask}'; type /share "
                                    f"{f.get('id')} {ask} if you want that"})
+        out += self._his_own_waiting()
+        return out
+
+    def _his_own_waiting(self) -> list[dict]:
+        """What an AI asked about what is HIS (round 8): his goals (S4), his
+        people and changes to them (S3), his rules (S1) and his profile (S2).
+        Nothing here has changed anything of his until he confirms it."""
+        out = []
+        for g in self.data.get("goals") or []:
+            if isinstance(g, dict) and g.get("active") and provenance.pending(g):
+                out.append({"id": g.get("id"), "kind": "goal", "what": g.get("goal", ""),
+                            "why": "an AI wrote it down as your goal; you have not confirmed it"})
+        for p in self.data.get("people") or []:
+            if not isinstance(p, dict):
+                continue
+            who = p.get("name", "") + (f" ({p.get('relationship')})" if p.get("relationship")
+                                       else "")
+            if provenance.pending(p):
+                notes = str(p.get("notes") or "").strip()
+                out.append({"id": p.get("id"), "kind": "person",
+                            "what": who + (f" — {notes[:100]}" if notes else ""),
+                            "why": "an AI wrote this person down; you have not confirmed them, "
+                                   "so JEFFEREY does not count them as someone you know"})
+            pr = p.get("proposed")
+            if isinstance(pr, dict):
+                import life as _life
+                out.append({"id": p.get("id"), "kind": "change to a person",
+                            "what": f"{who}: {_life.describe_change(pr)}",
+                            "why": "an AI asks to change someone you recorded; nothing was "
+                                   "changed, and confirming changes it"})
+        for r in self.data.get("rules") or []:
+            if isinstance(r, dict) and provenance.pending(r):
+                out.append({"id": r.get("id"), "kind": "rule",
+                            "what": f"{r.get('instruction', '')} (about "
+                                    f"{', '.join(r.get('tags') or []) or 'anything'}, for "
+                                    f"{r.get('audience_written') or r.get('audience')})",
+                            "why": "an AI wrote down this no; it already holds, and confirming "
+                                   "makes it your own rule"})
+        for x in self.data.get("rule_proposals") or []:
+            if not isinstance(x, dict):
+                continue
+            r = x.get("rule") if isinstance(x.get("rule"), dict) else {}
+            said = (f"{r.get('instruction', '')} ({'yes' if r.get('allow') else 'no'} "
+                    f"about {', '.join(r.get('tags') or []) or 'anything'}, for "
+                    f"{r.get('audience_written') or r.get('audience')})")
+            if x.get("action") == "remove":
+                out.append({"id": x.get("id"), "kind": "removing one of his rules",
+                            "what": said,
+                            "why": "an AI asked to take this rule away; it still holds, and "
+                                   "confirming takes it away (you can put it back)"})
+            else:
+                out.append({"id": x.get("id"), "kind": "new rule", "what": said,
+                            "why": "an AI asked for this rule; it changes nothing until you "
+                                   "confirm it"})
+        prof = self.data.get("profile") if isinstance(self.data.get("profile"), dict) else {}
+        for n in self.data.get("profile_notes") or []:
+            if not isinstance(n, dict):
+                continue
+            had = str(prof.get(n.get("field")) or "")
+            out.append({"id": n.get("id"), "kind": "profile detail",
+                        "what": f"{n.get('label') or n.get('field')}: {n.get('value')}"
+                                + (f" — you have {had}" if had else ""),
+                        "why": "an AI wrote it down for your forms; forms use only what you "
+                               "confirmed, and confirming puts this on them"})
         return out
 
     def _find_item(self, item_id: str, sections=None) -> tuple[str | None, dict | None]:
@@ -3603,6 +3769,7 @@ class Conscience:
                 if str(x).strip()]
         if want == ["all"]:
             want = [x["id"] for x in self.pending_items() if x["kind"] != "request to share"]
+        want = list(dict.fromkeys(want))        # a person and a change to them share an id
         done, unknown = [], []
         src = provenance.source()
         for i in want:
@@ -3610,6 +3777,16 @@ class Conscience:
             if it is None:
                 unknown.append(i)
                 continue
+            if sec in ("rule_proposals", "profile_notes"):
+                # an AI's request about his rules or his profile: confirming
+                # does what it asked, and the request itself is done with
+                self._carry_out_request(sec, it, src)
+                done.append(i)
+                continue
+            if sec == "people" and isinstance(it.get("proposed"), dict):
+                import life as _life
+                _life.apply_change(it, it.pop("proposed"))
+                it["updated"] = _now()
             if sec == "priorities" and isinstance(it.get("proposed"), dict):
                 pr = it.pop("proposed")
                 was = f"{it.get('higher')} > {it.get('lower')}"
@@ -3630,6 +3807,39 @@ class Conscience:
         if done:
             self._save()
         return {"confirmed": done, "unknown_ids": unknown}
+
+    def _carry_out_request(self, sec: str, it: dict, src: dict) -> None:
+        """His yes to what an AI asked about his rules (S1) or his profile
+        (S2). Changes memory only; confirm() saves."""
+        lst = self.data.get(sec) or []
+        if sec == "rule_proposals":
+            rule = dict(it.get("rule") or {})
+            if it.get("action") == "remove":
+                cur = next((r for r in self.data.get("rules") or []
+                            if isinstance(r, dict) and r.get("id") == it.get("rule_id")), None)
+                if cur is not None:
+                    import forgetting
+                    forgetting.remove_now(self, "rules", [cur], "remove_rule",
+                                          (it.get("source") or {}).get("by", "an AI"))
+            elif rule:
+                rule.update(status="confirmed", confirmed_by_owner=_now(),
+                            source=it.get("source") or src)
+                rule.pop("id", None)
+                self.data.setdefault("rules", []).append(rule)
+        else:
+            prof = self.data.setdefault("profile", {})
+            key, new = it.get("field"), it.get("value")
+            old = str(prof.get(key) or "")
+            if key:
+                prof[key] = new
+                if old and old != new:
+                    self.data["actions"].append(self._stamp({
+                        "category": "profile", "description": (
+                            f"changed his {it.get('label') or key} on forms from '{old}' to "
+                            f"'{new}', confirmed by the owner himself"),
+                        "amount": None, "outcome": "changed", "added": _now(),
+                        "ts": time.time()}, "jefferey"))
+        self.data[sec] = [x for x in lst if x is not it]
 
     def set_visibility(self, ids, visibility: str) -> dict:
         """Who may see something: a fact ('private', 'engines', 'family',
@@ -3845,13 +4055,24 @@ def edit(c: Conscience, editor: list[str] | None = None) -> int:
     return 0
 
 
-def confirm_at_keyboard(c: "Conscience", which=(), yes: bool = False, input_fn=input,
-                        out=print) -> int:
+def confirm_at_keyboard(c: "Conscience", which=(), yes: bool = False, input_fn=None,
+                        out=print, tty: bool | None = None) -> int:
     """What an AI noted down, in plain words, numbered; he says which are
     right — one, several or all — and those become his own words (D2,
-    round 7). Only a person at this keyboard: there is no AI in this
-    process."""
+    round 7). Only a person at this keyboard (S6, round 8): stdin and stdout
+    must be terminals, --yes is ignored, and he types back a number shown on
+    the screen at that moment, read from the terminal itself. (Before, 'confirm
+    all --yes' with stdin from /dev/null confirmed an AI's notes as his.)"""
+    import access
     import answers
+    if yes:
+        out("  " + answers.YES_IGNORED)
+    if tty is None:
+        tty = answers.person_at_keyboard()
+    if not tty:
+        out("  " + answers.NOT_AT_KEYBOARD)
+        return 1
+    ask = input_fn or answers.read_tty
     try:
         c.refresh()
     except StoreProblem as e:
@@ -3868,16 +4089,13 @@ def confirm_at_keyboard(c: "Conscience", which=(), yes: bool = False, input_fn=i
         out(f"          — {it['why']}")
     chosen = [w for w in which or () if str(w).strip()]
     if not chosen:
-        if yes:
-            out("  Say which ones: their numbers, or all.")
-            return 1
         answers.flush_typeahead()
         try:
-            said = input_fn("  Which are right? Type their numbers (for example 1 3), or "
-                            "all, and press return. Press return alone to stop: ")
+            said = ask("  Which are right? Type their numbers (for example 1 3), or "
+                       "all, and press return. Press return alone to stop: ")
         except EOFError:
             said = ""
-        chosen = str(said).replace(",", " ").split()
+        chosen = str(said or "").replace(",", " ").split()
     if not chosen:
         out("  Nothing was changed.")
         return 0
@@ -3893,17 +4111,11 @@ def confirm_at_keyboard(c: "Conscience", which=(), yes: bool = False, input_fn=i
     out("  You are saying these are right — your own words from now on:")
     for it in picked:
         out(f"    · {it['what'][:110]}")
-    if not yes:
-        answers.flush_typeahead()
-        try:
-            said = input_fn("  Is that right? Type yes and press return: ")
-        except EOFError:
-            said = ""
-        if answers.yes_no(said) is not True:
-            out("  Nothing was changed.")
-            return 1
+    if not answers.confirm_by_code(out, input_fn, True, "Is that right?"):
+        return 1
     try:
-        res = c.confirm([it["id"] for it in picked])
+        with access.owner_console():
+            res = c.confirm([it["id"] for it in picked])
     except (StoreProblem, PermissionError) as e:
         out("  Not done: " + (e.for_owner() if isinstance(e, StoreProblem) else str(e)))
         return 1
@@ -3924,13 +4136,13 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--all", action="store_true")
     r = sub.add_parser("restore", parents=[common], help="put a copy back")
     r.add_argument("which", help="the copy's number in 'history', or its file name")
-    r.add_argument("--yes", action="store_true", help="do not ask first")
+    r.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)   # ignored (S6)
     sub.add_parser("dismiss", parents=[common], help="I have read the notices")
     sub.add_parser("edit", parents=[common], help="change them by hand, checked")
     cf = sub.add_parser("confirm", parents=[common],
                         help="say yes to what an AI noted down, so it is your own words")
     cf.add_argument("which", nargs="*", help="their numbers in the list, or all")
-    cf.add_argument("--yes", action="store_true", help="do not ask first")
+    cf.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)   # ignored (S6)
     a = ap.parse_args(argv)
     path = Path(a.path).expanduser() if a.path else DEFAULT_STORE
 
@@ -3964,7 +4176,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"  Marked {n} notice(s) as read.")
         return 0
-    # restore
+    # restore — only a person at this keyboard (S6)
+    import answers
+    if a.yes:
+        print("  " + answers.YES_IGNORED)
+    if not answers.person_at_keyboard():
+        print("  " + answers.NOT_AT_KEYBOARD)
+        return 1
     try:
         snap = c._resolve_copy(a.which)
     except StoreProblem as e:
@@ -3977,15 +4195,8 @@ def main(argv: list[str] | None = None) -> int:
              if row.get("readable") else "."))
     print("  Your memories as they are now are kept as a copy first, so this can "
           "be undone.")
-    if not a.yes:
-        try:
-            answer = input("  Put this copy back? Type yes and press return: ")
-        except EOFError:
-            answer = ""
-        import answers
-        if answers.yes_no(answer) is not True:
-            print("  Nothing was changed.")
-            return 1
+    if not answers.confirm_by_code(print, None, True, "Put this copy back?"):
+        return 1
     try:
         res = c.restore(snap.name)
     except StoreProblem as e:

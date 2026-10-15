@@ -154,7 +154,8 @@ RELEASE: dict[str, frozenset[str]] = {
     "forget": FORGET | {"removed_facts"},
     "get_profile": frozenset({ANY}),
     # a change to who the owner is comes back as a question first (I-30)
-    "set_profile_field": FORGET | {"stored", "field", "value"},
+    # an engine's value waits beside his own, labelled (S2, round 8)
+    "set_profile_field": FORGET | {"stored", "field", "value", "pending", "noted_by"},
     "forget_profile_field": FORGET | {"removed"},
     # from_your_vault: "your SIN will go into box X", read to the owner first
     # owner_is / sides: which side of a sale he was taken to be (selling-30)
@@ -180,11 +181,15 @@ RELEASE: dict[str, frozenset[str]] = {
                              "id", "held_back"}),
     "conscience_include": frozenset({"id", "ref", "added"}),
     "conscience_exclude": FORGET | {"excluded"},
+    # an engine's no holds at once, labelled; anything else it asks is a
+    # proposal; a rule's own words never reach an AI it holds for (S1, round 8)
     "set_rule": frozenset({"id", "kind", "tags", "audience", "allow",
-                           "instruction", "added", "holds_for"}),
-    "remove_rule": FORGET | {"removed"},
+                           "instruction", "added", "holds_for", "status", "noted_by",
+                           "proposed", "changed"}),
+    "remove_rule": FORGET | {"removed", "proposal_ids"},
     "list_rules": frozenset({"id", "kind", "tags", "audience", "allow",
-                             "instruction", "added", "holds_for"}),
+                             "instruction", "added", "holds_for", "status", "noted_by",
+                             "proposed", "instruction_held_back"}),
     "daily_brief": frozenset({"orb", "active_goals", "opportunities",
                               "recent_actions", "recent_observations",
                               "corrections_learned_from", "notices",
@@ -192,7 +197,7 @@ RELEASE: dict[str, frozenset[str]] = {
                               "more_notices", "charges_waiting_for_owner"}),
     "orb_state": frozenset({"mood"}),
     # goals and the opportunity engine
-    "add_goal": frozenset({"id", "goal", "added", "active"}),
+    "add_goal": frozenset({"id", "goal", "added", "active", "status", "noted_by"}),
     "close_goal": FORGET | {"closed"},
     "log_observation": frozenset({"id", "note", "category", "added", "ts"}),
     # who saved it, whether it may interrupt, and any marks of a scam (I-40)
@@ -256,12 +261,14 @@ RELEASE: dict[str, frozenset[str]] = {
                                  "relevant_priorities", "advice"}),
     # the life layer
     # a person is never overwritten by another of the same name (I-27)
+    # an engine's person waits, labelled; its change to his is a proposal (S3)
     "add_person": frozenset({"id", "name", "relationship", "notes",
                              "important_dates", "visibility", "added", "updated",
-                             "matched_existing", "changed", "possible_duplicate_of"}),
+                             "matched_existing", "changed", "possible_duplicate_of",
+                             "unconfirmed", "noted_by", "proposed_change"}),
     "update_person": frozenset({"id", "name", "relationship", "notes",
                                 "important_dates", "visibility", "added", "updated",
-                                "changed"}),
+                                "changed", "unconfirmed", "noted_by", "proposed_change"}),
     # an AI's write is private, and verbatim only when it is his words (I-25, I-26)
     "add_memory": frozenset({"id", "text", "when", "people", "tags", "visibility",
                              "added", "photos", "verbatim", "status",
@@ -3271,10 +3278,16 @@ def menu(input_fn=input, out=print) -> int:
     pick = answers.ask_choice("  > ", answers.DOOR, input_fn, out,
                               hint="Type shut, open, all, keep or quit — or just press return.")
     rc = 0
+    # Shutting is instant, always. Opening the door again, and letting the
+    # words of what left go for good, are his alone: at a terminal, with the
+    # number shown at that moment (S6, round 8).
+    reader = None if input_fn is input else input_fn
     if pick == "shut":
         rc = _do_shut(out)
     elif pick == "open":
-        rc = _do_open(out)
+        rc = (_do_open(out) if answers.confirm_by_code(out, reader, None if reader is None
+                                                       else True, "Open the door again?")
+              else 1)
     elif pick == "see":
         _page(report(7, full=True), out)
     elif pick == "all":
@@ -3290,10 +3303,10 @@ def menu(input_fn=input, out=print) -> int:
         if v in ("always", "forever", "toujours"):
             set_keep(None)
             out("  Every send is kept word for word, for as long as the log exists.")
-        elif v.isdigit() and int(v) > 0 and answers.ask_yes_no(
-                f"  The words of every send older than {v} days are then let go for good "
-                f"(the date, where it went and its fingerprint stay). Type yes or no: ",
-                input_fn, out):
+        elif v.isdigit() and int(v) > 0 and answers.confirm_by_code(
+                out, reader, None if reader is None else True,
+                f"The words of every send older than {v} days are then let go for good "
+                f"(the date, where it went and its fingerprint stay)."):
             set_keep(int(v))
             r = let_go(int(v))
             out(f"  Each send is now kept word for word for {v} days. "
@@ -3327,6 +3340,9 @@ def main(argv: list[str]) -> int:
     if a.what == "shut":
         return _do_shut(print)
     if a.what == "open":
+        import answers
+        if not answers.confirm_by_code(print, None, None, "Open the door again?"):
+            return 1
         return _do_open(print)
     if a.what == "keep":
         v = (a.days_to_keep or "").strip().lower()
@@ -3343,6 +3359,11 @@ def main(argv: list[str]) -> int:
                   + (f"for {now} days." if now else "for as long as the log exists.")
                   + "\n  To change it: keep <number of days>, or keep always.")
             return 0 if not v else 1
+        import answers
+        if not answers.confirm_by_code(print, None, None, (
+                f"The words of every send older than {n} days are then let go for good "
+                f"(the date, where it went and its fingerprint stay).")):
+            return 1
         set_keep(n)
         r = let_go(n)
         print(f"  Each send is now kept word for word for {n} days. After that only "

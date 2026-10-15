@@ -174,9 +174,12 @@ class TheFamilyViewKeepsHisRules(LifeTest):
             self.assertNotIn(secret, body)
         self.assertEqual(r["before"]["life"]["people_who_matter"], [])
         self.assertEqual(r["before"]["story"]["people"], [])
+        # (round 8, S3: a person an AI wrote down is labelled in every view,
+        # the family's too, until he confirms them)
         self.assertEqual(r["after"]["people_who_matter"],
                          [{"id": r["after"]["people_who_matter"][0]["id"],
-                           "name": "Anna", "relationship": "daughter"}])
+                           "name": "Anna", "relationship": "daughter", "unconfirmed": True,
+                           "noted_by": "noted by the AI, not yet confirmed by him"}])
         self.assertNotIn("rehab", json.dumps(r["after"]))
         # his own caretaker key still sees everyone, with notes
         self.assertEqual(len(r["mine"]["people_who_matter"]), 3)
@@ -417,14 +420,17 @@ class DraftsKeepHisRules(LifeTest):
         # email#2: draft_guidance('PTSD', 'Karen Novak <someone@example.invalid>')
         # returned the PTSD fact; check_disclosure allowed 'Karen Novak'.
         r = self.py("""
-            import jefferey_mcp as m
+            import jefferey_mcp as m, access
             mcp_call(m, "add_person", {"name": "Karen", "relationship": "ex-wife"})
             mcp_call(m, "set_rule", {"kind": "disclosure", "tags": "health", "audience": "karen",
                                      "allow": False, "instruction": "Never tell Karen about my health."})
-            mcp_call(m, "set_rule", {"kind": "disclosure", "tags": "health", "audience": "anyone",
-                                     "allow": True, "instruction": "Anyone may hear I'm doing well."})
-            mcp_call(m, "set_rule", {"kind": "representation", "tags": "work", "audience": "anyone",
-                                     "instruction": "Say I'm retired and leave it there."})
+            # a yes and how to speak of him are his to write (round 8, S1): from an
+            # AI they would be proposals that change nothing
+            with access.owner_console():
+                m.rules.set_rule("disclosure", "health", "Anyone may hear I'm doing well.",
+                                 audience="anyone", allow=True)
+                m.rules.set_rule("representation", "work", "Say I'm retired and leave it there.",
+                                 audience="anyone")
             mcp_call(m, "remember_fact", {"fact": "Laszlo has PTSD from Afghanistan"})
             to = "Karen Novak <someone@example.invalid>"
             out({"draft": mcp_call(m, "draft_guidance", {"purpose": "PTSD", "recipient": to}),
@@ -445,9 +451,10 @@ class DraftsKeepHisRules(LifeTest):
 
     def test_a_yes_for_one_karen_is_not_a_yes_for_another(self):
         r = self.py("""
-            import jefferey_mcp as m
-            mcp_call(m, "set_rule", {"kind": "disclosure", "tags": "health", "audience": "karen smith",
-                                     "allow": True, "instruction": "Karen Smith may know."})
+            import jefferey_mcp as m, access
+            with access.owner_console():          # his yes, written by him (round 8, S1)
+                m.rules.set_rule("disclosure", "health", "Karen Smith may know.",
+                                 audience="karen smith", allow=True)
             out({a: mcp_call(m, "check_disclosure", {"audience": a, "tags": "health"})["allowed"]
                  for a in ("Karen Smith", "Karen Jones <kj@example.invalid>")})
         """, JEFFEREY_CLIENT="jefferey")

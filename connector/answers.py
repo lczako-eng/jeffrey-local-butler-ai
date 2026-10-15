@@ -101,11 +101,133 @@ def typed_code(answer: str | None, code: str) -> bool:
     return re.sub(r"\D", "", str(answer or "")) == code
 
 
+# ---------------------------------------------------------- a person, here
+# S6 (round 8): a confirmation that only the owner gives — 'confirm' and
+# 'restore' in conscience.py, 'approve', 'erase' and 'bring-back' in
+# forgetting.py, 'review' in guardian.py, opening the door or letting the
+# record of what left go in egress.py — needs a person at this keyboard:
+# stdin and stdout are terminals, --yes is ignored, and the answer is read
+# from the terminal itself (/dev/tty) and must hold a short number printed
+# on the screen at that moment. (Before, `conscience.py confirm all --yes`
+# with stdin from /dev/null confirmed an AI's notes as his own words.)
+#
+# What this cannot tell apart: an agent that has a shell AND a
+# pseudo-terminal can still do what he can, until Touch ID (I-43).
+NOT_AT_KEYBOARD = ("This can only be done by you, typing at the keyboard of this "
+                   "computer. Nothing was changed.")
+YES_IGNORED = ("(--yes is not accepted any more: JEFFEREY asks you here, at the "
+               "keyboard, every time.)")
+
+
+def person_at_keyboard() -> bool:
+    """Are both stdin and stdout a terminal? A pipe, /dev/null, a file or
+    another program on either end is not a person."""
+    try:
+        return os.isatty(sys.stdin.fileno()) and os.isatty(sys.stdout.fileno())
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def read_tty(prompt: str) -> str | None:
+    """One line typed at this terminal, read from the terminal itself
+    (/dev/tty), never from whatever stdin was pointed at. Whatever was typed
+    or pasted before the question is thrown away first. None when nothing
+    was typed (a closed window). With no controlling terminal at all, stdin
+    is used — it has been checked to be a terminal."""
+    try:
+        fd = os.open("/dev/tty", os.O_RDWR | getattr(os, "O_NOCTTY", 0))
+    except OSError:
+        fd = None
+    if fd is None:
+        if not person_at_keyboard():
+            return None
+        flush_typeahead()
+        try:
+            return input(prompt)
+        except (EOFError, KeyboardInterrupt):
+            return None
+    try:
+        try:
+            import termios
+            termios.tcflush(fd, termios.TCIFLUSH)        # nothing typed beforehand
+        except Exception:
+            pass
+        os.write(fd, prompt.encode("utf-8", "replace"))
+        got = b""
+        while not got.endswith(b"\n") and len(got) < 4096:
+            chunk = os.read(fd, 1024)
+            if not chunk:
+                break
+            got += chunk
+        return got.decode("utf-8", "replace") if got else None
+    except (OSError, KeyboardInterrupt):
+        return None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def confirm_by_code(out=print, input_fn=None, tty: bool | None = None,
+                    what: str = "") -> bool:
+    """The owner's own yes (S6): only at a terminal (stdin and stdout), and
+    only when he types back the three digits shown now. `input_fn` is for a
+    caller that already reads the owner's keyboard itself (the terminal
+    chat, a test); otherwise the answer comes from /dev/tty."""
+    if tty is None:
+        tty = person_at_keyboard()
+    if not tty:
+        out("  " + NOT_AT_KEYBOARD)
+        return False
+    code = fresh_code()
+    prompt = (f"  {what + ' ' if what else ''}To make sure it is really you at the keyboard, "
+              f"type the number {' '.join(code)} and press return: ")
+    if input_fn is None:
+        said = read_tty(prompt)
+    else:
+        flush_typeahead()
+        try:
+            said = input_fn(prompt)
+        except (EOFError, KeyboardInterrupt):
+            said = None
+    if not typed_code(said, code):
+        out("  That was not the number shown, so nothing was changed.")
+        return False
+    return True
+
+
 def _ask(prompt: str, input_fn) -> str | None:
     try:
         return input_fn(prompt)
     except (EOFError, KeyboardInterrupt):
         return None                      # the window was closed: no answer
+
+
+def ask_code_or_no(head: str, input_fn=None, out=print, tries: int = 5) -> bool | None:
+    """S6 (round 8): a yes here is the number shown now, typed back; a no is
+    a no; anything else is asked again. No answer at all is None — nothing is
+    decided, it stays as it was. Read from the terminal itself unless the
+    caller reads the owner's keyboard (`input_fn`)."""
+    code = fresh_code()
+    prompt = (f"{head} To say yes, type the number {' '.join(code)} and press return "
+              f"(or type no): ")
+    for _ in range(tries):
+        if input_fn is None:
+            said = read_tty(prompt)
+        else:
+            flush_typeahead()
+            said = _ask(prompt, input_fn)
+        if said is None:
+            out("")
+            return None
+        if typed_code(said, code):
+            return True
+        if yes_no(said) is False:
+            return False
+        out("  That was not the number shown. Type the number to say yes, or no.")
+    out("  No answer, so nothing was changed.")
+    return None
 
 
 def ask_yes_no(prompt: str, input_fn=input, out=print, tries: int = 5) -> bool:

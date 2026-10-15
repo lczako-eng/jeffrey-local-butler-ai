@@ -41,6 +41,7 @@ from typing import Any
 
 import egress
 import grounding
+import provenance
 import vault
 
 # ------------------------------------------------------------------ labels
@@ -2241,53 +2242,54 @@ class Representative:
                               "forget_profile_field."}
         prof = self.c.data.setdefault("profile", {})
         old = self._current(key)
-        if key in IDENTITY_FIELDS and old.casefold() != value.casefold():
-            import access
-            if not access.owners_hands() and self._identity_needs_owner(key, old, value):
-                return self._identity_change(key, old, value, confirm)
-            if old:
-                self._log("profile", f"changed the owner's {IDENTITY_FIELDS[key]} on forms "
-                                     f"from '{old}' to '{value}'"
-                                     + (", by the owner himself" if access.owners_hands()
-                                        else ""), "changed", save=False)
+        if provenance.engine_writes():
+            return self._noted_by_an_engine(field, key, value, old)
+        if key in IDENTITY_FIELDS and old and old.casefold() != value.casefold():
+            self._log("profile", f"changed the owner's {IDENTITY_FIELDS[key]} on forms "
+                                 f"from '{old}' to '{value}', by the owner himself",
+                      "changed", save=False)
         prof[key] = value
         self.c._save()
         return {"stored": True, "field": key, "value": value}
 
-    def _identity_needs_owner(self, key: str, old: str, new: str) -> bool:
-        """Does this change to who the owner is wait for his own yes (verify
-        I-30)? A change to what is there always does, and so does a fresh
-        value after an AI's removal, or a first or last name that does not
-        match the name already on file ('Kovacs' beside 'Laszlo Czako').
-        Filling in the profile for the first time — the name, the parts of
-        that same name, a date of birth not given before — needs nothing."""
-        if old:
-            return True
-        prof = self.c.data.get("profile") or {}
-        removed = any(isinstance(t, dict) and any(
-            ch.get("section") == "profile" and ch.get("id") in IDENTITY_FIELDS
-            and ch.get("action") == "remove" for ch in t.get("changes") or [])
-            for t in self._removed_entries())
-        if removed:
-            return True
-        n = grounding.normalise(new).split()
-        full = grounding.normalise(prof.get("full_name") or "").split()
-        if key == "first_name" and full:
-            return n != full[:len(n)]
-        if key == "last_name" and full:
-            return n != full[-len(n):]
-        parts = grounding.normalise(
-            f"{prof.get('first_name') or ''} {prof.get('last_name') or ''}").split()
-        if key == "full_name" and parts:
-            return not (n[:1] == parts[:1] and (len(parts) < 2 or n[-1:] == parts[-1:]))
-        return False
+    def _noted_by_an_engine(self, field: str, key: str, value: str, old: str) -> dict:
+        """S2 (round 8): an AI never changes what is his. What an engine says
+        about his own details is kept beside his — noted by the AI, not yet
+        confirmed by him — and never replaces it; forms use only what he
+        confirmed (before, an engine set his e-mail and address and his forms
+        filled with them). He confirms it himself: /pending and /confirm in
+        'Talk to JEFFEREY on this Mac', or python connector/conscience.py
+        confirm."""
+        notes = self.c.data.setdefault("profile_notes", [])
+        mine = str((self.c.data.get("profile") or {}).get(key) or "")
+        if mine and mine.casefold() == value.casefold():
+            return {"stored": True, "field": key, "value": mine,
+                    "note": "This is already his own, as he confirmed it."}
+        note = next((n for n in notes if isinstance(n, dict) and n.get("field") == key), None)
+        if note is None:
+            note = {"field": key}
+            notes.append(note)
+        note.update(label=field.strip()[:80], value=value, status="pending",
+                    source=provenance.source(text=value),
+                    added=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+        self.c._save()
+        who = (f" It would change his {IDENTITY_FIELDS[key]} on every form and letter"
+               + (f", from '{old}'" if old else "") + "." if key in IDENTITY_FIELDS else "")
+        return {"stored": False, "pending": True, "field": key, "value": value,
+                "noted_by": provenance.NOTED_BY_AI,
+                "note": ("Kept beside his own, as noted by the AI, not yet confirmed by him. "
+                         "Forms use only what he confirmed: until he confirms this himself, a "
+                         "box that needs it goes back to him." + who),
+                "tell_the_user": ("Tell him plainly what you noted, and that it is not on his "
+                                  "forms until he confirms it himself: /pending and /confirm "
+                                  "in 'Talk to JEFFEREY on this Mac'. Never say his details "
+                                  "were changed.")}
 
-    def _removed_entries(self) -> list:
-        try:
-            import forgetting
-            return [e for _, e in forgetting._Trash(self.c).entries()]
-        except Exception:
-            return []
+    def _unconfirmed(self) -> dict[str, str]:
+        """field -> what an AI noted for it, waiting for him (S2)."""
+        return {n["field"]: str(n.get("value") or "")
+                for n in self.c.data.get("profile_notes") or []
+                if isinstance(n, dict) and n.get("field")}
 
     def _current(self, key: str) -> str:
         prof = self.c.data.get("profile", {})
@@ -2295,45 +2297,6 @@ class Representative:
         if not cur and key == "full_name":
             cur = f"{prof.get('first_name') or ''} {prof.get('last_name') or ''}".strip()
         return "" if vault.is_reference(cur) else cur
-
-    def _identity_change(self, key: str, old: str, new: str, confirm: str) -> dict:
-        """A change to who the owner is, asked for by an AI, waits for HIS
-        own yes (verify I-30: the AI used to confirm its own code, and the log
-        then said 'after the owner was asked'). Nothing changes here: the
-        request waits, with a code, until he approves it himself in 'Talk to
-        JEFFEREY on this Mac' (/approve CODE) or 'Forget or bring back'."""
-        import forgetting
-        what = IDENTITY_FIELDS[key]
-        if isinstance(confirm, str) and confirm.strip():
-            return {"stored": False, "field": key, "refused": True,
-                    "reason": (f"Only the owner himself can confirm a change to his {what}: "
-                               f"he types /approve and the code in 'Talk to JEFFEREY on this "
-                               f"Mac'. Nothing was changed."),
-                    "tell_the_user": ("Tell the owner nothing was changed, and that if he "
-                                      "wants it, he approves it himself.")}
-        stored = str((self.c.data.get("profile") or {}).get(key) or "")
-        plan = forgetting.Plan()
-        plan.update("profile", {"field": key, "value": stored}, {"field": key, "value": new},
-                    f"would become '{new}'")
-        res = forgetting.ask(self.c, "set_profile_field", plan)
-        code = res.get("confirm")
-        was = f"from '{old}' " if old else ""
-        said = f"from {old} " if old else ""
-        res.update({
-            "stored": False, "field": key,
-            "would_change": f"the owner's {what} on every form and letter, {was}to '{new}'",
-            "how_to_finish": (
-                f"Nothing has changed. Ask the owner, in plain words: \"Shall I change your "
-                f"{what} on forms {said}to {new}?\" Only he can say yes: he types /approve "
-                f"{code} in 'Talk to JEFFEREY on this Mac' (or double-clicks 'Forget or bring "
-                f"back' and types the code). Do not call set_profile_field with this code; it "
-                f"will not work for you. If it is someone else's (a buyer, a relative), do "
-                f"not store it in his profile at all."),
-            "tell_the_user": ("Never say his details were changed until he has approved it "
-                              "himself."),
-        })
-        res.pop("would_remove", None)
-        return res
 
     def get_profile(self) -> dict:
         """Everything Jefferey can put on a form for you. You own all of it.
@@ -2354,6 +2317,11 @@ class Representative:
                 "never handed to an AI stayed in the house. Never ask the owner to "
                 "read it to you; he can move it into his vault by typing /secrets in "
                 "'Talk to JEFFEREY on this Mac'.")
+        waiting = self._unconfirmed()
+        if waiting:
+            # what an AI noted, beside his own and never instead of it (S2)
+            prof["noted_by_ai_not_confirmed"] = {
+                k: {"value": v, "noted_by": provenance.NOTED_BY_AI} for k, v in waiting.items()}
         return prof
 
     def forget_profile_field(self, field: str, confirm: str = "") -> dict:
@@ -2460,6 +2428,12 @@ class Representative:
                 continue
             key = self._normalize_field(label, side)
             val = self._current(key) if key else ""
+            if key and not val and key in self._unconfirmed():
+                # only his own values go on his forms (S2, round 8)
+                needs_you.append({"field": label, "why": (
+                    "an AI noted something for this box, but it is noted by the AI, not "
+                    "confirmed by him — ask him, or he confirms it himself (/pending)")})
+                continue
             if key and either and plain_box(label):
                 needs_you.append({"field": label, "why": (
                     "this form has boxes for both a seller and a buyer, and nobody said which "
@@ -2678,6 +2652,22 @@ class Representative:
                           "himself, ask him, then ask again with owner_is='seller' or "
                           "owner_is='buyer'." if unsided else ""),
                        fields=theirs)
+        # Only his own values go on his forms (S2, round 8): a value that is
+        # only what an AI noted for him, not confirmed by him, goes back to him.
+        noted = {grounding.normalise(v) for v in self._unconfirmed().values() if v}
+        unconfirmed = sorted(k for k, v in values.items()
+                             if k in hits and v.strip() and not vault.is_reference(v)
+                             and grounding.normalise(v) in noted
+                             and grounding.normalise(v) not in own)
+        if unconfirmed:
+            return _no("These values are only what an AI noted for him — noted by the AI, "
+                       "not confirmed by him — so they do not go on his forms: "
+                       + ", ".join(f"'{k}'" for k in unconfirmed)
+                       + ". Nothing was written. Ask him, or he confirms them himself "
+                         "(/pending, then /confirm, in 'Talk to JEFFEREY on this Mac').",
+                       fields=unconfirmed,
+                       needs_you=[{"field": k, "why": "noted by the AI, not confirmed by him"}
+                                  for k in unconfirmed])
         if blocked:
             return {
                 "error": "refused", "refused": True,
@@ -2923,7 +2913,9 @@ class Representative:
         flags: dict[str, tuple[float, str]] = {}
         if not s:
             return "unknown", "not given", flags
-        people = [p for p in self.c.data.get("people") or [] if isinstance(p, dict)]
+        # 'someone he has recorded' is someone HE recorded or confirmed: a
+        # 'grandson' an AI wrote down is nobody he knows (S3, round 8)
+        people = provenance.his_people(self.c.data)
         m = _EMAIL_ADDR.search(s)
         digits = re.sub(r"\D", "", s)
         if m:
@@ -3333,12 +3325,14 @@ class Representative:
         aud = str(recipient or "").strip()
         if not aud or grounding.norm_audience(aud) == "me":
             return aud, frozenset(), frozenset(), True
-        people = self.c.data.get("people") or []
-        broad, strict = grounding.audience_aliases(aud, people)
-        broad = frozenset(grounding.norm_audience(a) for a in broad)
+        # A no meets everyone written down; a yes, and 'someone he knows',
+        # only the people HE recorded or confirmed (S3, round 8)
+        mine = provenance.his_people(self.c.data)
+        broad, _ = grounding.audience_aliases(aud, self.c.data.get("people") or [])
+        broad_mine, strict = grounding.audience_aliases(aud, mine)
+        broad = frozenset(grounding.norm_audience(a) for a in broad | broad_mine)
         strict = frozenset(grounding.norm_audience(a) for a in strict)
-        known = any(grounding.norm_audience(p.get("name", "")) in broad
-                    for p in people if isinstance(p, dict))
+        known = any(grounding.norm_audience(p.get("name", "")) in broad for p in mine)
         return aud, broad, strict, known
 
     def draft_guidance(self, purpose: str, recipient: str = "") -> dict:

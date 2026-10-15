@@ -76,6 +76,43 @@ def _access():
     return access
 
 
+# ------------------------------------------------- an AI never changes his people
+# S3 (round 8). A person an AI writes down waits for him: kept, labelled
+# 'noted by the AI, not yet confirmed by him', and never 'someone he has
+# recorded' when JEFFEREY decides whom to trust. A change an AI asks for to
+# someone HE recorded — a name, a relationship, notes, dates — is a proposal
+# beside the person, and the person stays exactly as he left them until he
+# confirms it (/pending and /confirm). Before, an AI added a 'grandson' with
+# power of attorney and turned his daughter into a 'stranger'.
+def describe_change(ch: dict) -> str:
+    """A proposed change to a person, in plain words."""
+    parts = []
+    for f in ("name", "relationship"):
+        if ch.get(f):
+            parts.append(f"{f} to '{ch[f]}'")
+    if ch.get("notes"):
+        parts.append("add the notes '" + "; ".join(ch["notes"])[:160] + "'")
+    if ch.get("important_dates"):
+        parts.append("add the dates '" + "; ".join(ch["important_dates"])[:80] + "'")
+    return "change " + ", ".join(parts) if parts else "no change"
+
+
+def apply_change(p: dict, ch: dict) -> list[str]:
+    """Make a change to one person: new notes and dates added, dated; a new
+    name or relationship recorded with what it was, so nothing is lost."""
+    changed = Life._add_to(p, "\n".join(ch.get("notes") or []),
+                           "; ".join(ch.get("important_dates") or []))
+    for field in ("name", "relationship"):
+        new = " ".join(str(ch.get(field) or "").split())
+        if new and _key(new) != _key(p.get(field)):
+            was = p.get(field) or ""
+            p[field] = new
+            line = f"{_today()}: {field} was '{was}', now '{new}'"
+            p["notes"] = (str(p.get("notes") or "") + "\n" + line).strip()
+            changed.append(f"{field} ('{was}' → '{new}', kept in the notes)")
+    return changed
+
+
 class Life:
     """Who this person is — added by them, held for them."""
 
@@ -88,7 +125,37 @@ class Life:
     # --------------------------------------------------------------- people
     @staticmethod
     def _person_out(p: dict) -> dict:
-        return {k: v for k, v in p.items() if k != "source"}
+        o = {k: v for k, v in p.items() if k not in ("source", "proposed", "status")}
+        if provenance.pending(p):
+            o["unconfirmed"] = True
+            o["noted_by"] = provenance.NOTED_BY_AI
+        if isinstance(p.get("proposed"), dict):
+            o["proposed_change"] = {k: v for k, v in p["proposed"].items()
+                                    if k in ("name", "relationship", "notes", "important_dates")}
+        return o
+
+    def _propose(self, p: dict, name: str = "", relationship: str = "", notes: str = "",
+                 dates: str = "") -> dict:
+        """An AI's change to someone he recorded, kept beside them (S3)."""
+        ch = p.get("proposed") if isinstance(p.get("proposed"), dict) else {}
+        for field, new in (("name", name), ("relationship", relationship)):
+            new = " ".join(str(new or "").split())
+            if new and _key(new) != _key(p.get(field)):
+                ch[field] = new
+        for field, new in (("notes", notes), ("important_dates", dates)):
+            new = str(new or "").strip()
+            if new and _key(new) not in _key(p.get(field)) and new not in (ch.get(field) or []):
+                ch.setdefault(field, []).append(new)
+        if any(ch.get(f) for f in ("name", "relationship", "notes", "important_dates")):
+            ch.update(source=provenance.source(text=" ".join(
+                [str(name), str(relationship), str(notes), str(dates)])), at=_now())
+            p["proposed"] = ch
+            self.c._save()
+        return {**self._person_out(p), "changed": [],
+                "note": ("Nothing was changed: this is someone he recorded himself, so an AI's "
+                         "change waits beside them until he confirms it (/pending, then "
+                         "/confirm, in 'Talk to JEFFEREY on this Mac'). Tell him plainly what "
+                         "you asked; never say it was changed.")}
 
     def add_person(self, name: str, relationship: str, notes: str = "",
                    important_dates: str = "") -> dict:
@@ -122,6 +189,10 @@ class Life:
                              f"which one he means, then use update_person with that id.")}
         if same:
             p = same[0]
+            if provenance.engine_writes() and provenance.his(p):
+                out = self._propose(p, notes=notes, dates=dates)
+                out["matched_existing"] = True
+                return out
             changed = self._add_to(p, notes, dates)
             if changed:
                 p["updated"] = _now()
@@ -130,20 +201,27 @@ class Life:
                     "changed": changed or ["nothing — this was already known"],
                     "note": ("This is someone already known, so what was new was added "
                              "to them; nothing was replaced.")}
+        src = provenance.source(text=nm)
         entry = {
             "name": nm, "relationship": rel, "notes": notes, "important_dates": dates,
-            "visibility": "private", "source": provenance.source(text=nm),
+            "visibility": "private", "source": src, "status": provenance.status_for(src),
             "added": _now(), "updated": _now(),
         }
         people.append(entry)
         self.c._save()
         out = {**self._person_out(entry), "matched_existing": False}
+        if entry["status"] == "pending":
+            out["note"] = ("Noted by the AI, not yet confirmed by him: JEFFEREY does not "
+                           "count this person as someone he knows until he confirms them "
+                           "himself (/pending, then /confirm, in 'Talk to JEFFEREY on this "
+                           "Mac'). Tell him so.")
         if same_name:
             out["possible_duplicate_of"] = [self._who(p) for p in same_name]
             out["note"] = (
                 f"There is already {self._names(same_name)}. This was kept as a separate "
                 f"person, and nobody was changed. If they are in fact the same person, "
-                f"ask him, and use update_person with the right id.")
+                f"ask him, and use update_person with the right id. "
+                + out.get("note", "")).strip()
         if again:
             out["note"] = (out.get("note", "") + " He once asked JEFFEREY to forget someone "
                            "by this name. Make sure this is what he wants now; if not, "
@@ -186,15 +264,14 @@ class Life:
             return {"refused": True, "tool": "update_person",
                     "reason": f"Nobody is recorded with the id '{pid}'.",
                     "tell_the_user": "Nothing was changed. Use an id from who_am_i."}
-        changed = self._add_to(p, str(notes or "").strip(), str(important_dates or "").strip())
-        for field, new in (("name", name), ("relationship", relationship)):
-            new = " ".join(str(new or "").split())
-            if new and _key(new) != _key(p.get(field)):
-                was = p.get(field) or ""
-                p[field] = new
-                line = f"{_today()}: {field} was '{was}', now '{new}'"
-                p["notes"] = (str(p.get("notes") or "") + "\n" + line).strip()
-                changed.append(f"{field} ('{was}' → '{new}', kept in the notes)")
+        if provenance.engine_writes() and provenance.his(p):
+            # someone he recorded: the record stays as it is (S3)
+            return self._propose(p, name, relationship, notes, important_dates)
+        ch = {"name": name, "relationship": relationship,
+              "notes": [str(notes).strip()] if str(notes or "").strip() else [],
+              "important_dates": ([str(important_dates).strip()]
+                                  if str(important_dates or "").strip() else [])}
+        changed = apply_change(p, ch)
         if changed:
             p["updated"] = _now()
             self.c._save()
@@ -454,8 +531,11 @@ class Life:
                 if self._rule(v, who, tags):
                     held += 1
                     continue
-                out.append({"id": p.get("id"), "name": p.get("name"),
-                            "relationship": p.get("relationship")})
+                o = {"id": p.get("id"), "name": p.get("name"),
+                     "relationship": p.get("relationship")}
+                if provenance.pending(p):                # S3: labelled in every view
+                    o.update(unconfirmed=True, noted_by=provenance.NOTED_BY_AI)
+                out.append(o)
         return out, held
 
     def _facts(self, v: dict) -> tuple[list[dict], int]:

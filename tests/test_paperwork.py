@@ -193,6 +193,24 @@ def keep_secrets(**kv):
 FORMS = os.environ["JEFFEREY_FORMS_OUTBOX"]
 def outbox():
     return sorted(os.listdir(FORMS)) if os.path.isdir(FORMS) else []
+
+def his(field, value):
+    '''His own detail, typed by him at his own console. Round 8 (S2): what
+    an AI stores waits beside his own and never fills a form, so a form test
+    sets his profile the way he does.'''
+    import access
+    mods = [sys.modules[n] for n in ("jefferey_chat", "jefferey_mcp", "jefferey_http")
+            if n in sys.modules]
+    if not mods:
+        import jefferey_chat
+        mods = [jefferey_chat]
+    for x in mods:
+        x.conscience.refresh()
+    with access.owner_console():
+        r = mods[0].rep.set_profile_field(field, value)
+    for x in mods:
+        x.conscience.refresh()
+    return r
 """
 
 
@@ -478,7 +496,7 @@ class SecretsGoOnlyIntoTheirOwnBoxes(PaperworkTest):
         r = self.py("""
             import jefferey_chat as jc
             keep_secrets(sin=%r, pin="8421", card_number="4111111111111111")
-            jc.dispatch_tool("set_profile_field", {"field": "address", "value": "12 Elm St"})
+            his("address", "12 Elm St")
             out(jc.dispatch_tool("fill_form", {"fields": %r}))
         """ % (SIN, self.LABELS), JEFFEREY_CLIENT="jefferey")
         refs = {k: v for k, v in r["filled"].items() if str(v).startswith("vault:")}
@@ -557,7 +575,7 @@ class OtherPeoplesBoxesAreNotTheOwners(PaperworkTest):
         r = self.py("""
             import jefferey_chat as jc
             for f, v in %r:
-                jc.dispatch_tool("set_profile_field", {"field": f, "value": v})
+                his(f, v)
             out(jc.dispatch_tool("fill_form", {"fields": %r}))
         """ % (self.PROFILE, labels + own), JEFFEREY_CLIENT="jefferey")
         for label in labels:
@@ -574,7 +592,7 @@ class OtherPeoplesBoxesAreNotTheOwners(PaperworkTest):
     def test_a_buyers_or_mothers_name_never_replaces_his_own(self):
         r = self.py("""
             import jefferey_mcp as m
-            mcp_call(m, "set_profile_field", {"field": "Full name", "value": "Laszlo Czako"})
+            his("Full name", "Laszlo Czako")
             a = mcp_call(m, "set_profile_field", {"field": "Buyer name", "value": "Mike Ross"})
             b = mcp_call(m, "set_profile_field", {"field": "Mother's maiden name",
                                                   "value": "Kovacs"})
@@ -590,45 +608,45 @@ class OtherPeoplesBoxesAreNotTheOwners(PaperworkTest):
 
     def test_changing_his_name_is_asked_first_on_every_surface(self):
         # Each surface in its own process, as on the owner's Mac. Changed by
-        # verify I-30: the AI used to confirm its own code (and the log said
-        # 'after the owner was asked'); now only the owner's own /approve
-        # makes the change, and the log says so.
+        # verify I-30 (the AI used to confirm its own code) and again by round
+        # 8 (S2): whatever an AI says about his details waits BESIDE his own,
+        # noted by the AI, and never replaces it — not only his name and date
+        # of birth, and not only a change (a first date of birth from an AI
+        # waits too). Only his own /confirm makes it his, and the log says so.
         r = self.py("""
-            import jefferey_chat as jc
-            first = jc.dispatch_tool("set_profile_field", {"field": "Full name",
-                                                           "value": "Laszlo Czako"})
+            import jefferey_chat as jc, re
+            his("Full name", "Laszlo Czako")
             ask = jc.dispatch_tool("set_profile_field", {"field": "Full name", "value": "Mike Ross"})
             held = store()["profile"]["full_name"]
             own = jc.dispatch_tool("set_profile_field", {"field": "Full name", "value": "Mike Ross",
-                                                         "confirm": ask["confirm"]})
+                                                         "confirm": "ABCDEF"})
             still = store()["profile"]["full_name"]
-            approved = jc.owner_forgetting("/approve " + ask["confirm"], answer=lambda p: "yes")
-            out({"first": first, "ask": ask, "held": held, "own": own, "still": still,
+            code = lambda p: "".join(re.findall(r"\\d", p))
+            approved = jc.owner_life("/confirm all", answer=code, tty=True)
+            out({"ask": ask, "held": held, "own": own, "still": still,
                  "after": store()["profile"]["full_name"],
                  "actions": [a["description"] for a in store()["actions"]]})
         """, JEFFEREY_CLIENT="jefferey")
-        self.assertTrue(r["first"]["stored"])
         self.assertFalse(r["ask"]["stored"])
-        self.assertEqual(r["ask"]["step"], "preview")
-        self.assertTrue(r["ask"]["needs_owner"])
-        self.assertIn("from 'Laszlo Czako' to 'Mike Ross'", r["ask"]["would_change"])
-        self.assertIn("/approve", r["ask"]["how_to_finish"])
+        self.assertTrue(r["ask"]["pending"])
+        self.assertIn("noted by the AI", r["ask"]["note"])
+        self.assertIn("from 'Laszlo Czako'", r["ask"]["note"])
         self.assertEqual(r["held"], "Laszlo Czako", "changed before he was asked")
-        self.assertFalse(r["own"]["stored"], "the AI confirmed its own code")
+        self.assertFalse(r["own"]["stored"], "an AI's code confirmed it")
         self.assertEqual(r["still"], "Laszlo Czako")
         self.assertEqual(r["after"], "Mike Ross")
-        self.assertTrue(any("approved by the owner at his own console" in a
-                            for a in r["actions"]), r["actions"])
+        self.assertTrue(any("confirmed by the owner himself" in a for a in r["actions"]),
+                        r["actions"])
         self.assertFalse(any("after the owner was asked" in a for a in r["actions"]))
 
         r = self.py("""
             import jefferey_mcp as m
             ask = mcp_call(m, "set_profile_field", {"field": "Full name", "value": "Laszlo Czako"})
             own = mcp_call(m, "set_profile_field", {"field": "Full name", "value": "Laszlo Czako",
-                                                    "confirm": ask["confirm"]})
+                                                    "confirm": "ABCDEF"})
             out({"ask": ask, "own": own, "profile": store()["profile"]})
         """, JEFFEREY_CLIENT="jefferey")
-        self.assertEqual(r["ask"]["step"], "preview")
+        self.assertTrue(r["ask"]["pending"])
         self.assertFalse(r["own"]["stored"])
         self.assertEqual(r["profile"]["full_name"], "Mike Ross")
 
@@ -640,13 +658,13 @@ class OtherPeoplesBoxesAreNotTheOwners(PaperworkTest):
             post = lambda body: web.post("/profile", json=body, headers=H(%r)).json()
             first = post({"field": "Date of birth", "value": "1950-03-14"})
             ask = post({"field": "Date of birth", "value": "1951-03-14"})
-            own = post({"field": "Date of birth", "value": "1951-03-14", "confirm": ask["confirm"]})
-            out({"first": first, "ask": ask, "own": own, "profile": store()["profile"]})
+            out({"first": first, "ask": ask, "profile": store().get("profile", {}),
+                 "notes": [(n["field"], n["value"]) for n in store().get("profile_notes", [])]})
         """ % (TOKENS, TA), JEFFEREY_CLIENT="jefferey")
-        self.assertTrue(r["first"]["stored"], "a first date of birth needs no question")
-        self.assertEqual(r["ask"]["step"], "preview")
-        self.assertFalse(r["own"]["stored"])
-        self.assertEqual(r["profile"]["date_of_birth"], "1950-03-14")
+        self.assertFalse(r["first"]["stored"], "an AI's first date of birth waits too (S2)")
+        self.assertTrue(r["ask"]["pending"])
+        self.assertNotIn("date_of_birth", r["profile"])
+        self.assertIn(["date_of_birth", "1951-03-14"], r["notes"])
 
     def test_an_existing_profile_keeps_working(self):
         old = {"_rev": 4, "facts": [], "priorities": [], "goals": [], "corrections": [],
@@ -665,9 +683,13 @@ class OtherPeoplesBoxesAreNotTheOwners(PaperworkTest):
         self.assertEqual(r["plan"]["filled"], {"Full name": "Laszlo Czako",
                                                "Postal code": "K1A 0B1"})
         self.assertEqual(r["upd"]["field"], "member_#")
-        self.assertEqual(r["prof"], {"full_name": "Laszlo Czako", "member_#": "A-78",
+        # round 8 (S2): a profile kept before is read as his; what an AI says
+        # about it waits beside it, and forgetting his needs his own hands (S5)
+        self.assertTrue(r["upd"]["pending"], r["upd"])
+        self.assertEqual(r["prof"], {"full_name": "Laszlo Czako", "member_#": "A-77",
                                      "postal_code": "K1A 0B1"})
         self.assertEqual(r["gone"]["step"], "preview", r["gone"])
+        self.assertTrue(r["gone"]["needs_owner"], r["gone"])
 
     def test_one_name_that_reaches_his_box_and_his_spouses_is_refused(self):
         r = self.py("""
@@ -958,14 +980,17 @@ class AfterTheFixes(PaperworkTest):
 
     def test_an_ai_cannot_change_who_he_is_by_itself(self):
         # I-30: (1) the AI confirmed its own code; (2) forget, then a fresh
-        # set, skipped the question; (3) an empty first name was set with none
+        # set, skipped the question; (3) an empty first name was set with none.
+        # Round 8 (S2, S5): nothing an AI says about his details is his until
+        # he confirms it — not a change, not a first value, not the parts of
+        # the name already there — and forgetting his own needs his hands.
         r = self.py("""
             import jefferey_chat as jc
             d = jc.dispatch_tool
-            d("set_profile_field", {"field": "Full name", "value": "Laszlo Czako"})
+            his("Full name", "Laszlo Czako")
             ask = d("set_profile_field", {"field": "Full name", "value": "Mike Ross"})
             own = d("set_profile_field", {"field": "Full name", "value": "Mike Ross",
-                                          "confirm": ask["confirm"]})
+                                          "confirm": "ABCDEF"})
             gone = d("forget_profile_field", {"field": "Full name"})
             gone2 = d("forget_profile_field", {"field": "Full name", "confirm": gone["confirm"]})
             first = d("set_profile_field", {"field": "First name", "value": "Kovacs"})
@@ -981,11 +1006,10 @@ class AfterTheFixes(PaperworkTest):
         self.assertFalse(r["own"]["stored"])
         self.assertTrue(r["gone"]["needs_owner"], r["gone"])
         self.assertTrue(r["gone2"].get("refused") or r["gone2"].get("step") != "done", r["gone2"])
-        self.assertTrue(r["first"]["needs_owner"], r["first"])
-        self.assertTrue(r["fine"]["stored"], "spelling out what is already there needs nothing")
-        self.assertTrue(r["dob"]["stored"], "a first date of birth needs no question")
-        self.assertEqual(r["profile"], {"full_name": "Laszlo Czako", "last_name": "Czako",
-                                        "date_of_birth": "1950-03-14"})
+        for k in ("ask", "first", "fine", "dob"):
+            self.assertFalse(r[k]["stored"], (k, r[k]))
+            self.assertTrue(r[k]["pending"], (k, r[k]))
+        self.assertEqual(r["profile"], {"full_name": "Laszlo Czako"})
         self.assertEqual(r["write_as"], "Laszlo Czako")
         self.assertTrue(r["box"].get("refused"), r["box"])
         self.assertEqual(r["outbox"], [])
@@ -1168,8 +1192,8 @@ class TheOwnersSideOfASale(PaperworkTest):
         r = self.py("""
             import jefferey_chat as jc
             D = jc.dispatch_tool
-            D("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
-            D("set_profile_field", {"field": "address", "value": "12 Elm St"})
+            his("full name", "Laszlo Czako")
+            his("address", "12 Elm St")
             out(D("fill_form", {"fields": %r + %r + ["VIN", "Seller signature",
                                                      "Spouse's name"], "owner_is": "seller"}))
         """ % (self.SELLER, self.BUYER), JEFFEREY_CLIENT="jefferey")
@@ -1188,7 +1212,7 @@ class TheOwnersSideOfASale(PaperworkTest):
     def test_when_he_is_buying_the_sides_swap_on_every_surface(self):
         r = self.py("""
             import jefferey_chat as jc
-            jc.dispatch_tool("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
+            his("full name", "Laszlo Czako")
             import jefferey_mcp as m
             from fastapi.testclient import TestClient
             import jefferey_http as jh
@@ -1216,7 +1240,7 @@ class TheOwnersSideOfASale(PaperworkTest):
     def test_a_pdf_bill_of_sale_takes_his_name_only_on_his_side(self):
         r = self.py("""
             import jefferey_mcp as m
-            mcp_call(m, "set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
+            his("full name", "Laszlo Czako")
             form = make_form("bos.pdf", [{"name": "Seller name"}, {"name": "Buyer name"}])
             read = mcp_call(m, "pdf_form_fields", {"pdf_path": form, "owner_is": "seller"})
             sold = mcp_call(m, "fill_pdf", {"pdf_path": form, "owner_is": "seller",
@@ -1251,8 +1275,8 @@ class NoSideIsHisUntilItIsSaid(PaperworkTest):
     def test_a_warranty_card_never_gives_the_vendor_his_name_on_any_surface(self):
         r = self.py("""
             import jefferey_chat as jc
-            jc.dispatch_tool("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
-            jc.dispatch_tool("set_profile_field", {"field": "address", "value": "12 Elm St"})
+            his("full name", "Laszlo Czako")
+            his("address", "12 Elm St")
             import jefferey_mcp as m
             from fastapi.testclient import TestClient
             import jefferey_http as jh
@@ -1290,8 +1314,8 @@ class NoSideIsHisUntilItIsSaid(PaperworkTest):
     def test_buying_with_nothing_said_leaves_both_sides_for_him(self):
         r = self.py("""
             import jefferey_chat as jc
-            jc.dispatch_tool("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
-            jc.dispatch_tool("set_profile_field", {"field": "address", "value": "12 Elm St"})
+            his("full name", "Laszlo Czako")
+            his("address", "12 Elm St")
             import jefferey_mcp as m
             silent = mcp_call(m, "fill_form", {"fields": %r})
             bought = mcp_call(m, "fill_form", {"fields": %r, "owner_is": "buyer"})
@@ -1349,7 +1373,7 @@ class ASideHeNamesIsHisAndAShopNeverIs(PaperworkTest):
             import jefferey_chat as jc
             for f, v in (("full name", "Laszlo Czako"), ("address", "12 Elm St"),
                          ("phone", "613-555-0100")):
-                jc.dispatch_tool("set_profile_field", {"field": f, "value": v})
+                his(f, v)
             import jefferey_mcp as m
             from fastapi.testclient import TestClient
             import jefferey_http as jh
@@ -1378,7 +1402,7 @@ class ASideHeNamesIsHisAndAShopNeverIs(PaperworkTest):
     def test_a_shop_named_any_way_never_gets_his_name(self):
         r = self.py("""
             import jefferey_chat as jc
-            jc.dispatch_tool("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
+            his("full name", "Laszlo Czako")
             import jefferey_mcp as m
             res = []
             for i, box in enumerate(%r):
@@ -1402,7 +1426,7 @@ class ASideHeNamesIsHisAndAShopNeverIs(PaperworkTest):
         # the shop, whatever side was said
         r = self.py("""
             import jefferey_chat as jc
-            jc.dispatch_tool("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
+            his("full name", "Laszlo Czako")
             import jefferey_mcp as m
             sale = make_form("s.pdf", [{"name": "Seller name", "tu": "Your full name"},
                                        {"name": "Seller address"}])

@@ -2413,10 +2413,11 @@ def main(argv: list[str] | None = None) -> int:
         print(e.for_owner())
         return 2
     if args.cmd == "review":
-        if not sys.stdin.isatty():
+        import answers
+        if not answers.person_at_keyboard():          # stdin AND stdout (S6)
             print("This needs you at the keyboard: open Terminal and run it yourself.")
             return 2
-        return review_at_the_keyboard(g)
+        return review_at_the_keyboard(g, input_fn=None)
     entries = g.expected_charges()
     if not entries:
         print("Your charge register is empty.")
@@ -2439,8 +2440,10 @@ def review_at_the_keyboard(g: "Guardian", input_fn=input, out=print) -> int:
     to his list of agreed payments: yes adds it, no leaves it out. Used by
     `python connector/guardian.py review` and by /charges in 'Talk to
     JEFFEREY on this Mac'. Only here is a change confirmed — inside
-    access.owner_console(), after a yes he typed (answers.py: 'oui' is a yes,
-    a closed window or an empty answer never is)."""
+    access.owner_console(), after a yes he typed: the number shown on the
+    screen at that moment (S6, round 8), read from the terminal itself
+    unless the terminal chat reads his keyboard (`input_fn`). A no leaves it
+    out; a closed window or an answer not understood leaves it waiting."""
     import access
     import answers
     waiting = g.pending_changes()
@@ -2458,14 +2461,16 @@ def review_at_the_keyboard(g: "Guardian", input_fn=input, out=print) -> int:
             out("     Please check: " + w)
         q = ("  Add this to your list?" if p.get("kind") == "expect"
              else "  Make this change?")
-        if answers.ask_yes_no(q + " Type yes or no, then press return: ",
-                              input_fn=input_fn, out=out):
+        said = answers.ask_code_or_no(q, input_fn=input_fn, out=out)
+        if said is True:
             with access.owner_console():          # his own hands, this one change
                 r = g.confirm_change(p["id"])
             out("     Done. " + str(r.get("note") or r.get("error") or ""))
-        else:
+        elif said is False:
             g.decline_change(p["id"])
             out("     Left out. Nothing changed.")
+        else:
+            out("     Nothing changed; it is still waiting for you.")
     return 0
 
 

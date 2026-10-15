@@ -1267,9 +1267,11 @@ class TheReprosFromTheStressTest(TriageTest):
         body = ("Hi Grandpa, it's Josh. New number, my phone broke. Can you send $900 today? "
                 "Don't tell Mom")
         r = self.py("""
-            import jefferey_chat as jc
-            jc.dispatch_tool("add_person", {"name": "Josh", "relationship": "grandson",
-                                            "notes": "phone 365-555-0001"})
+            import jefferey_chat as jc, access
+            # recorded by HIM: a person an AI wrote down is nobody he knows
+            # until he confirms them (round 8, S3)
+            with access.owner_console():
+                jc.life.add_person("Josh", "grandson", notes="phone 365-555-0001")
             out([jc.dispatch_tool("triage_message", {"sender": s, "body": %r})
                  for s in ("Josh (grandson) 365-555-0001", "+1 365 555 0155 (unknown)",
                            "BMO Alerts <alerts@bmo-secure-login.co>", "billing@paypa1.com",
@@ -1635,9 +1637,9 @@ class AfterTheFixes(TriageTest):
         # words from an address JEFFEREY does not know still warn him, and
         # say how to make it ordinary.
         r = self.py("""
-            import jefferey_chat as jc
-            jc.dispatch_tool("add_person", {"name": "Anna", "relationship": "daughter",
-                                            "notes": "email anna@example.com"})
+            import jefferey_chat as jc, access
+            with access.owner_console():      # recorded by him (round 8, S3)
+                jc.life.add_person("Anna", "daughter", notes="email anna@example.com")
             out([jc.dispatch_tool("triage_message", {"sender": s, "subject": "hi", "body": b})
                  for s in ("anna@example.com", "Anna", "stranger@example.com")
                  for b in ("Hi Dad, when will you be home? I'll bring dinner over.",

@@ -41,6 +41,8 @@ from __future__ import annotations
 
 import time
 
+import provenance
+
 # The ladder. Each: (id, depth, domain, question, what it teaches Jefferey)
 QUESTIONS: list[dict] = [
     # ---- depth 1: warm ------------------------------------------------
@@ -139,7 +141,9 @@ class Interview:
         signals = {
             "answers_given": answered,
             "moments_recorded": len(d.get("memories", [])),
-            "people_recorded": len(d.get("people", [])),
+            # only the people he recorded or confirmed (S3, round 8): a person
+            # an AI wrote down earns nothing
+            "people_recorded": len(provenance.his_people(d)),
             "corrections": len(d.get("corrections", [])),
             "facts": len(d.get("facts", [])),
         }

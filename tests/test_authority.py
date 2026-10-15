@@ -390,10 +390,15 @@ class AuthorizeActionIsAGate(AuthorityTest):
             a = mcp_call(m, "authorize_action", {"category": "groceries",
                                                   "description": "weekly shop", "amount": 40})
             aid = a["authorization_id"]
-            first = mcp_call(m, "log_action", {"category": "groceries", "description": "ordered",
+            # (round 8, S8: an approval covers only what was approved, so the
+            # act is written down in words it shares with it — 'ordered' alone
+            # has nothing in common with 'weekly shop' and is not approved)
+            first = mcp_call(m, "log_action", {"category": "groceries",
+                                               "description": "ordered the weekly shop",
                                                "outcome": "done", "amount": 40,
                                                "authorization_id": aid})
-            again = mcp_call(m, "log_action", {"category": "groceries", "description": "ordered",
+            again = mcp_call(m, "log_action", {"category": "groceries",
+                                               "description": "ordered the weekly shop",
                                                "outcome": "done", "amount": 40,
                                                "authorization_id": aid})
             b = mcp_call(m, "authorize_action", {"category": "groceries",
@@ -949,7 +954,8 @@ class AnHonestActionLog(AuthorityTest):
             a = c.post("/actions/authorize", json={"category": "groceries",
                                                    "description": "shop", "amount": 20},
                        headers=H(%r)).json()
-            c.post("/actions", json={"category": "groceries", "description": "ordered",
+            # (round 8, S8: written in words the approval shares, or it is not approved)
+            c.post("/actions", json={"category": "groceries", "description": "ordered the shop",
                                      "outcome": "done", "amount": 20,
                                      "authorization_id": a["authorization_id"]}, headers=H(%r))
             c.post("/actions", json={"category": "groceries", "description": "unasked",

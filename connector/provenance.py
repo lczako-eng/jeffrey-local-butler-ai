@@ -30,6 +30,11 @@ or `python connector/conscience.py confirm`. What he types as /remember <text>
 is kept as exactly that, in his words. And an AI never turns round a value he
 stated or one that is locked: that is a proposal, whatever he typed.
 
+AN AI NEVER CHANGES WHAT IS HIS (round 8). The same rule, by who wrote it,
+holds for his rules, his profile, his people and his goals: an engine's
+write is a note or a proposal beside his own, never instead of it, and
+forgetting what is his needs his own hands (engine_note, his, his_people).
+
 This module also says who will READ a result (`reader()`): the owner, his
 caretaker key on an engine that stays in the house, or an engine somewhere
 else — whose names the owner's rules may use ('anthropic', 'chatgpt').
@@ -138,6 +143,37 @@ def owner_backed(item: dict) -> bool:
 def pending(item: dict) -> bool:
     return isinstance(item, dict) and item.get("status") == "pending" \
         and not item.get("confirmed_by_owner")
+
+
+# --------------------------------------------------------- what is his (round 8)
+# AN AI NEVER CHANGES WHAT IS HIS. What is his follows who wrote it, never
+# what the words mean: anything he stored or confirmed with his own hands,
+# anything his own tools wrote with no AI in between, and anything kept
+# before JEFFEREY recorded who said what. An engine's note is his only once
+# he confirms it.
+def engine_note(item: dict) -> bool:
+    """Written by an AI and not yet confirmed by him."""
+    return isinstance(item, dict) and stated_by(item) == ENGINE \
+        and not item.get("confirmed_by_owner")
+
+
+def his(item: dict) -> bool:
+    """His own — not an AI's note still waiting for him."""
+    return isinstance(item, dict) and not engine_note(item)
+
+
+def engine_writes() -> bool:
+    """Is an engine key behind this write (not the owner's own hands, and not
+    his own tools with no AI at all)?"""
+    import access
+    return not access.owners_hands()
+
+
+def his_people(data: dict) -> list[dict]:
+    """The people he recorded or confirmed himself. Every trust decision
+    counts only these (S3): a 'grandson' an AI wrote down is not someone he
+    has recorded."""
+    return [p for p in (data or {}).get("people") or [] if isinstance(p, dict) and his(p)]
 
 
 def said_by_words(item: dict) -> str:

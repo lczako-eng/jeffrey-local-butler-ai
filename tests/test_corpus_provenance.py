@@ -607,21 +607,28 @@ class HisOwnHandsMakeHisWords(LifeTest):
             out(1)
         """, JEFFEREY_CLIENT="jefferey")
         import subprocess, sys
+        import at_the_keyboard
         from test_life import CONNECTOR
+        # Round 8 (S6): only a person at this keyboard — stdin and stdout
+        # terminals, the answer typed at the terminal itself, with the number
+        # shown at that moment. Piped answers (this test's old way) are refused.
         p = subprocess.run([sys.executable, str(CONNECTOR / "conscience.py"), "confirm"],
                            input="1 3\nyes\n", env=self.env(), cwd=self.tmp,
                            capture_output=True, text=True, timeout=120)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn("1. (fact) Anna calls on Sundays", p.stdout)
-        self.assertIn("they are your own words now", p.stdout)
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("typing at the keyboard", p.stdout)
+        cmd = [sys.executable, str(CONNECTOR / "conscience.py"), "confirm"]
+        rc, screen = at_the_keyboard.run(cmd, self.env(), self.tmp, more=(b"1 3",))
+        self.assertEqual(rc, 0, screen)
+        self.assertIn("1. (fact) Anna calls on Sundays", screen)
+        self.assertIn("they are your own words now", screen)
         facts = {f["fact"]: f["status"] for f in json.loads(self.store.read_text())["facts"]}
         self.assertEqual(facts, {"Anna calls on Sundays": "confirmed",
                                  "Mike lives in Ottawa": "pending",
                                  "Bob plays chess": "confirmed"})
-        p = subprocess.run([sys.executable, str(CONNECTOR / "conscience.py"), "confirm"],
-                           input="all\nno\n", env=self.env(), cwd=self.tmp,
-                           capture_output=True, text=True, timeout=120)
-        self.assertIn("Nothing was changed", p.stdout)
+        rc, screen = at_the_keyboard.run(cmd, self.env(), self.tmp, answer="wrong",
+                                         more=(b"all",))
+        self.assertIn("nothing was changed", screen.lower())
 
     def test_the_brief_and_get_conscience_say_how_many_wait(self):
         r = self.py("""

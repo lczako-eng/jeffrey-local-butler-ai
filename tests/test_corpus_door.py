@@ -51,9 +51,11 @@ from test_authority import AuthorityTest
 IN, NOW_ASKS, ALLOWED, TEXT_ASK = "a way in", "a way in (round 6: allowed)", "no door", \
     "ask first"
 
-# (description, outcome) under no-money 'act' categories ('pets', 'home',
+# (description, outcome) under no-money 'act' categories ('pets', 'errands',
 # 'lights', 'chores'): a description that touches the way in asks the owner
-# first, whoever or whatever is let in.
+# first, whoever or whatever is let in. (Round 8, S9: 'home' was one of these
+# categories; his home itself is never 'act' any more — see
+# NEVER_CATEGORIES — so 'errands' stands in for it, with the same outcomes.)
 NO_MONEY: list[tuple[str, str]] = [
     # round 4 verify-b (k/r10a.py)
     ("Let the cat in", NOW_ASKS), ("let the dog in", NOW_ASKS), ("let the fresh air in", NOW_ASKS),
@@ -264,8 +266,12 @@ TEXT_NO_MONEY: list[tuple[str, str]] = [
 # says 'never', whatever the description.
 NEVER_CATEGORIES = ["front door locks", "doors", "the doors", "alarm", "home alarm",
                     "garage door", "intercom", "phone calls", "voice", "transfers",
-                    "e-transfer", "wire", "gift cards", "crypto"]
-ORDINARY_CATEGORIES = ["voice lessons", "alarm clock", "door dash", "pets", "groceries"]
+                    "e-transfer", "wire", "gift cards", "crypto",
+                    # round 8 (S9): his home itself — in English and French
+                    "home", "my home", "home security", "house guests", "front door keys",
+                    "la maison", "visiteurs", "smart home"]
+ORDINARY_CATEGORIES = ["voice lessons", "alarm clock", "door dash", "pets", "groceries",
+                       "household supplies"]
 
 
 # Categories at every level, money and none, where the door words ask the
@@ -317,16 +323,16 @@ class ThePersonAtTheDoorIsTheOwnersToLetIn(AuthorityTest):
             from conscience import Conscience
             c = Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"])
             with access.owner_console():
-                for k in ("pets", "home", "lights", "chores"):
+                for k in ("pets", "errands", "lights", "chores"):
                     c.set_permission(k, "act")
                 c.set_permission("groceries", "act", 100, "week")
                 c.set_permission("bills", "act", 300, "month")
                 c.set_permission("shopping", "act", 500, "week")
                 c.set_permission("correspondence", "recommend")
                 c.set_permission("health", "observe")
-            nm = {d: [c.authorize_action(k, d) for k in ("pets", "home", "lights", "chores")]
+            nm = {d: [c.authorize_action(k, d) for k in ("pets", "errands", "lights", "chores")]
                   for d, _ in %r}
-            nd = {d: [c.authorize_action(k, d) for k in ("pets", "home", "lights", "chores")]
+            nd = {d: [c.authorize_action(k, d) for k in ("pets", "errands", "lights", "chores")]
                   for d in %r}
             er = [c.authorize_action(k, d, a) for k, d, a, _ in %r]
             tx = {d: c.authorize_action("lights", d) for d, _ in %r}
@@ -355,12 +361,12 @@ class ThePersonAtTheDoorIsTheOwnersToLetIn(AuthorityTest):
         r = self.run_cases()
         wrong = []
         for d, outcome in NO_MONEY:
-            for k, v in zip(("pets", "home", "lights", "chores"), r["nm"][d]):
+            for k, v in zip(("pets", "errands", "lights", "chores"), r["nm"][d]):
                 bad = _check(outcome, v)
                 if bad:
                     wrong.append((k, d, outcome, bad, v.get("reason")))
         for d in NO_DOOR:
-            for k, v in zip(("pets", "home", "lights", "chores"), r["nd"][d]):
+            for k, v in zip(("pets", "errands", "lights", "chores"), r["nd"][d]):
                 bad = _check(ALLOWED, v)
                 if bad:
                     wrong.append((k, d, ALLOWED, bad, v.get("reason")))

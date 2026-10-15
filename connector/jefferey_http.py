@@ -401,8 +401,8 @@ def forget(contains: str = "", ids: str = "", confirm: str = "") -> dict:
     three letters). Two steps, never a guess: without `confirm` nothing is removed — the
     answer lists exactly what would go (with ids) and a one-time code. Read
     it to the owner; only if he says yes, call again with confirm=<code>.
-    Anything big can only be approved by the owner himself — the answer says
-    how. `ids` is a comma-separated list. Never argue with a forget."""
+    Anything of his own, and anything big, can only be approved by the owner
+    himself — the answer says how. `ids` is a comma-separated list. Never argue with a forget."""
     return conscience.forget_fact(contains, ids, confirm)
 
 
@@ -436,7 +436,8 @@ class GoalIn(BaseModel):
 def add_goal(g: GoalIn) -> dict:
     """Register a long-term goal the user has approved. Goals drive the
     Opportunity Engine: what can be done today to move these forward,
-    within permissions."""
+    within permissions. From you it is noted by the AI, not yet confirmed by
+    him, and shown so, until he confirms it himself."""
     return conscience.add_goal(g.goal)
 
 
@@ -446,8 +447,8 @@ def close_goal(contains: str = "", ids: str = "", confirm: str = "") -> dict:
     """Mark active goals done/retired — by id or whole words. Two steps, never a guess: without `confirm` nothing is removed — the
     answer lists exactly what would go (with ids) and a one-time code. Read
     it to the owner; only if he says yes, call again with confirm=<code>.
-    Anything big can only be approved by the owner himself — the answer says
-    how. `ids` is a comma-separated list."""
+    Anything of his own, and anything big, can only be approved by the owner
+    himself — the answer says how. `ids` is a comma-separated list."""
     return conscience.close_goal(contains, ids, confirm)
 
 
@@ -494,8 +495,8 @@ class ActionLogIn(BaseModel):
 @gate("facts.write")
 def log_action(a: ActionLogIn) -> dict:
     """Write down an act just performed on the owner's behalf, citing the
-    authorization_id. No silent actions, ever; an act with no valid approval
-    is kept but marked 'not approved'."""
+    authorization_id. No silent actions, ever; an act with no valid approval,
+    or that is not what was approved, is kept but marked 'not approved'."""
     return conscience.log_action(a.category, a.description, a.outcome, a.amount,
                                  a.authorization_id)
 
@@ -561,8 +562,8 @@ def resolve_opportunity(contains: str = "", outcome: str = "done", ids: str = ""
     """Close pending opportunities — by id or whole words. Two steps, never a guess: without `confirm` nothing is removed — the
     answer lists exactly what would go (with ids) and a one-time code. Read
     it to the owner; only if he says yes, call again with confirm=<code>.
-    Anything big can only be approved by the owner himself — the answer says
-    how. `ids` is a comma-separated list."""
+    Anything of his own, and anything big, can only be approved by the owner
+    himself — the answer says how. `ids` is a comma-separated list."""
     return conscience.resolve_opportunity(contains, outcome, ids, confirm)
 
 
@@ -681,9 +682,8 @@ class ProfileIn(BaseModel):
 def set_profile_field(p: ProfileIn) -> dict:
     """Store one of the OWNER's own details Jefferey may reuse on forms.
     Sensitive identifiers (SIN/SSN, cards, PINs) and anything about someone
-    else are refused. A change to who he is (his name or date of birth)
-    waits for his own yes: tell him, and he types /approve and the code
-    himself in 'Talk to JEFFEREY on this Mac'."""
+    else are refused. What you store is noted by the AI, beside his own and
+    never instead of it: his forms use only what he confirmed himself."""
     return rep.set_profile_field(p.field, p.value, p.confirm)
 
 
@@ -700,8 +700,8 @@ def forget_profile_field(field: str, confirm: str = "") -> dict:
     """Delete one profile detail, by its exact name. Two steps, never a guess: without `confirm` nothing is removed — the
     answer lists exactly what would go (with ids) and a one-time code. Read
     it to the owner; only if he says yes, call again with confirm=<code>.
-    Anything big can only be approved by the owner himself — the answer says
-    how."""
+    Anything of his own, and anything big, can only be approved by the owner
+    himself — the answer says how."""
     return rep.forget_profile_field(field, confirm)
 
 
@@ -833,7 +833,9 @@ class PersonIn(BaseModel):
 def add_person(p: PersonIn) -> dict:
     """Record someone who matters to the user. Only when they offer it. The
     same name with a different relationship is a separate person; the same
-    person gets new notes added, never replaced."""
+    person gets new notes added, never replaced. A person you add is noted by
+    the AI, not yet confirmed by him; a change to someone he recorded is a
+    proposal for him."""
     return life.add_person(p.name, p.relationship, p.notes, p.important_dates)
 
 
@@ -849,7 +851,8 @@ class PersonUpdateIn(BaseModel):
 @gate("life.write")
 def update_person(p: PersonUpdateIn) -> dict:
     """Change one person, by id. Notes and dates are added, dated; a changed
-    name or relationship keeps what it was."""
+    name or relationship keeps what it was. For someone he recorded it is a
+    proposal: nothing changes until he confirms it himself."""
     return life.update_person(p.person_id, p.name, p.relationship, p.notes,
                               p.important_dates)
 
@@ -924,8 +927,8 @@ def forget_life(contains: str = "", ids: str = "", confirm: str = "") -> dict:
     about them alone), or moments and pictures by id or whole words. Two steps, never a guess: without `confirm` nothing is removed — the
     answer lists exactly what would go (with ids) and a one-time code. Read
     it to the owner; only if he says yes, call again with confirm=<code>.
-    Anything big can only be approved by the owner himself — the answer says
-    how. `ids` is a comma-separated list."""
+    Anything of his own, and anything big, can only be approved by the owner
+    himself — the answer says how. `ids` is a comma-separated list."""
     return life.forget_life(contains, ids, confirm)
 
 
@@ -1089,8 +1092,8 @@ def conscience_exclude(contains: str = "", ids: str = "", confirm: str = "") -> 
     Two steps, never a guess: without `confirm` nothing is removed — the
     answer lists exactly what would go (with ids) and a one-time code. Read
     it to the owner; only if he says yes, call again with confirm=<code>.
-    Anything big can only be approved by the owner himself — the answer says
-    how. `ids` is a comma-separated list."""
+    Anything of his own, and anything big, can only be approved by the owner
+    himself — the answer says how. `ids` is a comma-separated list."""
     return rules.exclude(contains, ids, confirm)
 
 
@@ -1105,7 +1108,9 @@ class RuleIn(BaseModel):
 @door(app.post("/rules", operation_id="set_rule"))
 @gate("facts.write")
 def set_rule(r: RuleIn) -> dict:
-    """Write one of the owner's standing rules, in their words. Only at their word."""
+    """Write one of the owner's standing rules, in their words. Only at their
+    word. From you a no (disclosure, allow=false) holds at once, noted by the
+    AI; any other rule is a proposal that changes nothing until he confirms it."""
     try:
         return rules.set_rule(r.kind, r.tags, r.instruction, r.audience, r.allow)
     except ValueError as e:
@@ -1115,18 +1120,17 @@ def set_rule(r: RuleIn) -> dict:
 @door(app.delete("/rules", operation_id="remove_rule"))
 @gate("facts.write")
 def remove_rule(rule_id_or_text: str = "", confirm: str = "") -> dict:
-    """Delete a rule by its id, or by whole words of it. Two steps, never a guess: without `confirm` nothing is removed — the
-    answer lists exactly what would go (with ids) and a one-time code. Read
-    it to the owner; only if he says yes, call again with confirm=<code>.
-    Anything big can only be approved by the owner himself — the answer says
-    how."""
+    """Ask to delete a rule by its id, or by whole words of it. From you it is
+    a proposal: nothing is removed until he confirms it himself, and no code
+    completes it for you — the answer says how."""
     return rules.remove_rule(rule_id_or_text, confirm)
 
 
 @door(app.get("/rules", operation_id="list_rules"))
 @gate("rules.read")
 def list_rules(kind: str = "") -> list:
-    """Every standing rule the owner has written."""
+    """Every standing rule the owner has written. A rule that holds for you
+    comes back without his own words."""
     return rules.listed(kind)
 
 

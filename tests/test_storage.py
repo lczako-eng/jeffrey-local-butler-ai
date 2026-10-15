@@ -614,11 +614,20 @@ class Restore(StoreTest):
         forget_now(c, "fact")
         rows = c.history(None)
         target = next(r for r in rows if r["facts"] == 5 and not r["pinned"])
+        # Round 8 (S6): only a person at this keyboard puts a copy back — a
+        # script with --yes is refused, and he types the number shown
         p = subprocess.run([PY, str(CONNECTOR / "conscience.py"), "restore",
                             str(target["number"]), "--yes", "--path", str(self.store)],
-                           env=self.env(), capture_output=True, text=True, timeout=60)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn("Done", p.stdout)
+                           env=self.env(), capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(len(Conscience(self.store).data["facts"]), 0)
+        import at_the_keyboard
+        rc, screen = at_the_keyboard.run([PY, str(CONNECTOR / "conscience.py"), "restore",
+                                          str(target["number"]), "--path", str(self.store)],
+                                         self.env(), self.tmp)
+        self.assertEqual(rc, 0, screen)
+        self.assertIn("Done", screen)
         c2 = Conscience(self.store)
         self.assertEqual(len(c2.data["facts"]), 5)
         self.assertTrue(any("put back" in n["what"] for n in c2.notices()))
@@ -634,8 +643,10 @@ class Restore(StoreTest):
             shown = jc.dispatch_tool("forget", {"contains": "Mira"})
             jc.dispatch_tool("forget", {"confirm": shown["confirm"]})
             n = [h for h in jc.conscience.history(None) if h["pinned"] == "before forget"][0]
-            res = jc.owner_restore(f"/restore {n['number']}", answer=lambda _: "yes")
-            no = jc.owner_restore("/restore 1", answer=lambda _: "no")
+            # (round 8, S6: his yes is the number shown at that moment)
+            code = lambda p: "".join(__import__("re").findall(r"\\d", p))
+            res = jc.owner_restore(f"/restore {n['number']}", answer=code, tty=True)
+            no = jc.owner_restore("/restore 1", answer=lambda _: "yes", tty=True)
             out({"res": res, "no": no, "facts": [f["fact"] for f in jc.conscience.data["facts"]],
                  "tools": [t["name"] for t in jc.TOOLS]})
         """)

@@ -35,10 +35,13 @@ Enforcement, not etiquette:
 
 from __future__ import annotations
 
+import copy
+import secrets
 import time
 
 import forgetting
 import grounding
+import provenance
 
 KINDS = ("disclosure", "reaction", "representation")
 
@@ -187,6 +190,44 @@ def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
     return None
 
 
+def binds(r: dict, rd: dict | None = None, data: dict | None = None) -> bool:
+    """Does this rule hold for whoever reads (S1, round 8)? Then its words —
+    his own sentence, which is often the very secret ('Never tell any AI that
+    I have HIV') — are never handed to that reader: only what it is about,
+    whom it is for, and yes or no. Only disclosure rules bind a reader; a rule
+    for how to react or how to speak of him is an instruction to follow."""
+    if not isinstance(r, dict) or r.get("kind") != "disclosure":
+        return False
+    rd = rd if rd is not None else provenance.reader()
+    aud = rd.get("audiences") or frozenset()
+    if not aud:
+        return False                     # the owner himself, at his keyboard
+    if names_ai(r):
+        return True                      # every reader that reaches an engine is an AI
+    if not rd.get("people_rules"):
+        return False                     # his rules about people never hold for his own key
+    names = frozenset(grounding.norm_audience(a) for a in aud) - VENDOR_NAMES
+    if not r.get("allow") and _no_aud(r) == ANYONE:
+        return True
+    return _aud(r) in names or (not r.get("allow") and _says_no_to(
+        r, names, (data or {}).get("people") or []))
+
+
+def held_for_reader(r: dict, rd: dict | None = None, data: dict | None = None) -> dict:
+    """A rule as a reader it binds may see it: what it is about, whom it is
+    for, yes or no — never his sentence (S1)."""
+    v = {k: r[k] for k in ("id", "kind", "tags", "audience", "allow", "added") if k in r}
+    v["instruction_held_back"] = True
+    v["note"] = ("His own words for this rule are not given to an AI it holds for — only "
+                 "what it is about, whom it is for, and whether it is a yes or a no. Obey "
+                 "it; never ask him to read it to you.")
+    return v
+
+
+def _engine() -> bool:
+    return provenance.engine_writes()
+
+
 def _caller_holds_private() -> bool:
     try:
         import access
@@ -249,9 +290,48 @@ class ConscienceRules:
         }
         if written and written != written.lower():
             rule["audience_written"] = written       # 'Le Monde', not 'le monde' (D1)
+        if _engine():
+            return self._from_an_engine(rule)
+        rule["source"] = provenance.source(text=rule["instruction"])
+        rule["status"] = provenance.status_for(rule["source"])
         self.c.data["rules"].append(rule)
         self.c._save()
         return self._as_read(rule)
+
+    def _from_an_engine(self, rule: dict) -> dict:
+        """S1 (round 8): an AI never changes what is his. A NO from an engine
+        narrows what goes out, so it holds at once — labelled as the AI's
+        note, not yet confirmed by him. Anything else — a yes, a rule for how
+        to react or how to speak of him — is a proposal that changes nothing
+        until he confirms it with his own hands. (Before, an engine's yes from
+        MCP or POST /rules opened his health to anyone.)"""
+        src = provenance.source(text=rule["instruction"])
+        if rule["kind"] == "disclosure" and not rule["allow"]:
+            rule.update(source=src, status="pending")
+            self.c.data["rules"].append(rule)
+            self.c._save()
+            out = self._as_read(rule)
+            out = {k: v for k, v in out.items() if k != "source"}
+            out.update(status="pending", noted_by=provenance.NOTED_BY_AI)
+            out["note"] = (out.get("note", "") + " This no holds at once — a no only "
+                           "narrows what goes out — and it is noted by the AI, not yet "
+                           "confirmed by him: he confirms it himself (/pending, then "
+                           "/confirm, in 'Talk to JEFFEREY on this Mac').").strip()
+            return out
+        prop = {"id": "rp-" + secrets.token_hex(3), "action": "add", "rule": rule,
+                "source": src, "status": "pending", "added": _now()}
+        self.c.data.setdefault("rule_proposals", []).append(prop)
+        self.c._save()
+        return {"proposed": True, "id": prop["id"], "kind": rule["kind"],
+                "tags": rule["tags"], "audience": rule["audience"], "allow": rule["allow"],
+                "status": "waiting_for_owner", "changed": False,
+                "note": ("Proposed, not made: this changes nothing until he confirms it "
+                         "himself. A yes, or a rule for how to react to him or speak of him, "
+                         "is his to make — an AI never changes his rules for him."),
+                "tell_the_user": ("Tell him plainly what you proposed and that it waits for "
+                                  "him: he types /pending and /confirm in 'Talk to JEFFEREY on "
+                                  "this Mac' (or runs python connector/conscience.py confirm). "
+                                  "Until then, act as if it was never written.")}
 
     def _as_read(self, rule: dict) -> dict:
         """The rule, and — for a no — whom it holds for, said so he knows."""
@@ -284,16 +364,87 @@ class ConscienceRules:
         """Delete a rule by its id, or by whole words of it, an exact tag or
         its audience. Never argued with, never done on a guess: the first
         call shows which rules would go and gives a one-time code; only the
-        second, with the code, removes them (forgetting.py)."""
-        return forgetting.remove_rules(self.c, rule_id_or_text, confirm)
+        second, with the code, removes them (forgetting.py).
+
+        From an engine (S1, round 8) taking a rule away widens what goes out,
+        so it is a proposal: nothing is removed until he confirms it with his
+        own hands, and no code completes it for an AI. (Before, the code the
+        engine was handed itself lifted his 'never tell any AI'.)"""
+        if not _engine():
+            return forgetting.remove_rules(self.c, rule_id_or_text, confirm)
+        if isinstance(confirm, str) and confirm.strip():
+            return forgetting.refusal(
+                "remove_rule",
+                "A code never removes one of his rules for an AI: taking a rule away lets "
+                "more go out, so only he does it, with his own hands. Nothing was removed.",
+                "Tell him what you asked to remove, and that it waits for him: /pending and "
+                "/confirm in 'Talk to JEFFEREY on this Mac'. Do not try again yourself.")
+        plan = forgetting.plan_rules(self.c, rule_id_or_text)
+        if isinstance(plan, str):
+            return forgetting.refusal("remove_rule", plan)
+        if not plan.changes:
+            return {"step": "nothing", "count": 0, "removed": 0,
+                    "note": "Nothing matched, so nothing was asked for. Words match whole "
+                            "words; a rule can also be named by its id (list_rules)."}
+        src = provenance.source(text=str(rule_id_or_text or ""))
+        props = self.c.data.setdefault("rule_proposals", [])
+        ids, rows = [], []
+        rd = provenance.reader()
+        for ch in plan.changes:
+            r = ch["before"]
+            old = next((x for x in props if isinstance(x, dict) and x.get("action") == "remove"
+                        and x.get("rule_id") == r.get("id")), None)
+            if old is None:
+                old = {"id": "rp-" + secrets.token_hex(3), "action": "remove",
+                       "rule_id": r.get("id"), "rule": copy.deepcopy(r), "source": src,
+                       "status": "pending", "added": _now()}
+                props.append(old)
+            ids.append(old["id"])
+            seen = held_for_reader(r) if binds(r, rd, self.c.data) else r
+            rows.append({"id": r.get("id"), "kind": "rule",
+                         "what": (f"a {'yes' if seen.get('allow') else 'no'} about "
+                                  f"{', '.join(seen.get('tags') or []) or 'anything'} for "
+                                  f"{seen.get('audience')}") if seen is not r else
+                                 forgetting._what("rules", r)})
+        self.c._save()
+        return {"step": "proposed", "count": len(rows), "would_remove": rows,
+                "needs_owner": True, "removed": 0, "proposal_ids": ids,
+                "how_to_finish": (
+                    "Nothing has been removed. Taking one of his rules away lets more go "
+                    "out, so it is never done because an AI asked: it waits for him. Read "
+                    "him the list. If he wants it, he does it himself — /pending, then "
+                    "/confirm, in 'Talk to JEFFEREY on this Mac' (or python "
+                    "connector/conscience.py confirm). Do not call remove_rule again for it."),
+                "tell_the_user": forgetting.ASK_FIRST}
 
     def rules(self, kind: str = "") -> list[dict]:
         rs = self.c.data.get("rules", [])
-        return [r for r in rs if not kind or r["kind"] == kind.lower()]
+        return [r for r in rs if isinstance(r, dict) and (not kind or r["kind"] == kind.lower())]
 
     def listed(self, kind: str = "") -> list[dict]:
-        """The rules as he reads them: each no that holds for everyone says so."""
-        return [self._as_read(r) for r in self.rules(kind)]
+        """The rules as he reads them: each no that holds for everyone says so.
+        To an engine a rule holds for, never his sentence (S1, round 8); an
+        AI's note is labelled, and what an AI proposed is listed apart."""
+        rd = provenance.reader()
+        out = []
+        for r in self.rules(kind):
+            v = held_for_reader(r) if binds(r, rd, self.c.data) else self._as_read(r)
+            v = {k: x for k, x in v.items() if k not in ("source", "status")}
+            if provenance.pending(r):
+                v.update(status="pending", noted_by=provenance.NOTED_BY_AI)
+            out.append(v)
+        for p in self.c.data.get("rule_proposals") or []:
+            if not isinstance(p, dict):
+                continue
+            r = p.get("rule") if isinstance(p.get("rule"), dict) else {}
+            if kind and r.get("kind") != kind.lower():
+                continue
+            out.append({"id": p.get("id"), "kind": r.get("kind"), "tags": r.get("tags"),
+                        "audience": r.get("audience"), "allow": r.get("allow"),
+                        "proposed": "to remove" if p.get("action") == "remove" else "to add",
+                        "status": "waiting_for_owner",
+                        "note": "An AI proposed this; it changes nothing until he confirms it."})
+        return out
 
     # ------------------------------------------------------------ enforcement
     def check_disclosure(self, audience: str, tags: str | list) -> dict:
@@ -312,9 +463,7 @@ class ConscienceRules:
         # 'Karen Novak <k@example.com>' meets a rule for 'karen' (I-24: only
         # the exact string used to match, so a 'never tell Karen' rule let
         # her full name through to an 'anyone' allow).
-        broad, strict = grounding.audience_aliases(aud, self.c.data.get("people") or [])
-        broad = frozenset(grounding.norm_audience(a) for a in broad)
-        strict = frozenset(grounding.norm_audience(a) for a in strict)
+        broad, strict = self._aliases(aud)
         text = " ".join(sorted(want))
 
         def on_topic(r):
@@ -326,7 +475,7 @@ class ConscienceRules:
             if no:
                 out = {"allowed": False, "audience": aud, "tags": sorted(want),
                        "reason": "the owner forbade it", "rule": no.get("instruction", "")}
-                if not _caller_holds_private():
+                if not _caller_holds_private() or binds(no, None, self.c.data):
                     out.pop("rule", None)
                 return out
         ok, rule, limited = verdict(self.c.data, broad, strict, on_topic)
@@ -344,10 +493,11 @@ class ConscienceRules:
             # A representation rule ("to others, say I'm retired") IS the
             # owner's permission to say exactly that much — and no more.
             out["limited_to"] = limited
-        if not _caller_holds_private():
+        if not _caller_holds_private() or binds(rule, None, self.c.data):
             # The words of his rule are themselves the secret ('Never tell
             # Karen about Lisa'). Only his caretaker key reads them; others
-            # get the answer and the reason (family#6).
+            # get the answer and the reason (family#6) — and never an AI
+            # the rule holds for (S1, round 8).
             out.pop("rule", None)
         return out
 
@@ -379,11 +529,22 @@ class ConscienceRules:
                            "less rather than more.")
         return out
 
+    def _aliases(self, audience: str) -> tuple[frozenset, frozenset]:
+        """(broad, strict) names for this audience. A NO meets every person
+        written down (broad); a YES only the people HE recorded or confirmed
+        (strict) — a person an AI wrote down never makes a yes reach anyone
+        (S3, round 8)."""
+        broad, _ = grounding.audience_aliases(audience, self.c.data.get("people") or [])
+        mine, strict = grounding.audience_aliases(audience, provenance.his_people(self.c.data))
+        n = grounding.norm_audience
+        return (frozenset(n(a) for a in broad) | frozenset(n(a) for a in mine),
+                frozenset(n(a) for a in strict))
+
     def representation_for(self, audience: str, tags=(), text: str = "") -> list[str]:
         """How he told JEFFEREY to speak of him to this audience (or to
         anyone), on these subjects — in his own words."""
-        _, strict = grounding.audience_aliases(audience, self.c.data.get("people") or [])
-        names = {grounding.norm_audience(a) for a in strict} | {ANYONE}
+        _, strict = self._aliases(audience)
+        names = set(strict) | {ANYONE}
         want = set(_tags(list(tags)))
         return [r["instruction"] for r in self.rules("representation")
                 if _aud(r) in names
@@ -392,9 +553,7 @@ class ConscienceRules:
     def denied_subjects(self, audience: str) -> list[str]:
         """The subjects a rule of his keeps from this audience — their names
         only, never his words (for draft_guidance's do_not_mention)."""
-        broad, strict = grounding.audience_aliases(audience, self.c.data.get("people") or [])
-        broad = {grounding.norm_audience(a) for a in broad}
-        strict = {grounding.norm_audience(a) for a in strict}
+        broad, strict = self._aliases(audience)
         ai = grounding.names_ai(audience)
         out = []
         for r in self.rules("disclosure"):

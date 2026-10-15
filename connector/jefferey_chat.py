@@ -117,8 +117,9 @@ _TWO_STEPS = (
     "Two steps, never a guess: without 'confirm' nothing is removed — you get "
     "exactly what would go (with ids) and a one-time code. Read that list to "
     "the owner; only if he says yes, call again with confirm=<code>. Anything "
-    "big (more than three things, or more than one kind) can only be approved "
-    "by the owner himself — the result says how.")
+    "of his own (he stored or confirmed it) and anything big (more than three "
+    "things, or more than one kind) can only be approved by the owner himself "
+    "— the result says how.")
 
 
 def _forget_schema(match: str, ids: bool = True, required: list | None = None,
@@ -256,7 +257,8 @@ TOOLS = [
         "description": (
             "Register a long-term goal the user has approved. Goals drive the "
             "Opportunity Engine: what can be done today to move these forward, "
-            "within permissions."
+            "within permissions. From you it is noted by the AI, not yet "
+            "confirmed by him, and shown so, until he confirms it himself."
         ),
         "input_schema": {
             "type": "object",
@@ -305,8 +307,9 @@ TOOLS = [
         "description": (
             "Write down an act just performed on the owner's behalf, citing "
             "the authorization_id authorize_action gave. No silent actions, "
-            "ever. An act with no valid approval is kept but marked 'not "
-            "approved'; outcomes JEFFEREY writes itself are refused."
+            "ever. An act with no valid approval, or that is not what was "
+            "approved, is kept but marked 'not approved'; outcomes JEFFEREY "
+            "writes itself are refused."
         ),
         "input_schema": {
             "type": "object",
@@ -543,9 +546,9 @@ TOOLS = [
         "description": (
             "Store one of the OWNER's own details for filling forms (name, "
             "address, phone, email, date of birth, employer...). Sensitive "
-            "identifiers and anything about someone else are refused. A change "
-            "to who he is (his name or date of birth) waits for his own yes: "
-            "tell him, and he types /approve and the code himself."
+            "identifiers and anything about someone else are refused. What you "
+            "store is noted by the AI, beside his own and never instead of it: "
+            "forms use only what he confirmed, himself (/pending, /confirm)."
         ),
         "input_schema": {
             "type": "object",
@@ -730,7 +733,9 @@ TOOLS = [
             "people they'd want remembered. Only when they offer it; never "
             "interrogate. The same name with a different relationship is a "
             "separate person (possible_duplicate_of tells you); the same person "
-            "gets new notes added, never replaced. Tell him which happened."
+            "gets new notes added, never replaced. Tell him which happened. A "
+            "person you add is noted by the AI, not yet confirmed by him; a "
+            "change to someone he recorded is a proposal for him."
         ),
         "input_schema": {
             "type": "object",
@@ -747,7 +752,9 @@ TOOLS = [
         "name": "update_person",
         "description": (
             "Change one person, by id. Notes and dates are added, dated; a "
-            "changed name or relationship keeps what it was. Only what he told you."
+            "changed name or relationship keeps what it was. Only what he told "
+            "you. For someone he recorded it is a proposal: nothing changes "
+            "until he confirms it himself."
         ),
         "input_schema": {
             "type": "object",
@@ -1030,7 +1037,9 @@ TOOLS = [
             "'disclosure' (who may hear what; set allow), 'reaction' (how to "
             "respond when THEY raise this), 'representation' (how to speak of "
             "them to others). audience: 'me', 'anyone', or a named person. "
-            "Only at the owner's word; never write a rule for them."
+            "Only at the owner's word; never write a rule for them. From you a "
+            "no (disclosure, allow false) holds at once, noted by the AI; any "
+            "other rule is a proposal that changes nothing until he confirms it."
         ),
         "input_schema": {
             "type": "object",
@@ -1046,13 +1055,16 @@ TOOLS = [
     },
     {
         "name": "remove_rule",
-        "description": ("Delete a rule by its id (from list_rules), or by whole words "
-                        "of it. " + _TWO_STEPS + " Never argued with."),
+        "description": ("Ask to delete a rule by its id (from list_rules), or by whole "
+                        "words of it. From you it is a proposal: nothing is removed "
+                        "until he confirms it himself, and no code completes it for "
+                        "you. Never argued with."),
         "input_schema": _forget_schema("rule_id_or_text", ids=False),
     },
     {
         "name": "list_rules",
-        "description": "Every standing rule the owner has written, in plain language.",
+        "description": ("Every standing rule the owner has written, in plain language. "
+                        "A rule that holds for you comes back without his own words."),
         "input_schema": {"type": "object", "properties": {"kind": {"type": "string"}}},
     },
     {
@@ -1441,7 +1453,9 @@ _TRACE = {
     "forget": lambda a, r: _forget_trace(r, "fact(s)"),
     "explain_basis": lambda a, r: f"checking your values on: {a.get('topic')}",
     "priorities_for": lambda a, r: "reading your hierarchy",
-    "add_goal": lambda a, r: f"goal registered: {a.get('goal')}",
+    "add_goal": lambda a, r: (
+        f"goal noted — by the AI, not yet confirmed by you (/pending): {a.get('goal')}"
+        if r.get("status") == "pending" else f"goal registered: {a.get('goal')}"),
     "close_goal": lambda a, r: _forget_trace(r, "goal(s)", "closed"),
     "authorize_action": lambda a, r: (
         ("✓ allowed, once" if r.get("allowed") else
@@ -1451,7 +1465,10 @@ _TRACE = {
     ),
     "log_action": lambda a, r: (
         f"acted: {a.get('description')} → {a.get('outcome')}"
-        + ("" if r.get("approved") else "  ⚠ NOT APPROVED — it is marked so in your log")
+        + ("" if r.get("approved") else
+           "  ⚠ NOT APPROVED — what was done is not what was approved; it is marked so in "
+           "your log" if "not what was approved" in str(r.get("note")) else
+           "  ⚠ NOT APPROVED — it is marked so in your log")
     ),
     "action_log": lambda a, r: "reading the action log",
     "log_observation": lambda a, r: f"noticed: {a.get('note')}",
@@ -1481,7 +1498,8 @@ _TRACE = {
     ),
     "set_profile_field": lambda a, r: (
         f"profile: {r.get('field')} = {r.get('value')}" if r.get("stored")
-        else f"profile: asking you first — {r.get('would_change')}" if r.get("step") == "preview"
+        else f"profile: noted beside yours, not on your forms until you confirm it "
+             f"(/pending) — {r.get('field')} = {r.get('value')}" if r.get("pending")
         else f"profile not changed ({r.get('field')}): {r.get('reason', '')}"[:200]
     ),
     "vault_status": lambda a, r: (
@@ -1529,12 +1547,18 @@ _TRACE = {
         f"dispute pack: {a.get('merchant')} · ${r.get('amount_in_dispute', 0)}"
     ),
     "add_person": lambda a, r: (
+        f"asked to change {a.get('name')} ({a.get('relationship')}) — nothing changed until "
+        f"you confirm it (/pending)" if r.get("proposed_change") else
         f"already knew {a.get('name')} ({a.get('relationship')}) — added what was new"
         if r.get("matched_existing") else
-        f"remembered {a.get('name')} ({a.get('relationship')})"
+        f"noted {a.get('name')} ({a.get('relationship')})"
+        + (" — by the AI, not yet confirmed by you (/pending)" if r.get("unconfirmed") else "")
         + (" — kept apart from the other "
            f"{a.get('name')}" if r.get("possible_duplicate_of") else "")),
-    "update_person": lambda a, r: f"updated {r.get('name')}: {', '.join(r.get('changed', []))}",
+    "update_person": lambda a, r: (
+        f"asked to change {r.get('name')} — nothing changed until you confirm it (/pending)"
+        if r.get("proposed_change") and not r.get("changed") else
+        f"updated {r.get('name')}: {', '.join(r.get('changed', []))}"),
     "set_visibility": lambda a, r: (
         f"made more private: {len(r.get('changed', []))}"
         + (f" · only you can share {len(r['needs_owner'])} — type /share"
@@ -1603,8 +1627,15 @@ _TRACE = {
     ),
     "conscience_include": lambda a, r: f"let into the conscience: {a.get('ref')}",
     "conscience_exclude": lambda a, r: _forget_trace(r, "item(s) of the conscience", "took out"),
-    "set_rule": lambda a, r: f"rule kept [{a.get('kind')}/{a.get('tags')}]: \"{a.get('instruction')}\"",
-    "remove_rule": lambda a, r: _forget_trace(r, "rule(s)", "removed"),
+    "set_rule": lambda a, r: (
+        f"rule proposed, waiting for you — nothing changed until you confirm it (/pending) "
+        f"[{a.get('kind')}/{a.get('tags')}]: \"{a.get('instruction')}\"" if r.get("proposed") else
+        f"rule kept — a no holds at once; noted by the AI, not yet confirmed by you (/pending) "
+        f"[{a.get('kind')}/{a.get('tags')}]: \"{a.get('instruction')}\"" if r.get("noted_by") else
+        f"rule kept [{a.get('kind')}/{a.get('tags')}]: \"{a.get('instruction')}\""),
+    "remove_rule": lambda a, r: (
+        f"asked to remove {r.get('count')} rule(s) — waiting for you, nothing removed (/pending)"
+        if r.get("step") == "proposed" else _forget_trace(r, "rule(s)", "removed")),
     "list_rules": lambda a, r: f"reading your {len(r) if isinstance(r, list) else 0} rule(s)",
     "check_disclosure": lambda a, r: (
         f"{'may' if r.get('allowed') else 'may NOT'} speak of {a.get('tags')} to {a.get('audience')} — {r.get('reason')}"
@@ -2265,38 +2296,40 @@ def parse_permit(rest: str) -> dict:
     return out
 
 
+def _reader(answer):
+    """Who reads the owner's answer: the terminal itself (/dev/tty) when this
+    is the real keyboard, or the reader a test hands in (S6, round 8)."""
+    return None if answer is input else answer
+
+
+def _at_keyboard(tty: bool | None) -> bool:
+    if tty is None:
+        import answers as _answers
+        tty = _answers.person_at_keyboard()       # stdin AND stdout (S6)
+    return bool(tty)
+
+
 def _confirmed(prompt: str, answer, tty: bool | None, widen: bool = False) -> bool:
     """A yes typed by a person at this keyboard. Not at a keyboard (a script,
-    a pipe, another program) means no. Whatever was typed or pasted before
-    the question is thrown away first, so a pasted block cannot carry its
-    own 'yes'. And anything that WIDENS what an AI or a key may do asks for
-    three digits shown only now, which nothing written beforehand can hold
-    (verify I-04: one pasted scam e-mail set payments to act and gave
-    ChatGPT's key his private memories)."""
-    if tty is None:
-        try:
-            tty = sys.stdin.isatty()
-        except Exception:
-            tty = False
-    if not tty:
+    a pipe, another program — on stdin or stdout) means no. Whatever was
+    typed or pasted before the question is thrown away first, so a pasted
+    block cannot carry its own 'yes'. And anything that WIDENS what an AI or
+    a key may do, or changes what is his, asks for three digits shown only
+    now, which nothing written beforehand can hold (verify I-04: one pasted
+    scam e-mail set payments to act and gave ChatGPT's key his private
+    memories)."""
+    if not _at_keyboard(tty):
         print("  This can only be done by you, typing at the keyboard of this Mac. "
               "Nothing was changed.")
         return False
     import answers as _answers
-    _answers.flush_typeahead()
     if widen:
-        code = _answers.fresh_code()
-        prompt = (f"  To make sure it is really you at the keyboard, type the number "
-                  f"{' '.join(code)} and press return: ")
+        return _answers.confirm_by_code(print, _reader(answer), True)
+    _answers.flush_typeahead()
     try:
         said = answer(prompt).strip().lower()
     except (EOFError, KeyboardInterrupt):
         said = ""
-    if widen:
-        if not _answers.typed_code(said, code):
-            print("  That was not the number shown, so nothing was changed.")
-            return False
-        return True
     if said not in ("y", "yes", "oui", "o"):
         print("  Nothing was changed.")
         return False
@@ -2440,12 +2473,7 @@ def owner_charges(command: str, answer=input, tty: bool | None = None) -> dict |
     except StoreProblem as e:
         print(f"  {e.for_owner()}")
         return None
-    if tty is None:
-        try:
-            tty = sys.stdin.isatty()
-        except Exception:
-            tty = False
-    if not tty:
+    if not _at_keyboard(tty):
         print("  This can only be done by you, typing at the keyboard of this Mac. "
               "Nothing was changed.")
         return None
@@ -2453,7 +2481,8 @@ def owner_charges(command: str, answer=input, tty: bool | None = None) -> dict |
     import answers as _answers
     _answers.flush_typeahead()          # a pasted 'yes' never counts (verify I-04)
     try:
-        _guardian.review_at_the_keyboard(guard, input_fn=answer)
+        # each yes is the number shown at that moment (S6, round 8)
+        _guardian.review_at_the_keyboard(guard, input_fn=_reader(answer))
     except StoreProblem as e:
         print(f"  {e.for_owner()}")
         return None
@@ -2617,10 +2646,11 @@ def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | No
     return None
 
 
-def owner_forgetting(command: str, answer=input) -> dict | None:
+def owner_forgetting(command: str, answer=input, tty: bool | None = None) -> dict | None:
     """/removed, /approve CODE, /bringback N, /erase WORDS — typed by the
     OWNER at this terminal. Deliberately not tools: big removals, putting
-    things back and erasing for good are his own hands' work, never an AI's."""
+    things back and erasing for good are his own hands' work, never an AI's
+    — and each needs the number shown on the screen at that moment (S6)."""
     import forgetting as fg
     verb, _, rest = command.strip().partition(" ")
     verb, rest = verb.lower(), rest.strip()
@@ -2635,20 +2665,19 @@ def owner_forgetting(command: str, answer=input) -> dict | None:
                       + ("the code." if verb == "/approve" else
                          "the number." if verb == "/bringback" else "the words."))
             return None
+        tty = _at_keyboard(tty)
         if verb == "/approve":
-            return fg.console_approve(conscience, rest, answer)
+            return fg.console_approve(conscience, rest, _reader(answer), tty=tty)
         elif verb == "/bringback":
-            res = fg.bring_back(conscience, rest)
+            return fg.console_bring_back(conscience, rest, _reader(answer), tty=tty)
         else:
-            return fg.console_erase(conscience, rest, answer)
+            return fg.console_erase(conscience, rest, _reader(answer), tty=tty)
     except StoreProblem as e:
         print(f"  {e.for_owner()}")
         return None
-    fg._say(res)
-    return res
 
 
-def owner_restore(command: str, answer=input) -> dict | None:
+def owner_restore(command: str, answer=input, tty: bool | None = None) -> dict | None:
     """/history and /restore N — typed by the OWNER at this terminal. This is
     deliberately not a tool: putting an old copy back would re-surface what
     he deleted, so no engine can ever ask for it."""
@@ -2668,8 +2697,7 @@ def owner_restore(command: str, answer=input) -> dict | None:
             else "damaged — cannot be used")
     print(f"  The copy saved {row['saved'][3:]}: {what}.")
     print("  Your memories as they are now are kept as a copy first, so this can be undone.")
-    if answer("  Put this copy back? Type yes and press return: ").strip().lower() not in ("y", "yes"):
-        print("  Nothing was changed.")
+    if not _confirmed("  Put this copy back?", answer, tty, widen=True):
         return None
     try:
         res = conscience.restore(row["file"])
@@ -2965,16 +2993,21 @@ def selftest() -> None:
         #    raises confidence. (Since October 2026, I-48, the same
         #    correction twice in one turn counts once — an AI in a loop used
         #    to count one override twelve times.)
+        #    Round 8 (S7): what an AI learned alone never says it is surer than
+        #    0.6, however many corrections — the evidence for it still counts.
         import provenance
-        before = conscience.priorities_for("travel")[0]["confidence"]
+        first = conscience.priorities_for("travel")[0]
+        before = first["confidence"]
         provenance.new_turn()
         p = conscience.record_correction(
             "travel", "1-stop", "direct", "direct flights", "saving money")
-        assert p["confidence"] > before, "reinforce failed"
+        assert p["for"] > first["for"] and before <= p["confidence"] <= 0.6, \
+            ("reinforce failed", first, p)
         again = conscience.record_correction(
             "travel", "1-stop", "direct", "direct flights", "saving money")
         assert again.get("already_counted") and again["for"] == p["for"], again
-        print(f"  ✓ reinforcement: {before} → {p['confidence']} (once per turn)")
+        print(f"  ✓ reinforcement: {first['for']} → {p['for']} choices for it, at "
+              f"{p['confidence']} — an AI's note never past 0.6 (once per turn)")
 
         # 3. Contradictions erode and eventually flip a LEARNED value — when
         #    the choices against it outweigh the ones for it, counted apart.
@@ -3041,18 +3074,24 @@ def selftest() -> None:
         print(f"  ✓ opportunity engine: hold {low['score']} / interrupt {hot['score']} "
               f"/ orb went protective / brief assembles")
 
-        # 7. Representative: forms fill, sensitive fields are refused.
-        rep.set_profile_field("first name", "Laszlo")
-        rep.set_profile_field("last name", "Czako")
-        rep.set_profile_field("email", "l@example.com")
+        # 7. Representative: forms fill, sensitive fields are refused. His
+        #    own details are his to set (round 8, S2): what an AI says about
+        #    them waits beside his, and forms never use it.
+        with access.owner_console():
+            rep.set_profile_field("first name", "Laszlo")
+            rep.set_profile_field("last name", "Czako")
+            rep.set_profile_field("email", "l@example.com")
         blocked = rep.set_profile_field("SIN", "123-456-789")
         assert not blocked["stored"], "stored a sensitive identifier!"
+        noted = rep.set_profile_field("Postal code", "K1A 0B1")
+        assert noted.get("pending") and not noted.get("stored"), noted
         form = rep.fill_form(["Full name", "Email address", "Postal code", "Card number"])
         assert form["filled"]["Full name"] == "Laszlo Czako", form
         assert form["filled"]["Email address"] == "l@example.com", form
         missing = {n["field"] for n in form["needs_you"]}
         assert "Postal code" in missing and "Card number" in missing, form
-        print(f"  ✓ forms: {form['coverage']} filled, sensitive + unknown handed back")
+        print(f"  ✓ forms: {form['coverage']} filled, sensitive + unknown + an AI's own "
+              f"note handed back")
 
         # 8. Triage catches what preys on people.
         scam = rep.triage_message(
@@ -3215,10 +3254,20 @@ def selftest() -> None:
         # 15. The rules: specific beats general, deny beats allow, silence is a no.
         from rules import ConscienceRules as _CR
         _R = _CR(Conscience(Path(td) / "rules.json"))
-        _R.set_rule("disclosure", "health", "My health is mine.", audience="anyone", allow=False)
-        _R.set_rule("disclosure", "health", "Karen can know.", audience="karen", allow=True)
-        _R.set_rule("representation", "work", "Say I'm retired and leave it.", audience="anyone")
-        _R.set_rule("reaction", "father", "Don't fix it. Listen.")
+        with access.owner_console():          # his rules are his to write (round 8, S1)
+            _R.set_rule("disclosure", "health", "My health is mine.", audience="anyone",
+                        allow=False)
+            _R.set_rule("disclosure", "health", "Karen can know.", audience="karen", allow=True)
+            _R.set_rule("representation", "work", "Say I'm retired and leave it.",
+                        audience="anyone")
+            _R.set_rule("reaction", "father", "Don't fix it. Listen.")
+        # an AI's yes changes nothing until he confirms it; its no holds at once
+        assert _R.set_rule("disclosure", "money", "Anyone may know.", audience="anyone",
+                           allow=True).get("proposed")
+        assert not _R.check_disclosure("a neighbour", "money")["allowed"], "an AI's yes held"
+        assert _R.set_rule("disclosure", "work", "Not Bob.", audience="bob",
+                           allow=False)["status"] == "pending"
+        assert not _R.check_disclosure("bob", "work")["allowed"], "an AI's no did not hold"
         assert _R.check_disclosure("karen", "health")["allowed"], "specific allow lost to general deny"
         assert not _R.check_disclosure("my sister", "health")["allowed"], "general deny ignored"
         w = _R.check_disclosure("a neighbour", "work")
@@ -3227,10 +3276,15 @@ def selftest() -> None:
         assert _R.check_disclosure("me", "health")["allowed"], "owner blocked from own conscience"
         assert _R.guidance_for("father", "me")["react_this_way"] == ["Don't fix it. Listen."]
         _R.include("/library/x/"); assert len(_R.included()) == 1
-        _shown = _R.remove_rule("retired")             # two steps (I-01)
-        assert _shown["removed"] == 0 and _shown["count"] == 1, _shown
-        assert _R.remove_rule(confirm=_shown["confirm"])["removed"] == 1
-        print("  ✓ rules: precedence, scoped representation, silence=no, intake gate, erase")
+        # from an AI, taking a rule away is a proposal: no code completes it
+        _asked = _R.remove_rule("retired")
+        assert _asked["step"] == "proposed" and "confirm" not in _asked, _asked
+        with access.owner_console():
+            _shown = _R.remove_rule("retired")             # two steps (I-01)
+            assert _shown["removed"] == 0 and _shown["count"] == 1, _shown
+            assert _R.remove_rule(confirm=_shown["confirm"])["removed"] == 1
+        print("  ✓ rules: precedence, scoped representation, silence=no, intake gate, erase;")
+        print("    an AI's no holds at once, anything else it asks waits for him")
 
         # 16. The system prompt carries directives + live store.
         sp = system_prompt()

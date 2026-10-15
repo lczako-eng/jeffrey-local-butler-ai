@@ -28,6 +28,8 @@ import threading
 import unittest
 from pathlib import Path
 
+import at_the_keyboard
+
 ROOT = Path(__file__).resolve().parent.parent
 CONNECTOR = ROOT / "connector"
 PY = sys.executable
@@ -43,6 +45,8 @@ def out(obj):
     print("RESULT " + json.dumps(obj, default=str))
 def store():
     return json.loads(open(os.environ["JEFFEREY_CONSCIENCE_PATH"], encoding="utf-8").read())
+# the owner at his keyboard types the number shown (round 8, S6)
+code = lambda prompt: "".join(__import__("re").findall(r"\\d", prompt))
 """
 
 # A life with the names the testers used: a daughter Anna, a granddaughter
@@ -113,6 +117,13 @@ class DeletionTest(unittest.TestCase):
                               env=self.env(), cwd=self.tmp, input=input_text,
                               capture_output=True, text=True, timeout=120)
 
+    def keyboard(self, *args, answer: str = "code", more=()) -> subprocess.CompletedProcess:
+        """The owner at his own keyboard (round 8, S6): connector/forgetting.py
+        at a pseudo-terminal, typing the number it shows (or a wrong one)."""
+        rc, screen = at_the_keyboard.run([PY, str(CONNECTOR / "forgetting.py"), *args],
+                                         self.env(), self.tmp, answer, more)
+        return subprocess.CompletedProcess(args, rc, screen, "")
+
     def every_copy(self) -> list[Path]:
         hist = self.store.parent / (self.store.stem + ".history")
         trash = self.store.parent / (self.store.stem + ".trash")
@@ -166,7 +177,9 @@ class NoWildcards(DeletionTest):
             import jefferey_mcp as m
             call = lambda n, a=None: mcp_call(m, n, a)
             seed_life(call)
-            call("set_rule", {"kind": "reaction", "tags": "father", "instruction": "Just listen."})
+            import access
+            with access.owner_console():      # his rule, set by him (round 8, S1)
+                m.rules.set_rule("reaction", "father", "Just listen.")
             call("add_goal", {"goal": "visit the lake"})
             got = [call("forget_life", {"contains": ""}), call("forget", {"contains": " "}),
                    call("remove_rule", {"rule_id_or_text": ""}), call("close_goal", {"contains": ""}),
@@ -340,7 +353,7 @@ class ExactMatching(DeletionTest):
         p = self.owner("approve", shown["confirm"])
         self.assertNotEqual(p.returncode, 0, "approved without his yes")
         self.assertEqual(len(json.loads(self.store.read_text())["people"]), 2)
-        p = self.owner("approve", shown["confirm"], input_text="yes\n")
+        p = self.keyboard("approve", shown["confirm"])     # the number shown (S6)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("Sarah (ex-wife)", p.stdout)
         s = json.loads(self.store.read_text())
@@ -351,11 +364,12 @@ class ExactMatching(DeletionTest):
 
     def test_remove_rule_by_id_exact_tag_or_whole_words_never_a_fragment(self):
         r = self.py("""
-            import jefferey_chat as jc
+            import jefferey_chat as jc, access
             d = jc.dispatch_tool
-            a = d("set_rule", {"kind": "disclosure", "tags": "health", "audience": "anyone",
-                               "allow": False, "instruction": "My health is mine."})
-            d("set_rule", {"kind": "reaction", "tags": "father", "instruction": "Don't fix it. Just listen."})
+            with access.owner_console():      # his rules, set by him (round 8, S1)
+                a = jc.rules.set_rule("disclosure", "health", "My health is mine.",
+                                      audience="anyone", allow=False)
+                jc.rules.set_rule("reaction", "father", "Don't fix it. Just listen.")
             frag = d("remove_rule", {"rule_id_or_text": "hea"})
             byid = d("remove_rule", {"rule_id_or_text": a["id"]})
             out({"frag": frag, "byid": byid, "rules": len(store()["rules"])})
@@ -467,19 +481,30 @@ class TwoSteps(DeletionTest):
         self.assertEqual(r["end"], [False, True, "declined"])
 
     def test_forget_profile_field_takes_two_steps(self):
+        # Round 8: what an AI noted for his phone waits beside his own (S2) and
+        # its own two steps forget it; his own phone needs his own hands (S5).
         r = self.py("""
-            import jefferey_chat as jc
+            import jefferey_chat as jc, access
             d = jc.dispatch_tool
             d("set_profile_field", {"field": "phone", "value": "416 555 0199"})
             s1 = d("forget_profile_field", {"field": "phone"})
-            mid = dict(store().get("profile", {}))
+            mid = [n["field"] for n in store().get("profile_notes", [])]
             s2 = d("forget_profile_field", {"field": "phone", "confirm": s1["confirm"]})
-            out({"s1": s1, "mid": mid, "s2": s2, "end": store().get("profile", {})})
+            end = [n["field"] for n in store().get("profile_notes", [])]
+            with access.owner_console():
+                jc.rep.set_profile_field("phone", "416 555 0101")
+            h1 = d("forget_profile_field", {"field": "phone"})
+            h2 = d("forget_profile_field", {"field": "phone", "confirm": h1["confirm"]})
+            out({"s1": s1, "mid": mid, "s2": s2, "end": end, "h1": h1, "h2": h2,
+                 "his": store().get("profile", {})})
         """)
         self.assertEqual(r["s1"]["removed"], None)
-        self.assertIn("phone", r["mid"])
+        self.assertEqual(r["mid"], ["phone"])
         self.assertEqual(r["s2"]["removed"], "phone")
-        self.assertNotIn("phone", r["end"])
+        self.assertEqual(r["end"], [])
+        self.assertTrue(r["h1"]["needs_owner"], r["h1"])
+        self.assertNotEqual(r["h2"].get("step"), "done", r["h2"])
+        self.assertEqual(r["his"], {"phone": "416 555 0101"})
 
 
 class UndoAndAudit(DeletionTest):
@@ -514,7 +539,7 @@ class UndoAndAudit(DeletionTest):
         # the owner looks, and puts it back
         p = self.owner("removed")
         self.assertIn("Ann (Legion friend)", p.stdout)
-        p = self.owner("bring-back", "1")
+        p = self.keyboard("bring-back", "1")              # he sees it, types the number
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("Put back", p.stdout)
         s = json.loads(self.store.read_text())
@@ -554,10 +579,13 @@ class UndoAndAudit(DeletionTest):
         self.assertTrue(r["a"]["needs_owner"])
         # The menu shows what is waiting, and asks once more before it
         # removes anything (verify I-01).
-        p = self.owner(input_text="ok 1\n")
+        p = self.owner(input_text="ok 1\n")          # a script: refused (round 8, S6)
+        self.assertIn("typing at the keyboard", p.stdout)
+        self.assertEqual(len(json.loads(self.store.read_text())["facts"]), 5)
+        p = self.keyboard(answer="wrong", more=(b"ok 1",))
         self.assertIn("Nothing was removed", p.stdout)
         self.assertEqual(len(json.loads(self.store.read_text())["facts"]), 5)
-        p = self.owner(input_text="ok 1\nyes\n")
+        p = self.keyboard(more=(b"ok 1",))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("Waiting for your OK", p.stdout)
         self.assertIn("Done: 5", p.stdout)
@@ -568,13 +596,19 @@ class UndoAndAudit(DeletionTest):
             for i in range(4):
                 d("remember_fact", {"fact": f"spare key {i}"})
             a = d("forget", {"contains": "spare key"})
-            unseen = jc.owner_forgetting(f"/approve {a['confirm']}", answer=lambda p: "")
-            res = jc.owner_forgetting(f"/approve {a['confirm']}", answer=lambda p: "yes")
-            back = jc.owner_forgetting("/bringback 1")
-            out({"unseen": unseen, "res": res, "back": back, "facts": len(store()["facts"]),
+            unseen = jc.owner_forgetting(f"/approve {a['confirm']}", answer=lambda p: "",
+                                         tty=True)
+            # round 8 (S6): his yes is the number shown at that moment
+            said_yes = jc.owner_forgetting(f"/approve {a['confirm']}", answer=lambda p: "yes",
+                                           tty=True)
+            res = jc.owner_forgetting(f"/approve {a['confirm']}", answer=code, tty=True)
+            back = jc.owner_forgetting("/bringback 1", answer=code, tty=True)
+            out({"unseen": unseen, "said_yes": said_yes, "res": res, "back": back,
+                 "facts": len(store()["facts"]),
                  "tools": [t["name"] for t in jc.TOOLS]})
         """)
         self.assertIsNone(r["unseen"], "/approve removed without the owner's yes")
+        self.assertIsNone(r["said_yes"], "a plain yes is not the number shown")
         self.assertEqual(r["res"]["removed_facts"], 4)
         self.assertEqual(r["back"]["put_back"], 4)
         self.assertEqual(r["facts"], 4)
@@ -627,12 +661,17 @@ class OldStores(DeletionTest):
         self.assertEqual(len(set(ids["facts"])), 2, "two identical facts share an id")
         self.assertTrue(all(i and i.startswith("f-") for i in ids["facts"]))
         # forgetting by an id worked out on read, then the ids are on disk, unchanged
+        # (round 8, S5: a fact kept before JEFFEREY recorded who said what is
+        # his, so an AI's code does not forget it — he approves it himself)
         r = self.py(f"""
             import jefferey_chat as jc
             s = jc.dispatch_tool("forget", {{"ids": [{ids['facts'][1]!r}]}})
-            d = jc.dispatch_tool("forget", {{"confirm": s["confirm"]}})
-            out({{"d": d, "disk": store()}})
+            ai = jc.dispatch_tool("forget", {{"confirm": s["confirm"]}})
+            d = jc.owner_forgetting("/approve " + s["confirm"], answer=code, tty=True)
+            out({{"s": s, "ai": ai, "d": d, "disk": store()}})
         """)
+        self.assertTrue(r["s"]["needs_owner"], r["s"])
+        self.assertTrue(r["ai"].get("refused"), r["ai"])
         self.assertEqual(r["d"]["removed_facts"], 1)
         disk = r["disk"]
         self.assertEqual([f["id"] for f in disk["facts"]], [ids["facts"][0]])
@@ -685,7 +724,7 @@ class RealErasure(DeletionTest):
             jc.egress.system_prompt_once(jc.system_prompt())   # the whole conscience, logged
         """)
         self.assertIn("bankruptcy", self.store.read_text())
-        p = self.owner("erase", "bankruptcy", "--yes")
+        p = self.keyboard("erase", "bankruptcy")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("Erased, for good", p.stdout)
         s = json.loads(self.store.read_text())
@@ -723,7 +762,7 @@ class RealErasure(DeletionTest):
         """, JEFFEREY_CLIENT="jefferey")
         before = [json.loads(l) for l in self.egress.read_text().splitlines()]
         self.assertGreaterEqual(sum("Alzheimer" in json.dumps(e) for e in before), 3)
-        p = self.owner("erase", "Alzheimer", "--yes")
+        p = self.keyboard("erase", "Alzheimer")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         after = [json.loads(l) for l in self.egress.read_text().splitlines()]
         self.assertEqual(len(after), len(before), "erasing dropped log entries")
@@ -756,17 +795,17 @@ class RealErasure(DeletionTest):
         """)
         self.assertTrue(len([p for p in self.every_copy() if "PTSD" in p.read_text()]) >= 3,
                         "the test did not reach the copies it means to check")
-        p = self.owner("erase", "PTSD", "--yes")
+        p = self.keyboard("erase", "PTSD")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("safety copies:", p.stdout)
         self.assertIn("rewritten", p.stdout)
         self.assertEqual(self.holding("PTSD"), [])
         # the copies are still good copies: putting one back works, and brings
         # back the other things in it — never the erased words
-        res = subprocess.run([PY, str(CONNECTOR / "conscience.py"), "restore", "3", "--yes",
-                              "--path", str(self.store)], env=self.env(),
-                             capture_output=True, text=True, timeout=60)
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        # (round 8, S6: putting a copy back is his alone, at his keyboard)
+        rc, screen = at_the_keyboard.run([PY, str(CONNECTOR / "conscience.py"), "restore", "3",
+                                          "--path", str(self.store)], self.env(), self.tmp)
+        self.assertEqual(rc, 0, screen)
         self.assertNotIn("PTSD", self.store.read_text())
         self.assertIn("Likes the lake", self.store.read_text())
 
@@ -811,10 +850,17 @@ class RealErasure(DeletionTest):
                "withheld": [], "refused": None}
         lines = self.egress.read_text().splitlines()
         self.egress.write_text("\n".join([json.dumps(old)] + lines) + "\n")
+        # Round 8 (S6): letting words go for good is his alone, at his keyboard,
+        # with the number shown at that moment — a script is refused
         p = subprocess.run([PY, str(CONNECTOR / "egress.py"), "keep", "90"], env=self.env(),
-                           capture_output=True, text=True, timeout=60)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn("kept word for word for 90 days", p.stdout)
+                           capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("hip surgery", self.egress.read_text())
+        rc, screen = at_the_keyboard.run([PY, str(CONNECTOR / "egress.py"), "keep", "90"],
+                                         self.env(), self.tmp)
+        self.assertEqual(rc, 0, screen)
+        self.assertIn("kept word for word for 90 days", screen)
         after = [json.loads(l) for l in self.egress.read_text().splitlines()]
         self.assertEqual(len(after), len(lines) + 1)
         self.assertNotIn("hip surgery", self.egress.read_text())
@@ -852,11 +898,12 @@ class RealErasure(DeletionTest):
             d = jc.dispatch_tool
             d("remember_fact", {"fact": "The garage code is in the vault"})
             raw = open(os.environ["JEFFEREY_CONSCIENCE_PATH"], "rb").read()
-            no = jc.owner_forgetting("/erase garage", answer=lambda _: "no")
+            no = jc.owner_forgetting("/erase garage", answer=lambda _: "no", tty=True)
             same_after_no = open(os.environ["JEFFEREY_CONSCIENCE_PATH"], "rb").read() == raw
-            nothing = jc.owner_forgetting("/erase zanzibar", answer=lambda _: "yes")
+            nothing = jc.owner_forgetting("/erase zanzibar", answer=code, tty=True)
             same_after_nothing = open(os.environ["JEFFEREY_CONSCIENCE_PATH"], "rb").read() == raw
-            yes = jc.owner_forgetting("/erase garage", answer=lambda _: "yes")
+            # (round 8, S6: his yes is the number shown at that moment)
+            yes = jc.owner_forgetting("/erase garage", answer=code, tty=True)
             out({"no": no, "nothing": nothing, "a": same_after_no, "b": same_after_nothing,
                  "yes": yes, "facts": store()["facts"]})
         """)
@@ -938,9 +985,9 @@ class AfterTheFixes(DeletionTest):
             d("remember_fact", {"fact": "Notes:\\n\\tZoë's lawyer is Bob"})
             out(1)
         """ % story)
-        p = self.owner("erase", "Karen", "--yes")
+        p = self.keyboard("erase", "Karen")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        p = self.owner("erase", "Zoë", "--yes")
+        p = self.keyboard("erase", "Zoë")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         log = self.egress.read_text(encoding="utf-8")
         self.assertNotIn("Karen", log)
@@ -998,7 +1045,7 @@ class AfterTheFixes(DeletionTest):
             stray.write_text(p.read_text())
             out(str(stray))
         """)
-        p = self.owner("erase", "separating", "--yes")
+        p = self.keyboard("erase", "separating")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertFalse(Path(r).exists())
         for f in self.tmp.rglob("*"):
@@ -1029,7 +1076,7 @@ class AfterTheFixes(DeletionTest):
         """)
         self.assertEqual(r["step"], "preview", r)
         self.assertEqual(r["count"], 1)
-        p = self.owner("erase", "凯伦", "--yes")
+        p = self.keyboard("erase", "凯伦")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertNotIn("凯伦", self.store.read_text(encoding="utf-8"))
 

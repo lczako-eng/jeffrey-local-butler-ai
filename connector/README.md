@@ -126,6 +126,41 @@ code, not vibes**:
   log inside the owner's conscience file (`action_log`), saying who wrote it
   and through which door; an act that cites no approval is marked so.
 
+## An AI never changes what is his
+
+These follow **who wrote something** — an engine key, or the owner at his own
+console — never what the words mean:
+
+- **His rules.** From an engine, a *no* (`set_rule` with `allow=false`) holds at
+  once, labelled *noted by the AI, not yet confirmed by him*. Anything that
+  widens what goes out — a yes, `remove_rule`, any other kind of rule — is a
+  proposal that changes nothing until he confirms it (`/pending`, `/confirm`,
+  or `python connector/conscience.py confirm`); no code completes it for an
+  engine. `list_rules` and `check_disclosure` never hand an engine a rule's own
+  sentence when the rule holds for that engine.
+- **His profile.** An engine's `set_profile_field` waits beside his own value;
+  `fill_form` and `fill_pdf` use only what he confirmed.
+- **His people and goals.** An engine's person or goal waits, labelled; its
+  change to someone he recorded is a proposal. Triage and every trust decision
+  count only the people he recorded or confirmed.
+- **Forgetting what is his** — anything he stored or confirmed — needs his own
+  approval, whatever the count; an engine's code only forgets its own notes.
+- **Learned values.** An engine's note never passes 0.6, and an engine's
+  correction never wears down a value he stated or confirmed.
+- **log_action** is `approved` only when what was done is what was approved.
+- **His home itself** (home, house, keys, security, guests, cameras, la maison…)
+  is never `act`.
+
+**Confirmation needs a person.** The owner's own command-line confirmations —
+`conscience.py confirm` and `restore`, `forgetting.py approve`, `erase` and
+`bring-back`, `guardian.py review`, `egress.py open` and `keep` — refuse unless
+stdin and stdout are terminals; `--yes` is ignored; the answer is read from the
+terminal itself (`/dev/tty`) and must hold a short number printed on the
+screen at that moment. **What this cannot stop:** an agent that has a shell
+*and* a pseudo-terminal can still do what he can — it can read the number off
+its own screen and type it back. Until confirmation moves to Touch ID (I-43),
+never give an AI agent a shell on the Mac that holds his memories.
+
 ## The Opportunity Engine + the predictive orb
 
 The daily question from the spec: *"What can I do today to make this
