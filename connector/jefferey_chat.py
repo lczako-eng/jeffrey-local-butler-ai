@@ -405,7 +405,8 @@ TOOLS = [
             "English or French) the way a good friend would: what does it "
             "want, does it matter by THIS person's priorities, and is anyone "
             "trying to take advantage of them? Pass the sender exactly as "
-            "shown (a number he has not saved counts). Returns a verdict — "
+            "shown (the number, the address, or the name with any '~' or "
+            "'Maybe:' the app puts before it). Returns a verdict — "
             "safety (someone asking when he is home alone: tell him at once) "
             "/ likely_scam / suspicious / check_first (it touches money, "
             "cards, codes, secrecy, urgency or a family claim: tell him, and "
@@ -515,9 +516,9 @@ TOOLS = [
         "description": (
             "Store one of the OWNER's own details for filling forms (name, "
             "address, phone, email, date of birth, employer...). Sensitive "
-            "identifiers and anything about someone else are refused. Changing "
-            "his name or date of birth comes back as a question with a one-time "
-            "code: ask him, and only if he says yes call again with confirm."
+            "identifiers and anything about someone else are refused. A change "
+            "to who he is (his name or date of birth) waits for his own yes: "
+            "tell him, and he types /approve and the code himself."
         ),
         "input_schema": {
             "type": "object",
@@ -1766,21 +1767,54 @@ def _tokens(obj) -> int:
     return len(json.dumps(obj, ensure_ascii=False)) // 4
 
 
+def local_result_budget(ctx: int = LOCAL_CTX) -> int:
+    """The most one tool result may take of a local model's window, in bytes:
+    a quarter of it (about four bytes to a token), never more than the door's
+    own limit (verify I-41: two default-size answers outgrew a 32k window)."""
+    return max(4096, min(egress.RESULT_BUDGET, ctx))
+
+
+def _shrink_result(content: str, budget: int) -> str:
+    """A tool result made to fit `budget` bytes the way the door does it: the
+    end of its longest lists left off, very long text shortened, and a note
+    saying so — still valid JSON the model can read."""
+    if len(content.encode("utf-8")) <= budget:
+        return content
+    try:
+        obj = json.loads(content)
+    except ValueError:
+        return content[: max(200, budget // 2)] + " …"
+    small, _ = egress.fit(obj, budget)
+    text = json.dumps(small, ensure_ascii=False)
+    if len(text.encode("utf-8")) > budget:
+        return _SHORTENED
+    return text
+
+
 def fit_local(system: str, history: list, ctx: int = LOCAL_CTX) -> bool:
-    """Make one local request fit the model's reading window: shorten the
-    oldest tool results (never the newest few, never what he typed). True
-    when it still does not fit, so he can be told."""
+    """Make one local request fit the model's reading window, so the start —
+    where JEFFEREY's rules are — is never cut: shorten the oldest tool results
+    first, then the newest ones too, a little at a time (never what he
+    typed). True when it still does not fit, so he can be told."""
     budget = int(ctx * 0.85)
 
     def size() -> int:
         return _tokens(system) + _tokens(history) + _tokens(openai_tools())
 
-    olds = [i for i, m in enumerate(history) if m.get("role") == "tool"][:-LOCAL_KEEP_RESULTS]
-    for i in olds:
+    results = [i for i, m in enumerate(history) if m.get("role") == "tool"]
+    for i in results[:-LOCAL_KEEP_RESULTS]:
         if size() <= budget:
             break
         if len(str(history[i].get("content", ""))) > len(_SHORTENED):
             history[i]["content"] = _SHORTENED
+    newest = results[-LOCAL_KEEP_RESULTS:]
+    per = local_result_budget(ctx)
+    while size() > budget and newest and per >= 2048:
+        for i in newest:
+            c = str(history[i].get("content", ""))
+            if len(c.encode("utf-8")) > per:
+                history[i]["content"] = _shrink_result(c, per)
+        per //= 2
     return size() > budget
 
 
@@ -1829,7 +1863,8 @@ def run_turn_local(history: list, model: str = LOCAL_MODEL, url: str = LOCAL_URL
             if line:
                 print(f"{DIM}  · {line}{RESET}")
             history.append({"role": "tool", "tool_call_id": c.get("id", ""),
-                            "name": name, "content": json.dumps(out, ensure_ascii=False)})
+                            "name": name, "content": _shrink_result(
+                                json.dumps(out, ensure_ascii=False), local_result_budget())})
     print(f"{DIM}(the local model kept calling tools without answering — "
           f"stopped after {LOCAL_MAX_ROUNDS} rounds. Ask again, more simply.){RESET}")
 
@@ -1980,6 +2015,40 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         print()
 
 
+_ADVERB = r"(?:(?:already|also|never|always|usually|still|then|just|really|only|often) )?"
+_VERBS = {"live", "go", "check", "call", "love", "trust", "know", "deal", "want", "need",
+          "get", "keep", "come", "leave", "find", "lose", "own", "make", "give", "take",
+          "see", "sell", "buy", "pay", "owe", "receive", "use", "read", "say", "ask", "tell"}
+_IRREGULAR = {"is": "are", "was": "were", "has": "have", "does": "do"}
+
+
+def to_you(text: str) -> str:
+    """The checks speak of the owner as 'he' for the AI; the owner at his own
+    terminal is spoken to as 'you' (verify I-24: 'this message asks when he
+    is home' was printed to the owner himself)."""
+    out = re.sub(r"\bhimself\b", "yourself", str(text))
+    out = re.sub(r"\bhim\b", "you", out)
+    out = re.sub(r"\bhis\b", "your", out)
+
+    def agree(m):
+        adv, verb = m.group(1) or "", m.group(2)
+        if verb in _IRREGULAR:
+            return f"you {adv}{_IRREGULAR[verb]}"
+        for cand in (verb[:-1], verb[:-2]):
+            if verb.endswith("s") and cand in _VERBS:
+                return f"you {adv}{cand}"
+        return f"you {adv}{verb}"
+    out = re.sub(r"\bhe (" + _ADVERB + r")(\w+)\b", agree, out)
+
+    def joined(m):
+        verb = m.group(2)
+        for cand in (verb[:-1], verb[:-2]):
+            if cand in _VERBS:
+                return f"{m.group(1)} {cand}"
+        return m.group(0)
+    return re.sub(r"\b(or|and) (\w+s)\b(?= (?:the|your|a|it|them|back))", joined, out)
+
+
 def kept_home_paste(text: str, e: EgressRefused) -> dict | None:
     """What the owner typed or pasted held a secret, so it stayed on this Mac.
     He is told so in plain words — and if it is a message he wanted checked
@@ -2013,14 +2082,14 @@ def kept_home_paste(text: str, e: EgressRefused) -> dict | None:
     score = without.get("scam_score", 0)
     if verdict.get("verdict") == "safety":
         print("\n  ⚠  JEFFEREY checked it here, on your Mac: this message "
-              + "; ".join(verdict.get("safety_flags", [])[:3]) + ".")
+              + to_you("; ".join(verdict.get("safety_flags", [])[:3])) + ".")
         print("  Do not answer that. Never tell anyone you do not know when you are home "
               "alone, or who lives with you.\n")
     elif others and score >= 0.25:
         word = "is very likely a scam" if score >= 0.5 else "looks suspicious"
         print(f"\n  ⚠  JEFFEREY checked it here, on your Mac: this message {word}.")
         for flag in others[:5]:
-            print(f"     · {flag}")
+            print(f"     · {to_you(flag)}")
         print("  Do not click, call or reply. If it claims to be your bank or a company "
               "you deal with, call the number on your card or your statement. If it says "
               "it is family, call them back on the number you already have for them.\n")

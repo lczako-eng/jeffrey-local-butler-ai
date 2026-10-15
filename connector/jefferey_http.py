@@ -584,7 +584,9 @@ def triage_message(t: TriageIn) -> dict:
     """Read an incoming message (a text, an email, a call he typed in,
     English or French) the way a good friend would: what does it want, does
     it matter by THIS person's priorities, and is anyone trying to take
-    advantage of them? Pass the sender exactly as shown. Returns a verdict —
+    advantage of them? Pass the sender exactly as shown (the number, the
+    address, or the name with any '~' or 'Maybe:' the app puts before it).
+    Returns a verdict —
     safety (someone asking when he is home alone: tell him at once) /
     likely_scam / suspicious / check_first (it touches money, cards, codes,
     secrecy, urgency or a family claim: tell him, and he checks by calling
@@ -660,8 +662,9 @@ class ProfileIn(BaseModel):
 def set_profile_field(p: ProfileIn) -> dict:
     """Store one of the OWNER's own details Jefferey may reuse on forms.
     Sensitive identifiers (SIN/SSN, cards, PINs) and anything about someone
-    else are refused. Changing his name or date of birth comes back as a
-    question with a one-time code: ask him, then send it again with confirm."""
+    else are refused. A change to who he is (his name or date of birth)
+    waits for his own yes: tell him, and he types /approve and the code
+    himself in 'Talk to JEFFEREY on this Mac'."""
     return rep.set_profile_field(p.field, p.value, p.confirm)
 
 

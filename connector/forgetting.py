@@ -71,6 +71,9 @@ AI_DAILY_MAX = 10        # more than this in a day, because an AI asked, too
 # (verify: the 11th declined coupon of the day needed the owner, and he was
 # told "10 things have already been removed" when nothing had been).
 STATUS_TOOLS = frozenset({"close_goal", "resolve_opportunity"})
+# Who the owner is on every form and letter: changing or removing one of
+# these, because an AI asked, always waits for his own yes (verify I-30).
+IDENTITY_KEYS = frozenset({"full_name", "first_name", "last_name", "date_of_birth"})
 AI_DAILY_STATUS_MAX = 40
 AI_CODE_MINUTES = 30     # how long a code an AI may use stays good
 OWNER_CODE_DAYS = 7      # how long a request waits for the owner
@@ -361,9 +364,40 @@ def _can_read(section: str) -> bool:
         return False
 
 
-def _row(section: str, item: dict, change: str | None = None) -> dict:
+def _kept_from_reader(c, section: str, item: dict) -> str | None:
+    """Why this connection may not read this item's words, or None. A
+    preview of what would be forgotten is held to the same rules as every
+    other read (verify I-11: forget(contains='night') showed a rented engine
+    'Takes donepezil 10mg at night' word for word, while explain_basis held
+    it back under his rule)."""
+    if c is None or section in ("rules", "priorities", "corrections"):
+        # his rules are read only by a key that may read them (rules.read),
+        # and every rule about his health says 'health'
+        return None
+    try:
+        import provenance
+        rd = provenance.reader()
+        if rd.get("owner"):
+            return None
+        text = _what(section, item)
+        cat = str(item.get("category") or "")
+        if section in ("facts", "memories", "people", "media") and item.get(
+                "visibility", "engines" if section == "facts" else "private") not in (
+                "engines", "family", "legacy") and not rd.get("caretaker"):
+            return "private"
+        if not c.reader_may_see(rd, text, cat):
+            return "private, or kept from this connection by his own rules"
+    except Exception:
+        return "private"
+    return None
+
+
+def _row(section: str, item: dict, change: str | None = None, c=None) -> dict:
     r = {"id": _id(section, item), "kind": _kind(section)}
-    r["what"] = (_what(section, item) if _can_read(section)
+    why = _kept_from_reader(c, section, item) if _can_read(section) else None
+    r["what"] = (("(not shown here: " + why + " — he sees its words himself in "
+                  "'Forget or bring back')") if why else
+                 _what(section, item) if _can_read(section)
                  else "(not shown: your key cannot read this)")
     if change:
         r["change"] = change
@@ -739,7 +773,7 @@ def run(c: Conscience, tool: str, make_plan: Callable[[], Plan | str],
 
 def ask(c: Conscience, tool: str, plan: Plan) -> dict:
     """Step one: exactly what would go, and a one-time code. Nothing changes."""
-    also = [_row(s, i) for s, i in plan.also[:SHOW_MAX]]
+    also = [_row(s, i, c=c) for s, i in plan.also[:SHOW_MAX]]
     if not plan.changes:
         res = {"step": "nothing", "count": 0,
                "note": "Nothing matched, so nothing was removed. Words match whole "
@@ -753,7 +787,10 @@ def ask(c: Conscience, tool: str, plan: Plan) -> dict:
     count = len(plan.changes)
     sections = list(dict.fromkeys(ch["section"] for ch in plan.changes))
     why = None
-    if count > AI_MAX_ITEMS:
+    if tool == "set_profile_field" or any(
+            ch["section"] == "profile" and ch["id"] in IDENTITY_KEYS for ch in plan.changes):
+        why = "it changes who he is on every form and letter"
+    elif count > AI_MAX_ITEMS:
         why = f"it is {count} things"
     elif len(sections) > 1:
         why = "it is more than one kind of thing"
@@ -774,9 +811,9 @@ def ask(c: Conscience, tool: str, plan: Plan) -> dict:
     counts = Counter(ch["section"] for ch in plan.changes)
     res = {
         "step": "preview",
-        "would_remove": [_row(ch["section"], ch["before"]) for ch in plan.changes
+        "would_remove": [_row(ch["section"], ch["before"], c=c) for ch in plan.changes
                          if ch["action"] == "remove"][:SHOW_MAX],
-        "would_change": [_row(ch["section"], ch["before"], ch["change"])
+        "would_change": [_row(ch["section"], ch["before"], ch["change"], c=c)
                          for ch in plan.changes if ch["action"] == "update"][:SHOW_MAX],
         "count": count, "kinds": _count_words(counts),
         "confirm": code, "needs_owner": bool(why),
@@ -911,6 +948,8 @@ def _carry_out(c: Conscience, entry: dict, by_owner: bool) -> dict:
     changes, gone = [], 0
     for ch in entry["changes"]:
         cur = _find(c.data, ch["section"], ch["id"])
+        if cur is None and ch["section"] == "profile" and ch["action"] == "update":
+            cur = {"field": ch["id"], "value": ""}      # a detail not set yet
         if cur is None:
             gone += 1
             continue
@@ -950,7 +989,8 @@ def _carry_out(c: Conscience, entry: dict, by_owner: bool) -> dict:
         what.append("removed " + _count_words(counts))
     if updates:
         verb = {"close_goal": "marked done", "resolve_opportunity": "marked resolved",
-                "forget_life": "took a name off"}.get(tool, "changed")
+                "forget_life": "took a name off",
+                "set_profile_field": "changed"}.get(tool, "changed")
         what.append(f"{verb} " + _count_words(updates))
     who = ("approved by the owner at his own console" if by_owner
            else "confirmed by the AI after it showed him the list")
@@ -977,12 +1017,12 @@ def _carry_out(c: Conscience, entry: dict, by_owner: bool) -> dict:
     for sec, i in entry.get("also") or []:
         it = _find(c.data, sec, i)
         if it is not None:
-            also.append(_row(sec, it))
+            also.append(_row(sec, it, c=c))
     res = {
         "step": "done", "count": len(changes),
-        "removed_items": [_row(ch["section"], ch["before"]) for ch in changes
+        "removed_items": [_row(ch["section"], ch["before"], c=c) for ch in changes
                           if ch["action"] == "remove"][:SHOW_MAX],
-        "changed_items": [_row(ch["section"], ch["before"], ch["change"])
+        "changed_items": [_row(ch["section"], ch["before"], ch["change"], c=c)
                           for ch in changes if ch["action"] == "update"][:SHOW_MAX],
         "kept_until": _day(keep_until),
         "put_back": (f"Until {_day(keep_until)} the owner can put this back himself: "
@@ -1008,8 +1048,12 @@ def _apply(data: dict, changes: list[dict]) -> None:
         sec = ch["section"]
         if sec == "profile":
             prof = data.get("profile")
-            if isinstance(prof, dict) and ch["action"] == "remove":
+            if not isinstance(prof, dict):
+                prof = data["profile"] = {}
+            if ch["action"] == "remove":
                 prof.pop(ch["id"], None)
+            elif isinstance(ch.get("after"), dict):
+                prof[ch["id"]] = ch["after"].get("value", "")
             continue
         lst = data.get(sec) or []
         for i, it in enumerate(lst):

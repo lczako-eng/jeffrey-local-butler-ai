@@ -191,8 +191,8 @@ def memories_line(python: Path | None = None) -> int:
     r = run([str(py), str(CONNECTOR / "conscience.py"), "check"])
     out = r.stdout.strip().splitlines()
     text = out[0].strip() if out else "Your memories: could not be checked."
-    away = where is not None
-    (ok if r.returncode == 0 else warn if r.returncode == 2 or away else bad)(text)
+    away = where is not None or r.returncode == 3
+    (ok if r.returncode == 0 else warn if r.returncode in (2, 3) or away else bad)(text)
     if r.returncode == 1 and not away and "no good copy" not in text:
         say(f"  {DIM}Double-click 'Restore my memories.command' to put back an "
             f"earlier copy. JEFFEREY still connects, and tells you the same "
@@ -306,6 +306,10 @@ def _sensitive() -> list[tuple[Path, str]]:
 
 
 def _path_words(entry) -> list[str]:
+    """Every path a connection names — whole, after '--root=', or one of
+    several joined by ':' or ',' (verify I-18: '--root=/Users/him' and
+    'ALLOWED=/Users/him:/Volumes/Self-Cloud' were not seen)."""
+    import re
     words = []
     if isinstance(entry, dict):
         for a in entry.get("args") or []:
@@ -314,7 +318,33 @@ def _path_words(entry) -> list[str]:
         env = entry.get("env")
         if isinstance(env, dict):
             words += [v for v in env.values() if isinstance(v, str)]
-    return [w for w in words if w.startswith(("/", "~", "$HOME", "${HOME}"))]
+    out = []
+    for w in words:
+        for part in re.split(r"[=:,;\s]+(?=[/~$])", w):
+            part = part.strip().strip("\"'")
+            if part.startswith(("/", "~", "$HOME", "${HOME}")):
+                out.append(part)
+    return out
+
+
+def claude_code_servers() -> dict:
+    """The connections Claude Code itself holds (~/.claude.json): for the
+    whole user, and for each folder it was opened in. Read only."""
+    p = Path.home() / ".claude.json"
+    try:
+        data = json.loads(p.read_text() or "{}") if p.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+    out: dict = {}
+    if isinstance(data, dict):
+        top = data.get("mcpServers")
+        if isinstance(top, dict):
+            out.update({f"{k} (Claude Code)": v for k, v in top.items()})
+        for folder, proj in (data.get("projects") or {}).items():
+            servers = proj.get("mcpServers") if isinstance(proj, dict) else None
+            if isinstance(servers, dict):
+                out.update({f"{k} (Claude Code, in {folder})": v for k, v in servers.items()})
+    return {k: v for k, v in out.items() if not k.startswith(SERVER_KEY + " ")}
 
 
 def exposures(servers: dict) -> list[tuple[str, str, str]]:
@@ -463,6 +493,7 @@ def wire_claude_code(client: str, drive_ids: list[str] | None = None) -> bool:
         warn("Could not add to Claude Code: " + r.stderr.strip()[:200])
         return False
     ok(f"Connected Jefferey to Claude Code as '{client}'")
+    warn_exposures(claude_code_servers(), offer=False)
     return True
 
 
@@ -498,6 +529,32 @@ def where_words() -> str:
     return "on your Self-Cloud drive (not plugged in right now)"
 
 
+def move_life_step(drive: Path, offer: bool, input_fn=input) -> None:
+    """His life is still on this Mac and his drive has none: offer to move
+    it (verify I-08: the installer paired the drive and left the life behind,
+    and JEFFEREY then showed an empty life). Until he says yes, JEFFEREY
+    stays off — it never begins an empty life on the drive."""
+    if not home.laptop_life() or os.path.lexists(drive / home.NAMESPACE / "conscience.json"):
+        return
+    warn("Your memories are on this Mac, and your drive has none yet.")
+    move = (answers.ask_yes_no_or_none("    Move them onto the drive? (The Mac's copy is put "
+                                       "aside, not deleted.) Type yes or no: ", input_fn)
+            if offer else None)
+    if move:
+        sys.path.insert(0, str(REPO / "tools"))
+        try:
+            import provision_drive as pd
+            pd.move_home_life(drive, out=say)
+        except Exception as e:                 # Refused, or the drive filled up
+            bad(f"They were not moved: {e}")
+            say(f"    {DIM}Your memories are exactly where they were, on this Mac.{OFF}")
+        finally:
+            sys.path.remove(str(REPO / "tools"))
+    else:
+        warn("JEFFEREY stays off until they are moved — he will not start an empty life on "
+             "the drive. Double-click this again and answer yes.")
+
+
 def drive_step(offer: bool, input_fn=input) -> list[str]:
     """Which Self-Cloud drive is the owner's. Only his typed yes pairs one —
     a drive is never adopted because it carries a marker (I-17). Returns the
@@ -515,16 +572,25 @@ def drive_step(offer: bool, input_fn=input) -> list[str]:
         name = home.safe_name(mk.get("name"), p.name)
         if mk["id"] in ids:
             ok(f"Your Self-Cloud drive '{name}' is plugged in, and this Mac knows it is yours")
+            rec = next((d for d in recs if d["id"] == mk["id"]), None)
+            if rec is not None and not rec.get("proof") and home._namespace_ok(p):
+                try:
+                    home.pair(p, mk)          # leaves the proof a copy cannot have
+                except (OSError, ValueError):
+                    pass
             here = True
+            move_life_step(p, offer, input_fn)
             continue
         warn(f"A Self-Cloud drive is plugged in that this Mac does not know: '{name}' "
              f"(id {mk['id']}, at {p}).")
-        if offer and answers.ask_yes_no("    Is it your own Self-Cloud drive? Type yes or no: ",
-                                        input_fn):
+        mine = (answers.ask_yes_no_or_none("    Is it your own Self-Cloud drive? Type yes or "
+                                           "no: ", input_fn) if offer else None)
+        if mine:
             home.pair(p, mk)
             ids.append(mk["id"])
             here = True
             ok(f"This Mac now knows '{name}' is yours")
+            move_life_step(p, offer, input_fn)
         else:
             say(f"    {DIM}JEFFEREY will not use it. If it is yours, run this again in Terminal "
                 f"and answer yes, or:  python3 connector/home.py pair '{p}'{OFF}")
@@ -539,15 +605,21 @@ def drive_step(offer: bool, input_fn=input) -> list[str]:
                 f"\n  If you have a Self-Cloud drive, plug it in and run this again.{OFF}")
         elif offer and not home.marked_drives():
             # Laptop-only is his choice, never what happens because a drive
-            # was not plugged in when Claude started (I-08).
-            if answers.ask_yes_no("  Do you have a Self-Cloud drive for your memories? "
-                                  "Type yes or no: ", input_fn):
+            # was not plugged in when Claude started (I-08) — and never what
+            # silence means (verify I-08, I-60: a closed window, or five
+            # answers it did not understand, chose this Mac).
+            has = answers.ask_yes_no_or_none("  Do you have a Self-Cloud drive for your "
+                                             "memories? Type yes or no: ", input_fn)
+            if has:
                 warn("Plug it in, then double-click this again (a new drive: double-click "
                      "'Make this drive a Self-Cloud.command' first). Until then JEFFEREY "
                      "stays off.")
-            else:
+            elif has is False:
                 home.choose_this_mac()
                 ok("JEFFEREY will keep your memories on this Mac (~/.jefferey)")
+            else:
+                warn("JEFFEREY does not know yet where to keep your memories, so he stays off. "
+                     "Double-click this again and answer the question about your drive.")
         else:
             warn("JEFFEREY does not know yet where to keep your memories, so he stays off. "
                  "Run this again in Terminal and answer the question about your drive.")
@@ -593,6 +665,7 @@ def check_only() -> int:
         warn_exposures(servers, offer=False)
     else:
         warn("Claude Desktop config not found")
+    warn_exposures(claude_code_servers(), offer=False)
     say()
     return 0
 

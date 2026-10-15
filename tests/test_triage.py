@@ -1486,5 +1486,218 @@ class EverySurfaceGivesTheSameAnswer(TriageTest):
                          if (self.tmp / "egress.jsonl").exists() else "")
 
 
+# ============================================================ after the fixes
+UNSAVED = "+1 647 555 0101"
+
+
+class AfterTheFixes(TriageTest):
+    """The independent check of the triage fix (verify:triage I-13, I-24 and
+    two regressions) wrote messages the rules had never seen. Each list here
+    is theirs, word for word; every one failed on the code before this fix."""
+
+    def assertFlagged(self, results, msgs, want=FLAGGED):
+        for (s, _, b), r in zip(msgs, results):
+            self.assertIn(r["verdict"], want, (s, b, r["verdict"], r["scam_score"]))
+            self.assertTrue(r["interrupt"], (s, b))
+            self.assertNeverQuiet(r, b)
+
+    def test_money_in_words_or_without_a_dollar_sign(self):
+        # (1) 'three thousand dollars', '3000', 'two grand', 'a few hundred'
+        # came back routine or needs_decision with interrupt false — the
+        # grandchild scam itself
+        bodies = ["Grandpa I need three thousand dollars tonight, please help me",
+                  "Grandma, I need 3000 tonight. Please help.",
+                  "Grandpa please, I need two grand. Please hurry.",
+                  "Grand-maman, j'ai besoin de mille dollars ce soir, aide-moi",
+                  "Grandpa can you send me five hundred bucks?",
+                  "Mom, I need 800 for rent by tomorrow, can you help?",
+                  "Dad I'm short 1200 for rent",
+                  "Uncle Bob, could you lend me a few hundred?",
+                  "Papi, il me faut 500 piasses aujourd'hui, peux-tu m'aider?"]
+        msgs = [(UNSAVED, "", b) for b in bodies]
+        res = self.triage(msgs)
+        self.assertFlagged(res, msgs)
+        for r in res:
+            self.assertIn("money", r["touches"], r)
+            self.assertIn("someone saying they are family", r["touches"], r)
+            self.assertNotIn("Nothing here asks for money", r["advice"])
+        # under a name he has not recorded it is still never quiet
+        named = self.triage([("Josh", "", bodies[0])])[0]
+        self.assertTrue(named["interrupt"])
+        self.assertNeverQuiet(named)
+        self.assertIn("calls that person back on the number he already has", named["advice"])
+
+    def test_card_sin_and_tech_support_phishing(self):
+        # (2) all came back routine
+        msgs = [(UNSAVED, "", "Your Visa has been temporarily blocked. To unblock, reply with the "
+                              "last 4 digits and expiry date"),
+                (UNSAVED, "", "Hello, I'm calling from the Social Security office... sorry, Service "
+                              "Canada. Your SIN number is linked to criminal activity."),
+                (UNSAVED, "", "Hi, I'm from your internet provider. Your router is sending error "
+                              "messages, we need you to turn on your computer so we can fix it"),
+                ("+1 905 555 0111", "", "Hi it's Kevin from Bell. We noticed you're overpaying. I can "
+                 "lower your bill by half if you confirm a few details on the phone."),
+                ("+1 438 555 0123", "", "Félicitations! Vous avez été choisi pour recevoir un "
+                 "iPhone gratuit. Cliquez ici.")]
+        self.assertFlagged(self.triage(msgs), msgs)
+
+    def test_disguised_words(self):
+        # (3) 'P1ay', '9ift', 'kards', 'iTunez', a picture or a line separator
+        # inside the words, and 'te11' (1 read only as i) came back routine
+        bodies = ["Please buy Google P1ay cards and send me the numbers",
+                  "Please buy 9ift cards and send me the numbers",
+                  "Please buy gift kards and send me the numbers",
+                  "Please buy iTunez cards and send me the numbers",
+                  "Please buy gift\U0001f381cards and send the numbers",
+                  "Please buy gift cards and text the numbers",
+                  "Grandpa I need bai1 money, d0n't te11 m0m"]
+        msgs = [("+1 416 555 0123", "", b) for b in bodies]
+        res = self.triage(msgs)
+        self.assertFlagged(res, msgs)
+        self.assertIn("keeping it secret", res[-1]["touches"])
+
+    def test_stranded_romance_and_the_french_bail_scam(self):
+        # (4) needs_decision with interrupt false, from a name and a number
+        # alike; the French bail scam scored 0.0 'No clear sign of a scam'
+        dear = ("Hello dear, I've been thinking about you all day. I'm stuck at the airport in "
+                "Lagos and they won't let me leave without paying a fine. Could you help me with "
+                "1500?")
+        msgs = [("Lily", "", dear), (UNSAVED, "", dear),
+                ("Lisa", "", "Hi love, I can't wait to finally meet you. The visa office says I "
+                             "need $900 for the ticket. Can you help me, my darling?"),
+                ("+1 438 555 0123", "", "Bonjour, votre petit-fils a eu un accident. Il faut 3000 "
+                 "dollars pour la caution. Un agent passera chez vous.")]
+        res = self.triage(msgs)
+        self.assertFlagged(res, msgs)
+        self.assertNotIn("No clear sign of a scam", res[3]["advice"])
+        self.assertEqual(res[3]["verdict"], "likely_scam")
+
+    def test_a_bare_name_is_not_a_saved_contact(self):
+        # (5) any name was 'a name saved in his phone or address book'
+        r = self.triage([("Lily", "", "hello"), ("a man on the phone", "", "hello"),
+                         ("Maybe: Josh", "", "hello"), ("~Josh", "", "hello"),
+                         ("Sarah (daughter)", "", "hello")])
+        for x in r[:4]:
+            self.assertNotIn("saved in his phone or address book", x["sender_is"])
+        self.assertIn("cannot tell who it is", r[0]["sender_is"])
+        self.assertIn("does not know", r[1]["sender_is"])
+        self.assertIn("has not saved", r[2]["sender_is"])
+        self.assertIn("has not saved", r[3]["sender_is"])
+        self.assertIn("family label", r[4]["sender_is"])
+        # 'Mike Thompson' saying "it's me Josh" is a stranger whatever his
+        # phone shows; WhatsApp's '~Josh' too
+        msgs = [("Mike Thompson", "", "Hi Grandpa it's me Josh, new number. Can you help me "
+                                      "with something? Don't tell Mom"),
+                ("~Josh", "", "Grandpa, can you do me a favour? Don't tell Mom")]
+        self.assertFlagged(self.triage(msgs), msgs)
+
+    def test_casing_from_a_name_is_safety_again(self):
+        # the regression: at f83fabb these were 'safety'; at dabe3dc a name
+        # made them needs_decision, interrupt false, 'Recommend…'
+        bodies = ["Will you be home alone when I come? What time does your husband get back?",
+                  "What's your address and when are you usually home alone?",
+                  "Do you have a dog or an alarm? Just curious before I come for the table.",
+                  "À quelle heure êtes-vous seule à la maison?", "Vivez-vous seul?"]
+        msgs = [(n, "", b) for b in bodies
+                for n in ("Mike Thompson", "Sarah Lee", "Jean Tremblay", "a man on the phone")]
+        res = self.triage(msgs)
+        for (n, _, b), r in zip(msgs, res):
+            self.assertEqual(r["verdict"], "safety", (n, b, r))
+            self.assertTrue(r["interrupt"])
+            self.assertNotIn("Recommend", r["advice"])
+            self.assertIn("does not know who sent it", r["advice"])
+
+    def test_casing_paraphrases_from_an_unsaved_number(self):
+        # (2) of I-24: 16 of 33 came back routine 'no need to interrupt'
+        bodies = ["Do you live with anyone?", "Who else will be at the house when I come?",
+                  "Is anyone else living there with you?", "What's a time nobody else would be around?",
+                  "Are you going to be away this weekend?",
+                  "When's the best time to come when you're on your own?",
+                  "Is the back door usually unlocked?", "Do you lock your door at night?",
+                  "Are you retired? So you're home all day?", "What time do you get off work?",
+                  "When do you usually go to bed?", "Do you have a caregiver? When does she come?",
+                  "What hours are you around during the week?", "Vous êtes à la maison en semaine?",
+                  "Il y a quelqu'un avec vous la journée?", "Quand est-ce que vous partez en vacances?",
+                  # verify:life I-24 (4)
+                  "Do you live by yourself?", "What hours are you usually at home?",
+                  "Are you home during the day?", "Are you going to be away for the holidays?",
+                  "Will anyone be with you when I pick it up?",
+                  "What's the code for your gate so I can drop it off?",
+                  "Which days do you go to your appointments?"]
+        msgs = [("+1 416 555 0123", "", b) for b in bodies]
+        for (s, _, b), r in zip(msgs, self.triage(msgs)):
+            self.assertEqual(r["verdict"], "safety", (b, r["verdict"]))
+            self.assertTrue(r["interrupt"], b)
+
+    def test_his_recorded_daughter_asking_is_ordinary(self):
+        # verify:life regression: his daughter asking 'when will you be home?'
+        # was 'safety'. Recorded with her address, she is known; the same
+        # words from an address JEFFEREY does not know still warn him, and
+        # say how to make it ordinary.
+        r = self.py("""
+            import jefferey_chat as jc
+            jc.dispatch_tool("add_person", {"name": "Anna", "relationship": "daughter",
+                                            "notes": "email anna@example.com"})
+            out([jc.dispatch_tool("triage_message", {"sender": s, "subject": "hi", "body": b})
+                 for s in ("anna@example.com", "Anna", "stranger@example.com")
+                 for b in ("Hi Dad, when will you be home? I'll bring dinner over.",
+                           "Are you alone tonight? Want me to come keep you company?")])
+        """, JEFFEREY_CLIENT="jefferey")
+        for x in r[:4]:
+            self.assertNotEqual(x["verdict"], "safety", x)
+            self.assertIn("someone he has recorded", x["sender_is"])
+        self.assertEqual(r[5]["verdict"], "safety")
+        self.assertIn("life story", r[5]["advice"])
+
+    def test_a_long_run_of_lookalike_letters_is_fast(self):
+        # regression: 40,000 Cyrillic letters took 15.3 s (quadratic)
+        r = self.py("""
+            import time, representative as rep
+            t0 = time.time(); rep.triage_spelling("а" * 40000)
+            t1 = time.time(); rep.triage_spelling("аa" * 20000 + " Vеrify")
+            out([t1 - t0, time.time() - t1, rep.triage_spelling("Vеrify now")[2]])
+        """)
+        self.assertLess(r[0], 2.0)
+        self.assertLess(r[1], 2.0)
+        self.assertTrue(r[2], "the look-alike trick is still seen")
+
+    def test_check_draft_sees_that_he_is_alone(self):
+        # verify:triage I-24 (3) and verify:life I-24 (5): passed as ok
+        drafts = ["Come by at 2. My wife works days so it's just me.",
+                  "Anytime is fine, it's only me here.",
+                  "My wife is away until Sunday so the house is quiet.",
+                  "We'll be in Florida from January to March.",
+                  "Most days it's just me here."]
+        r = self.py("""
+            import jefferey_chat as jc
+            out([jc.dispatch_tool("check_draft", {"text": t, "audience": "buyer@example.com"})
+                 for t in %r + ["We'll be in touch from Monday.", "The couch is $150 firm."]])
+        """ % drafts, JEFFEREY_CLIENT="jefferey")
+        for t, x in zip(drafts, r):
+            self.assertFalse(x["ok"], (t, x))
+        self.assertTrue(r[-2]["ok"], r[-2])
+        self.assertTrue(r[-1]["ok"], r[-1])
+
+    def test_the_owner_is_spoken_to_as_you(self):
+        # (4) of I-24: the terminal told the owner 'this message asks when he
+        # is home…' in the third person
+        p = subprocess.run([PY, "-c", PRELUDE + textwrap.dedent("""
+            import jefferey_chat as jc
+            jc.make_client = lambda: object()
+            jc.chat(once=%r)
+            print(jc.to_you("someone he has not saved asks him for money — he finds out who it "
+                            "really is first, by calling a number he already has"))
+        """ % "A man wrote: my PIN is 4821, when are you usually home alone? Is your back door unlocked?")],
+            env=self.env(JEFFEREY_CLIENT="jefferey"), cwd=self.tmp,
+            capture_output=True, text=True, timeout=300)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        warning = [l for l in p.stdout.splitlines() if "checked it here" in l]
+        self.assertTrue(warning, p.stdout)
+        self.assertIn("when you are home", warning[0])
+        self.assertNotRegex(warning[0], r"\b(?:he|his|him)\b")
+        self.assertIn("someone you have not saved asks you for money — you find out who it "
+                      "really is first, by calling a number you already have", p.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

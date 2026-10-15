@@ -82,7 +82,7 @@ _CARETAKER_V1 = frozenset({
 # ...and as it was before paperwork.write existed (forms were filled under
 # facts.read, which the guests held too — I-02).
 _CARETAKER_V2 = _CARETAKER_V1 | {"act.request", "keys.read"}
-GRANTS_VERSION = 4
+GRANTS_VERSION = 5
 
 # Keys whose every change the owner is told about, in the brief and status.
 WATCHED_KEYS = ("jefferey", "family", "executor")
@@ -132,7 +132,7 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-def migrate_grants(data: dict) -> bool:
+def migrate_grants(data: dict, removed=None) -> bool:
     """Keep reading old stores (October 2026). The caretaker preset gained
     act.request and keys.read (v2), then paperwork.write (v3: filling forms
     left facts.read, so the caretaker keeps what it could already do and the
@@ -183,6 +183,15 @@ def migrate_grants(data: dict) -> bool:
         g["scopes"] = sorted(set(g["scopes"]) | {"paperwork.write"})
     if v < 4 and "facts.read" in g["scopes"]:
         g["scopes"] = sorted(set(g["scopes"]) | {"rules.read"})
+    # v5 (verify regression): a caretaker key he had narrowed in some other
+    # way (money.write taken off) lost forms at v3, which it had always been
+    # able to fill under facts.read. It keeps what it could already do — but
+    # never a scope he took off himself (remembered on the key, or in the
+    # access log).
+    if (v < 5 and "facts.read" in g["scopes"] and "paperwork.write" not in g["scopes"]
+            and "paperwork.write" not in (g.get("removed") or [])
+            and not (removed and removed("jefferey", "paperwork.write"))):
+        g["scopes"] = sorted(set(g["scopes"]) | {"paperwork.write"})
     g["v"] = GRANTS_VERSION
     return True
 
@@ -324,6 +333,8 @@ class SelfCloud:
         if scope not in g["scopes"]:
             return g                       # nothing to change, nothing written
         g["scopes"] = [s for s in g["scopes"] if s != scope]
+        # remembered, so no later update ever puts it back
+        g["removed"] = sorted(set(g.get("removed") or []) | {scope})
         self._changed(client, f"one kind of access was taken away ({scope}: "
                               f"{SCOPES.get(scope, 'unknown')})")
         self.c._save()

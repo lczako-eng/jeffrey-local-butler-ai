@@ -117,7 +117,7 @@ FINGERPRINT_ARGS: dict[str, tuple[str, ...]] = {
 # and any question it raises for him.
 _PRIORITY = frozenset({"id", "context", "higher", "lower", "confidence", "evidence",
                        "updated", "for", "against", "stated", "locked", "unconfirmed",
-                       "question_for_owner", "proposed_change"})
+                       "question_for_owner", "proposed_change", "held_since_before"})
 
 RELEASE: dict[str, frozenset[str]] = {
     # identity
@@ -130,7 +130,8 @@ RELEASE: dict[str, frozenset[str]] = {
     "get_conscience": frozenset({"owner", "priorities", "facts", "active_goals",
                                  "corrections_learned_from", "notices",
                                  "more_priorities", "more_facts", "how_to_see_more",
-                                 "held_back", "waiting_for_owner"}),
+                                 "held_back", "waiting_for_owner", "more_goals",
+                                 "more_notices"}),
     # values and how they are learned: for and against counted apart, a
     # stated value locked against inference, a reversal logged (I-48)
     "record_correction": frozenset(_PRIORITY | {"flipped", "already_counted"}),
@@ -152,8 +153,7 @@ RELEASE: dict[str, frozenset[str]] = {
     "forget": FORGET | {"removed_facts"},
     "get_profile": frozenset({ANY}),
     # a change to who the owner is comes back as a question first (I-30)
-    "set_profile_field": frozenset({"stored", "field", "value", "step", "would_change",
-                                    "confirm", "expires", "how_to_finish"}),
+    "set_profile_field": FORGET | {"stored", "field", "value"},
     "forget_profile_field": FORGET | {"removed"},
     # from_your_vault: "your SIN will go into box X", read to the owner first
     "fill_form": frozenset({"filled", "needs_you", "coverage", "vault_available",
@@ -173,7 +173,8 @@ RELEASE: dict[str, frozenset[str]] = {
     # given only to the connection that asked for it, never in the log view
     "action_log": frozenset({"category", "description", "amount", "currency",
                              "outcome", "added", "ts", "by", "surface", "source",
-                             "approved", "approved_for", "description_by", "note"}),
+                             "approved", "approved_for", "description_by", "note",
+                             "id", "held_back"}),
     "conscience_include": frozenset({"id", "ref", "added"}),
     "conscience_exclude": FORGET | {"excluded"},
     "set_rule": frozenset({"id", "kind", "tags", "audience", "allow",
@@ -184,7 +185,8 @@ RELEASE: dict[str, frozenset[str]] = {
     "daily_brief": frozenset({"orb", "active_goals", "opportunities",
                               "recent_actions", "recent_observations",
                               "corrections_learned_from", "notices",
-                              "held_back", "waiting_for_owner"}),
+                              "held_back", "waiting_for_owner", "more_goals",
+                              "more_notices"}),
     "orb_state": frozenset({"mood"}),
     # goals and the opportunity engine
     "add_goal": frozenset({"id", "goal", "added", "active"}),
@@ -719,7 +721,10 @@ def _more_codes(n: str, start: int, what: str) -> list[tuple[int, int, str]]:
 
 
 # ---- numbers that stand on their own
-_SEPR = "(?:[ \\t]*[.\\-/_\u00b7\u2022][ \\t]*|\\s{1,3})"
+# a comma too (verify I-66: '046,454,286' and '4111,1111,1111,1111' went
+# onto forms) — but a comma also groups thousands, so a number written with
+# commas counts only in a card's 4-4-4-4 shape, or beside the word 'SIN'
+_SEPR = "(?:[ \\t]*[.,\\-/_\u00b7\u2022][ \\t]*|\\s{1,3})"
 _RUN = re.compile(r"(?<![^\W_])(?<![^\W_][\-./_])\d+(?:" + _SEPR + r"\d+)*"
                   r"(?![^\W_])(?![\-./_][^\W_])")
 _DIGITS = re.compile(r"\d+")
@@ -774,7 +779,8 @@ def _number_hits(n: str) -> list[tuple[int, int, str]]:
                     seps[i] == "-" or (sub[:3] not in ("000", "666") and sub[0] != "9"
                                        and sub[3:5] != "00" and sub[5:] != "0000")):
                 hit(i, i + 2, SSN); found = True
-            elif w3 == [3, 3, 3] and len(set(seps[i:i + 2])) == 1 and (_luhn(sub) or sin_kw):
+            elif w3 == [3, 3, 3] and len(set(seps[i:i + 2])) == 1 and (
+                    sin_kw or (_luhn(sub) and seps[i] != ",")):
                 hit(i, i + 2, SIN); found = True
             for shape in ([4, 4, 4, 4, 3], [4, 4, 4, 4], [4, 6, 5], [4, 6, 4]):
                 k = len(shape)
@@ -786,6 +792,8 @@ def _number_hits(n: str) -> list[tuple[int, int, str]]:
         if found:
             continue
         nd, ng = len(digits), len(gs)
+        if "," in seps and not (card_kw or sin_kw or ssn_kw):
+            continue                                     # '1,234,567,890': a count
         if nd == 9 and (sin_kw or ssn_kw):
             hit(0, ng - 1, SSN if ssn_kw and not sin_kw else SIN)
         elif 13 <= nd <= 19 and _luhn(digits) and (card_kw or (ng != 2 and not ref)):
@@ -1206,6 +1214,7 @@ class EgressRefused(PermissionError):
 
 _SURFACE: str | None = None        # 'mcp' | 'http' | 'chat' | 'test'
 _ENGINE: str | None = None         # what the owner would call the far end
+_ENGINE_FROM_ENV = False           # named by a setting, not by JEFFEREY's own terminal
 _ANNOUNCED_SYSTEM: str | None = None
 
 SENT_CAP = 64 * 1024               # bytes of each send kept word for word
@@ -1214,9 +1223,10 @@ ASKED_CAP = 2 * 1024
 
 def bind(surface: str, engine: str | None = None) -> None:
     """Say once, per process, which surface this is and who is on the far end."""
-    global _SURFACE, _ENGINE
+    global _SURFACE, _ENGINE, _ENGINE_FROM_ENV
     _SURFACE = surface
     _ENGINE = engine or os.environ.get("JEFFEREY_ENGINE")
+    _ENGINE_FROM_ENV = not engine and bool(_ENGINE)
     if surface != "test":
         try:
             let_go()             # the owner's retention, if he has set one
@@ -1252,8 +1262,14 @@ def in_the_house() -> bool:
     """Is the far end a model on this very machine? (The terminal names a
     local engine '… on this machine (local — stays in the house)'.) Only
     then may the caretaker key be handed the owner's private facts in bulk
-    (I-11); anywhere else they go only when a question names them."""
-    return bool(_ENGINE) and "stays in the house" in _ENGINE
+    (I-11); anywhere else they go only when a question names them.
+
+    Only the terminal's own words count: it names the engine after checking
+    the address is this machine. A name put in a setting (JEFFEREY_ENGINE in
+    Claude's config) or any MCP or web connection is never 'in the house'
+    (verify I-11: that setting handed every private fact to rented Claude)."""
+    return (_SURFACE == "chat" and not _ENGINE_FROM_ENV and bool(_ENGINE)
+            and "stays in the house" in _ENGINE)
 
 
 def switch_path() -> Path:
@@ -2327,9 +2343,17 @@ def report(days: int | None = 7, full: bool = False) -> str:
         lines.append("")
         lines.append("EVERY SEND, WORD FOR WORD")
         for e in es:
-            head = (f"{e['t']}  {e.get('kind')}  {e.get('tool') or ''}  → {e.get('engine')} "
-                    f"({_kb(int(e.get('bytes') or 0))})"
-                    + ("   [on this Mac]" if e.get("_where") == "mac" and len(logs) > 1 else ""))
+            if e.get("kind") in ("secret_used", "intent"):
+                # written down here, sent nowhere (verify I-02: it read
+                # '→ the engine JEFFEREY is riding (0 B)')
+                where = ("a secret from your vault, written onto a form on this computer — "
+                         "sent nowhere" if e.get("kind") == "secret_used" else
+                         "written down before a change ran — sent nowhere")
+                head = f"{e['t']}  {e.get('kind')}  {e.get('tool') or ''}  ({where})"
+            else:
+                head = (f"{e['t']}  {e.get('kind')}  {e.get('tool') or ''}  → {e.get('engine')} "
+                        f"({_kb(int(e.get('bytes') or 0))})")
+            head += ("   [on this Mac]" if e.get("_where") == "mac" and len(logs) > 1 else "")
             lines.append("")
             lines.append(head)
             if e.get("asked"):

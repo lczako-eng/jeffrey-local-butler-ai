@@ -66,6 +66,16 @@ def _aud(r: dict) -> str:
     return grounding.norm_audience(r.get("audience", "")) or SELF
 
 
+def _says_no_to(r: dict, names, people) -> bool:
+    """Does this NO rule reach an audience known by these names? Its own
+    audience, each word of it, or the recorded person it names (verify I-24:
+    a no for 'Karen Czako' let 'Karen' and 'my ex-wife' through)."""
+    a = _aud(r)
+    if a in names:
+        return True
+    return bool(grounding.rule_names(r.get("audience", ""), people) & set(names))
+
+
 def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, list]:
     """The owner's rules for an audience known by these names, about
     whatever `hit(rule)` says a rule reaches. (False, rule, []) when a rule
@@ -73,10 +83,13 @@ def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, l
     None, []) when no rule speaks. A rule naming this audience beats a rule
     for 'anyone'; at the same level, no beats yes."""
     rs = [r for r in data.get("rules") or [] if isinstance(r, dict)]
+    people = data.get("people") or []
     disc = [r for r in rs if r.get("kind") == "disclosure" and hit(r)]
     reps = [r for r in rs if r.get("kind") == "representation" and hit(r)]
-    for names_no, names_yes in ((broad, strict), ({ANYONE}, {ANYONE})):
-        no = [r for r in disc if not r.get("allow") and _aud(r) in names_no]
+    for level, (names_no, names_yes) in enumerate(((broad, strict), ({ANYONE}, {ANYONE}))):
+        no = [r for r in disc if not r.get("allow") and (
+            _aud(r) in names_no if level else
+            _aud(r) != ANYONE and _says_no_to(r, names_no, people))]
         if no:
             return False, no[0], []
         yes = [r for r in disc if r.get("allow") and _aud(r) in names_yes]
@@ -88,18 +101,33 @@ def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, l
     return None, None, []
 
 
+# The far end of a connection — the engine's maker — is one reader; the key
+# holder (the family, the executor, a named key) is another.
+VENDOR_NAMES = frozenset({"ai", "an ai", "any ai", "engines", "engine", "ais", "anthropic",
+                          "claude", "openai", "chatgpt", "gpt"})
+
+
 def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
     """Does one of the owner's rules keep this (a fact, a moment, a person,
     a picture) from whoever is reading? The rule that does, or None. Only a
     rule that says no holds anything back here: what reaches a reader at all
     was already decided by its visibility — this is the owner's rules on top
-    (I-10, I-11: the life layer and the facts never consulted them)."""
+    (I-10, I-11: the life layer and the facts never consulted them).
+
+    Everyone who will read it is asked on their own, and a no for any of them
+    holds it back (verify I-10: a yes for 'claude' let the family key read
+    his diabetes over Claude despite 'never share my health with anyone',
+    while the same key over ChatGPT was refused)."""
     aud = frozenset(grounding.norm_audience(a) for a in audiences or () if a)
     if not aud:
         return None
-    ok, rule, _ = verdict(data, aud, aud,
-                          lambda r: grounding.tag_hits(r.get("tags") or [], text, tags))
-    return rule if ok is False else None
+    hit = lambda r: grounding.tag_hits(r.get("tags") or [], text, tags)  # noqa: E731
+    parties = [p for p in (aud - VENDOR_NAMES, aud & VENDOR_NAMES) if p]
+    for party in parties:
+        ok, rule, _ = verdict(data, party, party, hit)
+        if ok is False:
+            return rule
+    return None
 
 
 def _caller_holds_private() -> bool:

@@ -219,6 +219,13 @@ def topic_problem(topic) -> str | None:
 # may not write one, because it is cited for every decision (I-25).
 CATCH_ALL = frozenset({"any", "all", "general", "everything", "always", "anything",
                        "every", "overall", "in general", "all things", "life"})
+# Words that, alone, name no subject (verify I-25: 'all decisions', 'every
+# decision' and 'decisions' were cited for a grandson's bail). 'Family' does
+# name one ('in family matters, presence beats work'), so it stays.
+_BROAD = frozenset(stem(w) for w in """decision decisions choice choices thing things matter
+    matters situation situations case cases stuff everything anything something all any
+    every each whatever overall general generally default usual usually life
+    people everyone anyone time times way ways day days""".split())
 
 
 def context_problem(context, engine: bool) -> str | None:
@@ -233,6 +240,10 @@ def context_problem(context, engine: bool) -> str | None:
     if not content(n):
         return ("Name the subject this value is about in a word or two (for example "
                 "'travel' or 'Mom's care'); nothing was stored.")
+    if engine and not {stem(w) for w in words(n)} - _BROAD:
+        return ("That is about nearly everything, so only the owner himself can set it. "
+                "Name the subject it is about (for example 'Mom's care' or 'family "
+                "visits'); nothing was stored.")
     return None
 
 
@@ -259,7 +270,7 @@ CLASS_WORDS_PLAIN = {
     "minors": "children",
     "home_security": "the safety of his home",
     "third_party": "someone else's confidence",
-    "private": "something marked private",
+    "private": "something private",
 }
 
 
@@ -277,7 +288,14 @@ _SENSE_WORDS = {
         depression depressed anxiety bipolar schizophrenia pregnant pregnancy miscarriage
         hiv suicide suicidal disability wheelchair allergy allergic illness symptoms
         parkinson parkinsons copd asthma arthritis cholesterol pills pill dialysis
-        santé médecin médicament médicaments maladie enceinte"""),
+        santé médecin médicament médicaments maladie enceinte
+        dr doctors clinic nurse specialist cardiologist neurologist oncologist
+        geriatrician urologist gynecologist physio physiotherapy shrink counsellor
+        counselor coumadin eliquis xarelto lipitor aricept memantine lorazepam ativan
+        xanax prozac zoloft lithium seroquel oxycodone morphine methadone opioid
+        drinking drunk alcohol booze relapse hangover rehab detox forgetful
+        forgetfulness incontinence catheter mri ultrasound biopsy
+        colonoscopy mammogram prognosis palliative hospice"""),
     "money": _stems("""bank banking savings debt debts owe owes owed owing loan loans
         mortgage bankrupt bankruptcy overdraft salary income pension inheritance invest
         investment investments rrsp tfsa rrif brokerage credit banque dette dettes prêt
@@ -287,12 +305,17 @@ _SENSE_WORDS = {
     "minors": _stems("""toddler toddlers baby babies infant infants newborn teen teens
         teenager teenagers teenage kindergarten daycare preschool bébé"""),
     "home_security": _stems("""alarm alarms alarme lockbox keypad deadbolt"""),
-    "third_party": _stems("""secret secrets secretly affair confided"""),
-    "private": frozenset(),
+    "third_party": _stems("""secret secrets secretly affair confided hush"""),
+    # matters people keep to themselves even when nobody marked them so
+    "private": _stems("""divorce divorcing separated separation custody lawyer lawsuit
+        estranged bankruptcy arrest arrested probation parole"""),
 }
 _SENSE_PHRASES = {
     "health": ("blood pressure", "mental health", "memory clinic", "heart attack",
-               "heart condition", "heart surgery"),
+               "heart condition", "heart surgery", "blood thinner", "blood thinners",
+               "losing my memory", "losing his memory", "losing her memory", "memory loss",
+               "memory problems", "memory is going", "a test for", "test results",
+               "blood test", "cat scan"),
     "money": ("net worth", "credit card", "savings account", "bank account"),
     "minors": ("high school", "middle school", "elementary school", "grade school",
                "junior high", "école primaire"),
@@ -304,20 +327,35 @@ _SENSE_PHRASES = {
                       "while we are away", "while we're away", "while i am away",
                       "while i'm away", "house is empty", "empty house", "nobody home",
                       "no one home", "seul à la maison", "vit seul", "code de porte",
-                      "restraining order", "peace bond", "no contact order"),
+                      "restraining order", "peace bond", "no contact order",
+                      "house sits empty", "house is empty", "the house empty",
+                      "away for the winter", "spend the winter", "away until",
+                      "we're away", "we are away", "i'm away", "i am away"),
     "third_party": ("hasn't told", "has not told", "hasnt told", "haven't told",
                     "doesn't know", "does not know", "doesnt know", "don't tell",
                     "do not tell", "not to tell", "never told", "nobody knows",
                     "no one knows", "in confidence", "keep it quiet", "between us",
-                    "behind her back", "behind his back"),
+                    "behind her back", "behind his back", "keep it hush", "hush hush",
+                    "hasn't told anyone", "not told anyone", "keep this quiet",
+                    "don't say anything", "not a word"),
 }
 _SENSE_PATTERNS = {
-    "health": (re.compile(r"\b\d+(?:\.\d+)?\s?mg\b"),),
+    "health": (re.compile(r"\b\d+(?:\.\d+)?\s?mg\b"),
+               # 'Emma is expecting in May' — not 'expecting a parcel'
+               re.compile(r"\b(?:is|she'?s|are|we'?re) expecting\b(?! (?:a|an|the|my|his|her|"
+                          r"your|some) (?:call|parcel|package|delivery|letter|cheque|check|"
+                          r"visit|visitor|email|reply|answer|refund|bill))")),
     "money": (re.compile(r"[$€£]\s?\d{1,3}(?:,\d{3})+"), re.compile(r"[$€£]\s?\d{4,}"),
               re.compile(r"\$?\b\d{2,}k\b")),
     "minors": (re.compile(r"\b(?:[1-9]|1[0-7])\s*(?:years?|yrs?)[\s-]*old\b"),
                re.compile(r"\b(?:aged?)\s*(?:[1-9]|1[0-7])\b"),
-               re.compile(r"\bgrade\s*(?:[1-9]|1[0-2])\b")),
+               re.compile(r"\bgrade\s*(?:[1-9]|1[0-2])\b"),
+               # 'Grandson Leo is 9 and goes to Riverside Elementary'
+               re.compile(r"\b(?:is|turns?|turned|just turned) (?:[1-9]|1[0-7])\b(?! ?(?:%|"
+                          r"percent|dollars|am|pm|o'clock|:|\.\d|minutes|hours|days|weeks|"
+                          r"months|km|kg|lbs))"),
+               re.compile(r"\b(?:elementary|primary|junior|middle|public|catholic) school\b"
+                          r"|\belementary\b")),
 }
 # A category the owner (or an AI) gave a fact that already says what it is.
 _CATEGORY = {
@@ -395,15 +433,34 @@ CLASS_ALIASES = {
 }
 
 
-def fact_match(text, category, classes, topic_words: set[str]) -> tuple[int, str] | None:
+def fact_match(text, category, classes, topic_words: set[str],
+               topic: str | None = None) -> tuple[int, str] | None:
     """Does a fact belong to a subject with these words? (score, reason) —
-    the words they share, or the kind of thing the subject names — or None."""
+    the words they share, or the kind of thing the subject names — or None.
+
+    With `topic` (the subject as asked), a private fact — his health, money,
+    children, home, someone's confidence — belongs only to a subject that
+    names that kind of thing (verify I-28: 'a letter to the landlord about
+    Mom's apartment' shared only 'Mom' with 'Mom takes warfarin 5mg', and
+    'invite Emma's in-laws' only 'Emma' with 'Emma is pregnant')."""
     f = content(text)
     shared = topic_words & f
     cat = (content(category) - {"general"}) & topic_words
     named = [c for c in classes or () if CLASS_WORDS.get(c, frozenset()) & topic_words]
     if not shared and not cat and not named:
         return None
+    if topic is not None and classes:
+        if not named and not cat and not set(_sensitivity(str(topic), "")) & set(classes):
+            return None
+        # 'Mom's medication' is about Mom: another person's private fact
+        # ('Emma is pregnant') does not belong to it; 'my medications' is
+        # about nothing but the kind, so every such fact does
+        kind_words = set().union(*(CLASS_WORDS.get(c, frozenset()) for c in CLASSES))
+        sens = set().union(*(_SENSE_WORDS.get(c, frozenset()) for c in CLASSES))
+        rest = {w for w in topic_words if stem(w) not in kind_words | sens
+                and w not in kind_words | sens}
+        if rest and not rest & f:
+            return None
     reasons = []
     if shared:
         reasons.append("it mentions " + ", ".join(sorted(shared)))
@@ -449,11 +506,55 @@ FAMILY_WORDS = _stems("""wife husband spouse partner son daughter child mother f
     stepdaughter stepmother stepfather family""")
 
 
+# Ways of saying 'anyone' (verify I-10: a rule for 'everyone' was stored as
+# written and never applied).
+_ANYONE = frozenset({"anyone", "everyone", "everybody", "anybody", "all", "any one",
+                     "every one", "the world", "the public", "others", "other people",
+                     "everyone else", "anyone else", "anybody else", "everybody else",
+                     "all others", "all other people", "people", "strangers", "tout le monde",
+                     "n'importe qui", "les autres", "tous"})
+# Titles that are not a name ('Mrs. Czako' is Czako).
+_TITLES = frozenset({"mr", "mrs", "ms", "miss", "dr", "mme", "mlle", "m", "sir", "madam"})
+
+
 def norm_audience(s) -> str:
-    """'My Sister' and 'sister' are one audience; 'the family' is 'family'."""
+    """'My Sister' and 'sister' are one audience; 'the family' is 'family';
+    'everyone' and 'everybody' are 'anyone'."""
     n = normalise(s)
     n = re.sub(r"^(?:my|the|our|ma|mon|mes)\s+", "", n)
-    return n.strip(" .,:;!\"'")
+    n = n.strip(" .,:;!\"'")
+    return "anyone" if n in _ANYONE else n
+
+
+def _emails_in(text) -> set[str]:
+    return {e.strip(".,;:()<>").lower() for e in _EMAIL.findall(str(text or ""))}
+
+
+def rule_names(audience, people=()) -> frozenset:
+    """Every way a rule that says NO to this audience reaches someone
+    (verify I-24): the audience as written, each word of its name, and — when
+    it names someone recorded in his life story — that person, their
+    relationship to him, and the addresses noted for them. A no for 'Karen
+    Czako' then meets 'Karen', 'Mrs. Czako', 'my ex-wife' and her address."""
+    n = norm_audience(audience)
+    if not n or n in (SELF, "anyone"):
+        return frozenset({n} if n else ())
+    out = {n} | {w for w in words(n) if len(w) >= 2 and w not in STOP and w not in _TITLES}
+    nw = {w for w in words(n) if w not in _TITLES}
+    for p in people or ():
+        if not isinstance(p, dict):
+            continue
+        pn = norm_audience(p.get("name", ""))
+        rel = norm_audience(p.get("relationship", ""))
+        pw = {w for w in words(pn) if w not in _TITLES}
+        if not pn:
+            continue
+        if n == pn or (nw and pw and (nw <= pw or pw <= nw)) or (rel and n == rel):
+            out |= {pn} | ({rel} if rel else set())
+            out |= _emails_in(p.get("notes", ""))
+    out.discard("")
+    out.discard(SELF)
+    return frozenset(out)
 
 
 _ADDRESSED = re.compile(r"^(.*?)<\s*([^<>\s]+@[^<>\s]+)\s*>\s*$")
@@ -486,7 +587,7 @@ def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
     if name:
         n = norm_audience(name)
         strict |= {name, n}
-        broad |= {w for w in words(n) if w not in STOP}
+        broad |= {w for w in words(n) if w not in STOP and w not in _TITLES}
     for p in people or ():
         if not isinstance(p, dict):
             continue
@@ -495,7 +596,17 @@ def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
             continue
         pw = set(words(pn))
         rel = norm_audience(p.get("relationship", ""))
-        exact = pn in strict
+        noted = _emails_in(p.get("notes", ""))
+        exact = pn in strict or bool(email and email.lower() in noted)
+        # 'my ex-wife' is the person recorded as his ex-wife; 'kczako@…'
+        # holds her surname (verify I-24) — for a NO, never for a yes
+        if rel and norm_audience(raw) == rel:
+            broad |= {pn, rel}
+        if email:
+            local = email.split("@", 1)[0]
+            for w in pw:
+                if len(w) >= 4 and w in local:
+                    broad.add(w)
         if exact or (pw and pw <= broad):
             broad |= {pn} | ({rel} if rel else set()) | set(words(rel))
             if exact:

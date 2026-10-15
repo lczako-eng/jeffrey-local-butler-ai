@@ -123,6 +123,24 @@ def ask_yes_no(prompt: str, input_fn=input, out=print, tries: int = 5) -> bool:
     return False
 
 
+def ask_yes_no_or_none(prompt: str, input_fn=input, out=print, tries: int = 5) -> bool | None:
+    """Like ask_yes_no, but no answer at all — a closed window, or five
+    answers it did not understand — is None, never a 'no' to act on (verify
+    I-08, I-60: the installer read silence as 'no drive' and chose this Mac)."""
+    for _ in range(tries):
+        a = _ask(prompt, input_fn)
+        if a is None:
+            out("")
+            out("  No answer, so nothing was changed.")
+            return None
+        v = yes_no(a)
+        if v is not None:
+            return v
+        out("  Please type yes or no (oui ou non), then press return.")
+    out("  No answer, so nothing was changed.")
+    return None
+
+
 def ask_choice(prompt: str, table: dict, input_fn=input, out=print,
                hint: str = "", tries: int = 5) -> str | None:
     """Ask until the answer is one of `table`. None if there is no answer."""

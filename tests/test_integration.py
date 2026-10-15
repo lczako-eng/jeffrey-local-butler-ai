@@ -637,7 +637,8 @@ class OnlyTheCaretakerReadsHisRules(Child):
             "jefferey": {"client": "jefferey", "scopes": list(narrowed), "v": 3},
             "claude-raw": {"client": "claude-raw", "scopes": ["facts.read"], "v": 3}}}
         self.assertTrue(migrate_grants(data))
-        self.assertEqual(GRANTS_VERSION, 4)
+        # 5 since verify:paperwork's regression: a narrowed caretaker keeps forms
+        self.assertEqual(GRANTS_VERSION, 5)
         self.assertEqual(sorted(data["selfcloud_grants"]["jefferey"]["scopes"]),
                          sorted(narrowed + ["rules.read"]))
         self.assertEqual(data["selfcloud_grants"]["claude-raw"]["scopes"], ["facts.read"])

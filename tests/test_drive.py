@@ -237,7 +237,11 @@ class TheDriveIsWhereTheLifeIs(DriveTest):
 
     def test_a_running_session_follows_the_life_from_the_laptop_onto_a_new_drive(self):
         # The key issued in the laptop's store is issued again in the drive's,
-        # instead of "this client has never been granted access".
+        # instead of "this client has never been granted access". Changed by
+        # verify I-08: a drive paired while his life is still on the Mac no
+        # longer starts an empty life (this test used to assert exactly that:
+        # facts == ['On the drive now'], the laptop's left behind); JEFFEREY
+        # stays off until the life is moved, then follows it.
         home.choose_this_mac()
         r = self.py("""
             import contextlib, io, provision_drive as pd, jefferey_mcp as m
@@ -246,13 +250,18 @@ class TheDriveIsWhereTheLifeIs(DriveTest):
             os.makedirs(vol)
             with contextlib.redirect_stdout(io.StringIO()):
                 pd.provision(vol, "Self-Cloud", False, False, None)
+            stranded = mcp_call(m, "remember_fact", {"fact": "On the drive now"})
+            with contextlib.redirect_stdout(io.StringIO()):
+                pd.move_home_life(vol, out=lambda *a: None)
             x = mcp_call(m, "remember_fact", {"fact": "On the drive now"})
-            out({"x": x, "store": str(m.conscience.path),
+            out({"stranded": stranded, "x": x, "store": str(m.conscience.path),
                  "facts": [f["fact"] for f in mcp_call(m, "get_conscience")["facts"]]})
         """, JEFFEREY_CLIENT="jefferey")
+        self.assertTrue(r["stranded"].get("refused"), r["stranded"])
+        self.assertIn("still on this Mac", r["stranded"]["reason"])
         self.assertFalse(r["x"].get("refused"), r["x"])
         self.assertTrue(r["store"].startswith(str(self.vols)))
-        self.assertEqual(r["facts"], ["On the drive now"])
+        self.assertEqual(r["facts"], ["The garden gate sticks", "On the drive now"])
 
     def test_a_drive_pulled_mid_session_is_let_go_and_no_ghost_folder_is_made(self):
         vol = self.drive()
@@ -444,7 +453,9 @@ class TheDriveIsWhereTheLifeIs(DriveTest):
         away = self.unplug(vol)
         p = subprocess.run([PY, str(CONNECTOR / "conscience.py"), "check"],
                            env=self.env(SELFCLOUD_ROOT=vol), capture_output=True, text=True)
-        self.assertEqual(p.returncode, 1)
+        # 3, not 1: away is not 'needs restoring' (verify regression — the
+        # installer then told him to restore an earlier copy)
+        self.assertEqual(p.returncode, 3)
         self.assertIn("not plugged in", p.stdout)
         self.assertNotIn("none yet", p.stdout)
         self.assertTrue(away.exists())
@@ -1126,6 +1137,233 @@ class ClaudeCodeEverywhere(DriveTest):
         with mock.patch.object(install, "run", lambda cmd, **kw: seen.append(cmd)):
             install._claude_code_remove()
         self.assertIn(["claude", "mcp", "remove", "--scope", "user", "jefferey"], seen)
+
+
+# ============================================================ after the fixes
+class AfterTheFixes(DriveTest):
+    """The independent check of the drive fix (verify:drive I-08, I-17,
+    I-18, I-21, I-42, I-55, I-60, I-65 and three regressions). Each test is a
+    reproduction from that check, and failed on the code before this fix."""
+
+    def laptop_life(self, fact="Takes warfarin"):
+        d = self.home / ".jefferey"
+        d.mkdir(exist_ok=True)
+        (d / "conscience.json").write_text(json.dumps(
+            {"owner": None, "facts": [{"fact": fact, "category": "health"}], "priorities": [],
+             "goals": [], "_rev": 2}))
+        (d / "egress.jsonl").write_text('{"t": "2026-01-01T00:00:00Z", "kind": "x"}\n')
+        return d
+
+    def facts(self):
+        return self.py("""
+            import jefferey_mcp as m
+            out(mcp_call(m, "get_conscience"))
+        """, JEFFEREY_CLIENT="jefferey")
+
+    def test_the_installer_moves_a_laptop_life_onto_the_drive_it_pairs(self):
+        # I-08 (1): the installer paired the drive and left the life on the
+        # laptop; get_conscience then showed facts [] with no warning
+        import install
+        self.laptop_life()
+        self.drive(pair=False)
+        feed = iter(["yes", "no"])
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            install.drive_step(True, lambda _: next(feed))
+        self.assertIn("Your memories are on this Mac", buf.getvalue())
+        r = self.facts()
+        self.assertTrue(r.get("refused"), "an empty life was begun on the drive")
+        self.assertIn("still on this Mac", r["reason"])
+        feed = iter(["yes"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            install.drive_step(True, lambda _: next(feed))
+        self.assertEqual([f["fact"] for f in self.facts()["facts"]], [])
+        self.assertEqual(self.facts()["held_back"]["private"], 1, "the warfarin fact moved")
+        self.assertFalse((self.home / ".jefferey" / "conscience.json").exists())
+
+    def test_silence_at_the_installer_chooses_nothing(self):
+        # I-08 (2) and I-60: a closed input, or five answers it did not
+        # understand, printed 'No answer, so nothing was changed' and then
+        # chose this Mac
+        import install
+
+        def closed(_):
+            raise EOFError
+        for ask in (closed, lambda _: "I do"):
+            if home.pairing_path().exists():
+                home.pairing_path().unlink()
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                install.drive_step(True, ask)
+            self.assertEqual(home.locate().why, "undecided", buf.getvalue())
+            self.assertNotIn("will keep your memories on this Mac", buf.getvalue())
+            self.assertIn("No answer", buf.getvalue())
+
+    def test_a_drive_plugged_in_beside_a_mac_only_choice_is_said_plainly(self):
+        # I-08 (2): 'on this machine (no Self-Cloud drive plugged in)' while
+        # one was plugged in
+        home.choose_this_mac()
+        self.drive(pair=False)
+        self.assertIn("as you chose", home.describe())
+        self.assertIn("plugged in, but JEFFEREY does not use it", home.describe())
+
+    def test_an_unreadable_volume_uuid_fails_closed(self):
+        # I-17 (1): with diskutil silent, a drive carrying his id was taken
+        vol = self.drive()
+        home.pair(vol, None, volume_uuid="AAAA-1111")
+        with mock.patch.object(home.platform, "system", return_value="Darwin"), \
+                mock.patch.object(home, "disk_info", return_value={}):
+            home.reset_for_tests()
+            self.assertEqual(home.locate().why, "unverified")
+            self.assertIn("could not check", home.problem())
+
+    def test_a_stick_that_copies_your_drives_id_is_not_your_drive(self):
+        # I-17 (2): off a Mac (no volume UUID), a stick with the id printed
+        # in README.txt was adopted, and its planted grants applied
+        vol = self.drive()
+        did = home.read_marker(vol)["id"]
+        self.unplug(vol)
+        stick = self.vols / "Self-Cloud"
+        (stick / ".selfcloud" / "jefferey").mkdir(parents=True)
+        (stick / home.MARKER).write_text(json.dumps({"kind": "self-cloud-drive", "id": did,
+                                                     "name": "Self-Cloud"}))
+        planted = json.dumps({"owner": None, "_rev": 1, "facts": [], "priorities": [],
+                              "goals": [], "selfcloud_grants": {"claude-raw": {
+                                  "scopes": ["facts.read", "facts.write"], "active": True}}})
+        (stick / home.NAMESPACE / "conscience.json").write_text(planted)
+        home.reset_for_tests()
+        self.assertEqual(home.locate().why, "copy")
+        r = self.py("""
+            import jefferey_mcp as m
+            out(mcp_call(m, "remember_fact", {"fact": "house empty until Sunday"}))
+        """, JEFFEREY_CLIENT="claude-raw")
+        self.assertTrue(r.get("refused"), r)
+        self.assertEqual((stick / home.NAMESPACE / "conscience.json").read_text(), planted)
+
+    def test_paths_inside_arguments_joined_lists_and_claude_codes_own_config_are_seen(self):
+        # I-18: '--root=/Users/him' and 'ALLOWED=<home>:<drive>' gave no
+        # warning, and ~/.claude.json was never read
+        import install
+        servers = {"fs1": {"command": "x", "args": [f"--root={self.home}"]},
+                   "fs2": {"command": "x", "env": {"ALLOWED": f"{self.home}:/Volumes/Self-Cloud"}},
+                   "docs": {"command": "x", "args": [str(self.home / "Documents")]}}
+        names = {n for n, _, _ in install.exposures(servers)}
+        self.assertEqual(names, {"fs1", "fs2"})
+        (self.home / ".claude.json").write_text(json.dumps({"mcpServers": {
+            "filesystem": {"command": "npx", "args": [str(self.home)]}}}))
+        with mock.patch.object(install, "CLAUDE_DESKTOP_CONFIG", None), \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            install.check_only()
+        self.assertIn("WARNING", buf.getvalue())
+        self.assertIn("filesystem (Claude Code)", buf.getvalue())
+
+    def test_update_names_the_changed_file_whole_and_a_copy_ahead_of_a_release_is_fine(self):
+        # I-21 and the regression: 'onnector/home.py'; a copy ahead of the
+        # newest tag was refused as 'has its own changes'
+        import update
+        repo = self.tmp / "JEFFEREY"
+        repo.mkdir()
+        g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,  # noqa: E731
+                                      capture_output=True, text=True,
+                                      env=dict(self.env(), GIT_AUTHOR_NAME="t",
+                                               GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                                               GIT_COMMITTER_EMAIL="t@t")).stdout
+        g("init", "-q")
+        (repo / "connector").mkdir()
+        (repo / "connector" / "home.py").write_text("x = 1\n")
+        g("add", "."); g("commit", "-qm", "one"); g("tag", "v2026.10.14")
+        (repo / "connector" / "home.py").write_text("x = 2\n")
+        g("commit", "-qam", "two")                       # ahead of the release
+        self.assertFalse(update.forward(repo, g("rev-list", "-n", "1", "v2026.10.14").strip()))
+        (repo / "connector" / "home.py").write_text("x = 3\n")
+        with self.assertRaises(update.UpdateRefused) as cm:
+            update.clean(repo)
+        self.assertIn("(connector/home.py)", str(cm.exception))
+
+    def test_filevault_false_is_not_encrypted_whatever_else_it_says(self):
+        # I-42: FileVault false with Encryption true read as '✓ encrypted'
+        self.assertIs(home.encrypted_from({"FileVault": False, "Encryption": True}), False)
+        self.assertIs(home.encrypted_from({"FileVault": "No", "Encrypted": True}), False)
+        self.assertIs(home.encrypted_from({"Encryption": True}), True)
+
+    def test_voice_files_never_follow_a_planted_link(self):
+        # I-55 (voice half, fixed with the voice package): delete overwrote a
+        # read-only tax return through 'take-099.wav'; a take written at a
+        # planted name followed the link
+        import numpy as np
+        import voice_enrol as v
+        root = self.tmp / "voice"
+        with v.selftest_mode(root, roots=[root]):
+            d = v.person_dir("Carol")
+            d.mkdir(parents=True)
+            (d / "manifest.json").write_text(json.dumps({"person": "Carol", "takes": []}))
+            pdf = self.tmp / "tax_return_2025.pdf"
+            pdf.write_bytes(b"%PDF-1.4 my taxes")
+            pdf.chmod(0o444)
+            os.symlink(pdf, d / "take-099.wav")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(v.delete("Carol", force=True), 0)
+            self.assertEqual(pdf.read_bytes(), b"%PDF-1.4 my taxes")
+            self.assertEqual(pdf.stat().st_mode & 0o777, 0o444)
+            d2 = v.person_dir("Dan")
+            d2.mkdir(parents=True)
+            victim = self.tmp / "victim.txt"
+            victim.write_text("keep me")
+            os.symlink(victim, d2 / "take-001.wav")
+            _, fname = v._write_take(d2, 1, np.zeros(1600, dtype="float32"))
+            self.assertEqual(fname, "take-002.wav")
+            self.assertEqual(victim.read_text(), "keep me")
+
+    def test_a_move_that_fails_leaves_the_life_on_the_mac_and_nothing_half_done(self):
+        # I-65: ENOSPC while copying egress.jsonl printed a traceback after
+        # 'this Mac now knows the drive is yours', with a part-copied life
+        # on the paired drive
+        import errno
+        self.laptop_life("The blue kettle was Mum's")
+        vol = self.vols / "Self-Cloud"
+        vol.mkdir()
+        real = shutil.copy2
+
+        def full(src, dst, *a, **k):
+            if Path(src).name == "egress.jsonl":
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real(src, dst, *a, **k)
+        with mock.patch.object(pd.shutil, "copy2", full), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(pd.Refused) as cm:
+                pd.provision(vol, "Self-Cloud", False, False, None, move_life=True)
+        self.assertIn("not moved", str(cm.exception))
+        self.assertNotIn("Errno", str(cm.exception))
+        ns = vol / home.NAMESPACE
+        self.assertFalse((ns / "conscience.json").exists(), "a half life was left on the drive")
+        self.assertEqual([p.name for p in ns.iterdir() if p.name.startswith(".moving")], [])
+        self.assertTrue((self.home / ".jefferey" / "conscience.json").exists())
+        r = self.facts()
+        self.assertTrue(r.get("refused") and "still on this Mac" in r["reason"], r)
+
+    def test_five_unclear_answers_to_the_rename_set_nothing_up(self):
+        # I-65 (minor): 'No answer, so nothing was changed' — then it set the
+        # drive up anyway
+        vol = self.vols / "Work Archive"
+        vol.mkdir()
+        feed = iter(["1", "maybe", "hmm", "what", "x", "?"])
+        seen = []
+        with mock.patch.object(pd, "provision", lambda *a, **k: seen.append(a)), \
+                mock.patch.object(pd, "_why_not", lambda v: None):
+            rc = pd.interactive(lambda _: next(feed), lambda m="": None, bases=[str(self.vols)])
+        self.assertEqual(seen, [])
+        self.assertEqual(rc, 1)
+
+    def test_with_the_drive_away_the_memories_line_never_says_restore(self):
+        # regression: '✗ Your memories: your Self-Cloud drive is not plugged
+        # in…' and then 'Double-click Restore my memories.command'
+        import install
+        vol = self.drive()
+        self.unplug(vol)
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            install.memories_line(Path(PY))
+        text = buf.getvalue()
+        self.assertIn("not plugged in", text)
+        self.assertNotIn("Restore my memories", text)
+        self.assertNotIn("✗", text)
 
 
 if __name__ == "__main__":

@@ -41,6 +41,8 @@ rename (anything else keeps the name). It also tells this Mac the drive is
 yours: JEFFEREY then uses that drive and no other, and with it unplugged he
 is off — he never starts a second life on the Mac. If he already kept
 memories on this Mac, it offers to move them onto the drive (type yes).
+Until they are moved, JEFFEREY stays off rather than start an empty life on
+the drive; `Install JEFFEREY.command` asks the same question.
 
 What it does — and it **creates only**; it never moves, renames or deletes a
 file already on the drive:
@@ -263,6 +265,8 @@ yes for you:
 | `/permit groceries recommend` | back to bringing you options; you decide |
 | `/charges` | payments an AI asked to add to your agreed list: yes or no |
 | `/keys`, `/grant family`, `/scope remove family media.read`, `/revoke gpt-raw` | who holds a key, and changing it |
+| `/approve CODE` | yes to a change an AI asked for that waits for you — a big removal, or a change to your name or date of birth on forms |
+| `/scope add jefferey paperwork.write` | give your own JEFFEREY back the filling of forms, if you had taken it away |
 
 Moving money, gift cards, crypto, phone calls in your voice and the doors are
 never allowed, whatever you type. Anything that repeats (a subscription) he

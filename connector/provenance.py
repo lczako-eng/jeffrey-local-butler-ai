@@ -46,7 +46,7 @@ UNKNOWN_SOURCE = {"stated_by": UNKNOWN,
 # 'Talk to JEFFEREY on this Mac' fills it; over MCP and HTTP JEFFEREY never
 # sees what the owner said, only what the AI chose to send.
 _typed: list[str] = []
-_typed_words: set[str] = set()
+_typed_words: list[frozenset] = []
 _turn: int | None = None
 _MAX_TYPED = 400
 
@@ -76,7 +76,8 @@ def owner_typed(text: str) -> None:
         return
     _typed.append(" ".join(ws))
     del _typed[:-_MAX_TYPED]
-    _typed_words.update(grounding.content(t))
+    _typed_words.append(frozenset(grounding.content(t)))
+    del _typed_words[:-_MAX_TYPED]
 
 
 def new_turn() -> None:
@@ -100,23 +101,77 @@ def reset() -> None:
     _turn = None
 
 
+# Words around a quote that turn it round: 'I never said Mike froze under
+# fire, that is a lie' holds 'Mike froze under fire' but says the opposite
+# (verify I-25).
+_DENIED_BEFORE = re.compile(
+    r"\b(?:never said|never told|didn'?t say|did not say|didnt say|not true|isn'?t true|"
+    r"is not true|no one said|nobody said|never|not|no|it'?s a lie|that'?s a lie|a lie that|"
+    r"false that|wrong that|deny|denied|denies|don'?t believe|do not believe|untrue|"
+    r"rumou?r|they say|people say|claims?|claimed|accused|accuses|jamais|pas vrai|faux)"
+    r"(?: \w+){0,3}\s*$")
+_DENIED_AFTER = re.compile(
+    r"^\s*(?:\w+ ){0,2}(?:is|was|that'?s|that is|which is|it'?s|its)? ?(?:a lie|a lie|not true|"
+    r"false|untrue|wrong|nonsense|rubbish|a rumou?r|made up|never happened|faux|pas vrai)\b")
+# A message that turns a ranking round: 'not', 'less', 'no longer'.
+_REVERSING = frozenset("""not never no less longer don't dont doesn't doesnt isn't isnt
+    wasn't wasnt didn't didnt rather_not instead ne pas plus moins jamais""".split())
+
+
 def verbatim(text) -> bool:
     """Is this, word for word (ignoring case and punctuation), something the
-    owner typed at his terminal this session?"""
+    owner typed at his terminal this session — in ONE message (two messages
+    are never stitched together), and not inside words that deny it ('I
+    never said …', '… that is a lie')?"""
     ws = grounding.words(text)
     if not ws or not _typed:
         return False
     needle = " " + " ".join(ws) + " "
-    return any(needle in f" {s} " for s in _typed) or needle in " " + " ".join(_typed) + " "
+    for said in _typed:
+        hay = f" {said} "
+        i = hay.find(needle)
+        while i >= 0:
+            before, after = hay[:i + 1].strip(), hay[i + len(needle) - 1:]
+            if not _DENIED_BEFORE.search(before) and not _DENIED_AFTER.match(after):
+                return True
+            i = hay.find(needle, i + 1)
+    return False
 
 
 def said_by_owner(*values) -> bool:
-    """Did the owner himself type every meaningful word of these values this
-    session? ('safety' and 'cost' — he said both.)"""
+    """Did the owner himself type every meaningful word of these values, in
+    ONE message this session? ('safety' and 'cost' — he said both, together.)
+    Words gathered from different messages never count (verify I-25)."""
     need: set[str] = set()
     for v in values:
         need |= grounding.content(v)
-    return bool(need) and need <= _typed_words
+    return bool(need) and any(need <= said for said in _typed_words)
+
+
+def ranked_by_owner(higher, lower) -> bool:
+    """Did the owner himself put HIGHER before LOWER, in one message, with no
+    word that turns it round? 'safety matters more than cost' backs safety >
+    cost — never cost > safety (verify I-25, I-48: the owner's own words were
+    used to unlock their reversal). When in doubt, it is not his: the value
+    waits for his yes."""
+    hi, lo = grounding.content(higher), grounding.content(lower)
+    if not hi or not lo:
+        return False
+    for said, bag in zip(_typed, _typed_words):
+        if not (hi | lo) <= bag:
+            continue
+        ws = said.split()
+        if set(ws) & _REVERSING:
+            continue
+        stems = [grounding.stem(w) for w in ws]
+
+        def first(group):
+            want = {grounding.stem(w) for w in group}
+            return min((i for i, w in enumerate(stems) if w in want), default=None)
+        a, b = first(hi), first(lo)
+        if a is not None and b is not None and a < b:
+            return True
+    return False
 
 
 def _engine_label() -> str:
@@ -129,7 +184,8 @@ def _engine_label() -> str:
 
 
 def source(text=None, values=None) -> dict:
-    """Where a write comes from, for the record kept beside it."""
+    """Where a write comes from, for the record kept beside it. `values` is
+    a ranking (higher, lower): it is his only if he put them in that order."""
     import access
     if access.is_owner_console():
         by = OWNER
@@ -137,7 +193,8 @@ def source(text=None, values=None) -> dict:
         by = IMPORTED
     elif text is not None and verbatim(text):
         by = OWNER_WORDS
-    elif values is not None and said_by_owner(*values):
+    elif values is not None and (ranked_by_owner(*values) if len(values) == 2
+                                 else said_by_owner(*values)):
         by = OWNER_WORDS
     else:
         by = ENGINE

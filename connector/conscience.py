@@ -199,11 +199,13 @@ _STATED_WEIGHT = 4
 ENGINE_CONFIDENCE_CAP = 0.6   # the most an AI may say it is sure of (I-25)
 UNCONFIRMED_CAP = 0.8         # the most evidence alone may reach; above it, only
                               # what the owner set or confirmed himself
+LEGACY_FLIP_BELOW = 0.4       # an older value turns round only below this
 DEDUP_SECONDS = 600           # the same correction within ten minutes: once
 FACT_VISIBILITY = ("private", "engines", "family", "legacy")
 LIFE_VISIBILITY = ("private", "family", "legacy")
 FACTS_PAGE, FACTS_MAX = 100, 500       # get_conscience
 BASIS_FACTS, BASIS_MAX, BASIS_PRIORITIES = 10, 25, 10   # explain_basis
+GOALS_SHOWN, NOTICES_SHOWN = 20, 10   # the newest; the rest are counted (verify I-41)
 
 
 def _page(limit, offset, default: int, most: int) -> tuple[int, int]:
@@ -1112,7 +1114,7 @@ class Conscience:
         implicitly (selfcloud.migrate_grants)."""
         try:
             import selfcloud
-            selfcloud.migrate_grants(self.data)
+            selfcloud.migrate_grants(self.data, removed=self._scope_removed_before)
         except Exception:
             pass
         self._migrate_who_said_what()
@@ -1139,7 +1141,8 @@ class Conscience:
         for p in self.data.get("priorities") or []:
             if not isinstance(p, dict):
                 continue
-            if not isinstance(p.get("for"), int):
+            older = not isinstance(p.get("for"), int)
+            if older:
                 try:
                     p["for"] = max(1, int(p.get("evidence") or 1))
                 except (TypeError, ValueError):
@@ -1151,10 +1154,50 @@ class Conscience:
                 p["source"] = dict(provenance.UNKNOWN_SOURCE)
             if p.get("status") not in ("confirmed", "pending"):
                 p["status"] = "confirmed"
+            self._migrate_legacy_value(p, older)
         for section in ("people", "memories", "media"):
             for it in self.data.get(section) or []:
                 if isinstance(it, dict) and it.get("visibility") not in LIFE_VISIBILITY:
                     it["visibility"] = "private"
+
+    def _scope_removed_before(self, client: str, scope: str) -> bool:
+        """Did anyone take this scope off this key before? (The access log,
+        read only when a migration needs to know.)"""
+        try:
+            for f in self.access_log.files():
+                for e in AppendLog._read(f):
+                    if (e.get("client") == client and e.get("action") == "remove_scope"
+                            and scope in str(e.get("detail") or "")):
+                        return True
+        except Exception:
+            return True                 # cannot tell: never widen
+        return False
+
+    @staticmethod
+    def _migrate_legacy_value(p: dict, older: bool) -> None:
+        """A value saved before October 2026 keeps the weight it had (verify
+        I-48: an owner's old 0.99 fell to 0.5 after one AI correction and
+        turned round after two; the old code needed four, and capped values
+        it never had). Its old confidence counts like a stated value's —
+        four observations — and a value he held at 0.8 or more is locked:
+        an AI's contradiction becomes a question for him, never a reversal.
+        A store migrated by the first October release (for = evidence,
+        against 0, nothing counted since) is recognised and treated the same."""
+        if isinstance(p.get("legacy"), dict) or p.get("stated"):
+            return
+        if provenance.stated_by(p) != provenance.UNKNOWN:
+            return
+        try:
+            ev = max(1, int(p.get("evidence") or 1))
+        except (TypeError, ValueError):
+            ev = 1
+        untouched = older or (int(p.get("against") or 0) == 0 and int(p.get("for") or 0) == ev)
+        old = _real_number(p.get("confidence"))
+        if old is None or not untouched:
+            return
+        p["legacy"] = {"confidence": round(max(0.05, min(0.99, old)), 2), "evidence": ev}
+        p["for"], p["against"] = 0, 0
+        p["confidence"] = Conscience._confidence(p)
 
     def _ensure_ids(self) -> None:
         """Give every item in ID_PREFIX's sections a stable, unique id (see
@@ -2084,6 +2127,15 @@ class Conscience:
         for what the owner set or confirmed himself."""
         f = max(0, int(p.get("for") or 0))
         a = max(0, int(p.get("against") or 0))
+        legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else None
+        if legacy and not p.get("stated"):
+            # a value from before October 2026: its old confidence weighs like
+            # a stated one, and it is never capped below what it was
+            L = _real_number(legacy.get("confidence"))
+            L = 0.55 if L is None else L
+            c = (L * _STATED_WEIGHT + f) / (_STATED_WEIGHT + f + a)
+            cap = max(UNCONFIRMED_CAP, min(0.99, L))
+            return round(max(0.05, min(cap, c)), 2)
         if p.get("stated"):
             s = _real_number(p.get("stated_confidence"))
             s = 0.6 if s is None else s
@@ -2101,6 +2153,10 @@ class Conscience:
         if p.get("stated"):
             v["stated"] = True
             v["locked"] = True       # never reversed by inference; a question instead
+        elif isinstance(p.get("legacy"), dict):
+            v["held_since_before"] = True        # kept from before October 2026
+            if (_real_number(p["legacy"].get("confidence")) or 0) >= 0.8:
+                v["locked"] = True
         if provenance.pending(p):
             v["unconfirmed"] = True
         if p.get("question"):
@@ -2157,8 +2213,19 @@ class Conscience:
                  "stated_confidence": c, "for": 0, "against": 0, "evidence": 1,
                  "source": src, "status": status, "updated": _now()}
             self.data["priorities"].append(p)
+        elif (grounding.normalise(p.get("higher")) == grounding.normalise(higher)
+              and isinstance(p.get("legacy"), dict) and status != "confirmed"):
+            # An AI repeating a value he has held since before October 2026:
+            # one more observation for it, never a drop to an AI's cap.
+            p["for"] = int(p.get("for") or 0) + 1
+            p.pop("question", None)
+            p["updated"] = _now()
         elif grounding.normalise(p.get("higher")) == grounding.normalise(higher):
             # Said again. It is a statement now; never less trusted than it was.
+            legacy = p.pop("legacy", None)
+            if isinstance(legacy, dict) and not p.get("stated"):
+                p["stated_confidence"] = _real_number(legacy.get("confidence"))
+                p["stated"] = True
             if self._rank(src) > self._rank(p.get("source")) and (
                     status == "confirmed" or provenance.pending(p)):
                 p["source"], p["status"] = src, status
@@ -2170,7 +2237,9 @@ class Conscience:
         else:
             was = f"{p.get('higher')} > {p.get('lower')}"
             now = f"{higher} > {lower}"
-            locked = bool(p.get("stated")) and not provenance.pending(p)
+            legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else {}
+            locked = (bool(p.get("stated")) and not provenance.pending(p)) or (
+                (_real_number(legacy.get("confidence")) or 0) >= 0.8)
             if locked and engine and status != "confirmed":
                 p["proposed"] = {"higher": higher, "lower": lower, "confidence": c,
                                  "source": src, "at": _now()}
@@ -2273,8 +2342,11 @@ class Conscience:
             p["for"] = int(p.get("for") or 0) + 1
         else:
             p["against"] = int(p.get("against") or 0) + 1
-            if p.get("stated"):
-                q = (f"He said that for {p['context']}, {p['higher']} matters more than "
+            legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else None
+            strong_old = bool(legacy) and (_real_number(legacy.get("confidence")) or 0) >= 0.8
+            if p.get("stated") or strong_old:
+                said = "said" if p.get("stated") else "has long held"
+                q = (f"He {said} that for {p['context']}, {p['higher']} matters more than "
                      f"{p['lower']}. This time he chose {hi} over {lo}. Ask him, once "
                      f"and plainly, whether that has changed; nothing was reversed.")
                 if not p.get("question"):
@@ -2285,10 +2357,16 @@ class Conscience:
                                f"JEFFEREY in your own words if it has.")
                 p["question"] = q
                 extra["question_for_owner"] = q
-            elif p["against"] > p["for"]:
+            elif (self._confidence(p) < LEGACY_FLIP_BELOW) if legacy else (
+                    p["against"] > p["for"]):
                 was = f"{p['higher']} > {p['lower']}"
                 p["higher"], p["lower"] = hi, lo
-                p["for"], p["against"] = p["against"], p["for"]
+                if legacy:
+                    # turned round: from now on an ordinary learned value
+                    p.pop("legacy", None)
+                    p["for"], p["against"] = p["against"], max(1, p["for"])
+                else:
+                    p["for"], p["against"] = p["against"], p["for"]
                 entry["flipped_from"] = was
                 extra["flipped"] = {"was": was,
                                     "why": "the choices against it now outweigh the ones for it"}
@@ -2701,13 +2779,58 @@ class Conscience:
         self._save()
         return entry
 
-    def action_log(self, limit: int = 20) -> list[dict]:
+    def action_log(self, limit: int = 20, filtered: bool = True) -> list[dict]:
+        """What was done, newest first. A line about his health, money,
+        children, home or someone's confidence reaches only a key that holds
+        his private life, and never past his own rules: the others see that
+        something was done, in that category, and not what (verify I-11: the
+        action log gave every guest 'booked VAC mental-health intake' that the
+        daily brief held back)."""
         try:
             limit = int(limit)
         except (TypeError, ValueError):
             limit = 20
         limit = max(1, min(200, limit))
-        return self.data["actions"][-limit:][::-1]
+        acts = self.data["actions"][-limit:][::-1]
+        if not filtered:
+            return acts
+        rd = provenance.reader()
+        if rd["owner"]:
+            return acts
+        out = []
+        for a in acts:
+            text = " ".join(str(a.get(k) or "") for k in ("description", "approved_for",
+                                                           "outcome"))
+            if self.reader_may_see(rd, text, a.get("category", "")):
+                out.append(a)
+            else:
+                out.append({k: a[k] for k in ("category", "at", "added", "approved",
+                                              "authorization_id", "id") if k in a}
+                           | {"held_back": ("private, or kept from this connection by "
+                                            "his own rules — do not guess at it")})
+        return out
+
+    def reader_may_see(self, rd: dict, text: str, category: str = "") -> bool:
+        """May whoever reads this result see a line with this text? Private
+        kinds only through his caretaker key, and never what his rules keep
+        from this reader."""
+        import rules as _rules
+        if rd.get("owner"):
+            return True
+        kinds = grounding.sensitivity(text, category)
+        if kinds and not rd.get("caretaker"):
+            return False
+        return not _rules.held_back(self.data, rd["audiences"], text,
+                                    [str(category or "")] + kinds)
+
+    def _goals_for(self, rd: dict) -> tuple[list[dict], int, int]:
+        """(the newest active goals this reader may see, how many were held
+        back, how many more there are)."""
+        goals = [g for g in self.data.get("goals") or []
+                 if isinstance(g, dict) and g.get("active")]
+        seen = [g for g in goals if self.reader_may_see(rd, str(g.get("goal") or ""))]
+        held = len(goals) - len(seen)
+        return seen[-GOALS_SHOWN:][::-1], held, max(0, len(seen) - GOALS_SHOWN)
 
     # ------------------------------------------------------------ opportunity engine
     # "What can I do today to make this person's life better?" — observations
@@ -2850,33 +2973,33 @@ class Conscience:
         no line about his health, money, children, home or someone else's
         confidence, and every engine is kept from what his own rules forbid
         (I-11: a plain guest session read 'booked VAC mental-health intake')."""
-        import rules as _rules
         rd = provenance.reader()
         obs = self.data["observations"][-5:][::-1]
-        acts = self.action_log(10)
-        held = 0
+        acts = self.action_log(10, filtered=False)
+        goals, held, more_goals = self._goals_for(rd)
         if not rd["owner"]:
             def ok(text, cat):
-                kinds = grounding.sensitivity(text, cat)
-                if kinds and not rd["caretaker"]:
-                    return False
-                return not _rules.held_back(self.data, rd["audiences"], text,
-                                            [str(cat or "")] + kinds)
+                return self.reader_may_see(rd, text, cat)
             keep_obs = [o for o in obs if ok(o.get("note", ""), o.get("category", ""))]
             keep_acts = [a for a in acts if ok(a.get("description", ""), a.get("category", ""))]
-            held = len(obs) - len(keep_obs) + len(acts) - len(keep_acts)
+            held += len(obs) - len(keep_obs) + len(acts) - len(keep_acts)
             obs, acts = keep_obs, keep_acts
+        notices = self.notices()
         out = {
             "orb": self.orb_state(),
-            "active_goals": [g["goal"] for g in self.data["goals"] if g["active"]],
+            "active_goals": [g["goal"] for g in goals],
             "opportunities": self._shown_opportunities()[:10],
             "recent_actions": acts,
             "recent_observations": obs,
             "corrections_learned_from": len(self.data["corrections"]),
             # a recovery, a restore, a change made by hand, a change to the
             # caretaker, family or executor key: the owner is told
-            "notices": self.notices(),
+            "notices": notices[-NOTICES_SHOWN:],
         }
+        if more_goals:
+            out["more_goals"] = more_goals
+        if len(notices) > NOTICES_SHOWN:
+            out["more_notices"] = len(notices) - NOTICES_SHOWN
         if held:
             out["held_back"] = {"count": held, "why": (
                 "Some recent lines are private, or kept from this connection by his "
@@ -2905,14 +3028,22 @@ class Conscience:
         page = facts[max(0, end - lim):end]
         prios = sorted((p for p in self.data["priorities"] if isinstance(p, dict)),
                        key=lambda p: -float(p.get("confidence") or 0))
+        goals, goals_held, more_goals = self._goals_for(rd)
+        notices = self.notices()
         out = {
             "owner": self.data.get("owner"),
             "priorities": [self._prio_view(p) for p in prios[:top]],
             "facts": [self._fact_view(f) for f in page],
-            "active_goals": [g for g in self.data["goals"] if g.get("active")],
+            # verify I-11, I-41: goals are his too ('Find a memory clinic for my
+            # Alzheimer's'), and 200 of them made an 89 KB system prompt
+            "active_goals": goals,
             "corrections_learned_from": len(self.data["corrections"]),
-            "notices": self.notices(),
+            "notices": notices[-NOTICES_SHOWN:],
         }
+        if more_goals:
+            out["more_goals"] = more_goals
+        if len(notices) > NOTICES_SHOWN:
+            out["more_notices"] = len(notices) - NOTICES_SHOWN
         if len(prios) > top:
             out["more_priorities"] = len(prios) - top
         if len(facts) > off + lim:
@@ -2921,9 +3052,10 @@ class Conscience:
                                       f"or ask explain_basis about the subject you need.")
         private = sum(1 for _, why in held if why == "private")
         ruled = sum(1 for _, why in held if why == "rules")
-        if private or ruled:
+        if private or ruled or goals_held:
             out["held_back"] = {
                 "private": private, "by_his_rules": ruled,
+                **({"goals": goals_held} if goals_held else {}),
                 "why": ("Private facts (his health, money, children, the safety of his "
                         "home, other people's confidences) are not sent all at once. "
                         + ("Ask explain_basis about the subject and the ones that matter "
@@ -2997,10 +3129,13 @@ class Conscience:
             return out
         rd = provenance.reader()
         seen, held = self.visible_facts(rd, bulk=False)
+        # anyone but the owner's own house gets a private fact only for a
+        # subject that names its kind (verify I-28)
+        asked = None if rd["owner"] else t
         scored = []
         for f in seen:
             m = grounding.fact_match(f.get("fact", ""), f.get("category", ""),
-                                     f.get("sensitivity") or [], tw)
+                                     f.get("sensitivity") or [], tw, asked)
             if m:
                 scored.append(((-m[0], provenance.pending(f)), f, m[1]))
         scored.sort(key=lambda r: r[0])
@@ -3011,7 +3146,7 @@ class Conscience:
             out["how_to_see_more"] = f"Call again with offset={off + lim}."
         kept = sum(1 for f, _ in held
                    if grounding.fact_match(f.get("fact", ""), f.get("category", ""),
-                                           f.get("sensitivity") or [], tw))
+                                           f.get("sensitivity") or [], tw, asked))
         if kept:
             out["held_back"] = {"count": kept, "why": (
                 "Some facts on this subject are private, or kept from this connection "
@@ -3348,9 +3483,11 @@ def main(argv: list[str] | None = None) -> int:
 
     away = None if a.path else home.problem()
     if away:
-        # Never "none yet" when the drive that holds them is simply away.
+        # Never "none yet" when the drive that holds them is simply away —
+        # and never 'needs restoring' either (verify regression: the
+        # installer then told him to restore an earlier copy): exit 3.
         print("  Your memories: " + away + ".")
-        return 1
+        return 3
     if a.cmd in (None, "check"):
         h = health(path)
         print("  " + h["plain"])

@@ -413,9 +413,9 @@ def triage_message(body: str, sender: str = "", subject: str = "") -> dict:
     """Read an incoming message (a text, an email, a call he typed in,
     English or French) the way a good friend would: what does it want, does
     it matter by THIS person's priorities, and is anyone trying to take
-    advantage of them? Pass the sender exactly as shown (a number he has not
-    saved counts); a text has no subject. Returns a verdict — safety
-    (someone asking when he is home alone: tell him at once) / likely_scam /
+    advantage of them? Pass the sender exactly as shown (the number, the
+    address, or the name with any '~' or 'Maybe:' the app puts before it); a
+    text has no subject. Returns a verdict — safety (someone asking when he is home alone: tell him at once) / likely_scam /
     suspicious / check_first (it touches money, cards, codes, secrecy,
     urgency or a family claim: tell him, and he checks by calling back on a
     number he already has) / money_watch / needs_decision / routine —
@@ -501,9 +501,9 @@ def set_profile_field(field: str, value: str, confirm: str = "") -> dict:
     """Store one of the OWNER's own details Jefferey may reuse on forms (name,
     address, phone, email, date of birth, employer...). Sensitive identifiers
     are refused by design, and so is anything about someone else (a buyer's
-    or a relative's name). Changing his name or date of birth once set comes
-    back as a question with a one-time code: ask him, and only if he says
-    yes call again with the same value and confirm=<code>."""
+    or a relative's name). A change to who he is (his name or date of birth)
+    waits for his own yes: tell him what would change, and he types /approve
+    and the code himself in 'Talk to JEFFEREY on this Mac'."""
     return rep.set_profile_field(field, value, confirm)
 
 

@@ -394,22 +394,43 @@ def move_home_life(drive_root: Path, out=say) -> dict:
         if st is None:
             home.guard(p)
             p.mkdir(mode=0o700)
-    copied = []
     for it in items:
-        target = dst / it.name
-        if os.path.lexists(target):
+        if os.path.lexists(dst / it.name):
             raise Refused(f"'{it.name}' is already on the drive; nothing was moved.")
-        if it.is_dir():
-            shutil.copytree(it, target, symlinks=False,
-                            ignore=lambda d, names: [n for n in names if (Path(d) / n).is_symlink()])
-        else:
-            shutil.copy2(it, target)
-        copied.append((it, target))
-    for a, b in copied:                   # every byte, before anything is put aside
-        fa, fb = _tree(a), _tree(b)
-        if len(fa) != len(fb) or any(_sha_file(x) != _sha_file(y) for x, y in zip(fa, fb)):
-            raise Refused("The copy on the drive did not match the Mac's, so the Mac's "
-                          "memories were left exactly where they are. Try again.")
+    # Copied into a folder of its own first, checked byte for byte, and only
+    # then put in place — the memory file last — so a drive that fills up or
+    # a copy that does not match leaves nothing half-done on the drive.
+    stage = dst / f".moving-{secrets.token_hex(4)}"
+    home.guard(stage)
+    stage.mkdir(mode=0o700)
+    copied = []
+    try:
+        for it in items:
+            target = stage / it.name
+            if it.is_dir():
+                shutil.copytree(it, target, symlinks=False,
+                                ignore=lambda d, names: [n for n in names
+                                                         if (Path(d) / n).is_symlink()])
+            else:
+                shutil.copy2(it, target)
+            copied.append((it, target))
+        for a, b in copied:               # every byte, before anything is put aside
+            fa, fb = _tree(a), _tree(b)
+            if len(fa) != len(fb) or any(_sha_file(x) != _sha_file(y) for x, y in zip(fa, fb)):
+                raise Refused("The copy on the drive did not match the Mac's, so the Mac's "
+                              "memories were left exactly where they are. Try again.")
+        for a, b in sorted(copied, key=lambda ab: ab[0].name == "conscience.json"):
+            os.rename(b, dst / a.name)
+    except BaseException:
+        for _, b in copied:
+            if os.path.lexists(dst / b.name) and not os.path.lexists(b):
+                # put in place before the failure: taken out again
+                tgt = dst / b.name
+                shutil.rmtree(tgt) if tgt.is_dir() and not tgt.is_symlink() else tgt.unlink()
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    shutil.rmtree(stage, ignore_errors=True)
+    copied = [(a, dst / a.name) for a, _ in copied]
     aside = src / f"moved-to-self-cloud-{dt.date.today().isoformat()}"
     n = 1
     while os.path.lexists(aside):
@@ -534,7 +555,17 @@ def provision(volume: Path, name: str, rename: bool, force: bool,
             warn(f"this Mac could not remember the drive ({_plain_oserror(e)}); run "
                  f"python3 connector/home.py pair '{here or volume}'")
     if move_life and here is not None:
-        move_home_life(here)
+        try:
+            move_home_life(here)
+        except Refused:
+            raise
+        except OSError as e:
+            # verify I-65: ENOSPC while copying ended in a traceback, with a
+            # half-copied life on a paired drive
+            raise Refused(f"Your memories were not moved: {_plain_oserror(e)}. They are "
+                          f"exactly where they were, on this Mac, and nothing of them was "
+                          f"left on the drive. Make room on the drive, then double-click "
+                          f"this again.") from None
 
     if here is not None:
         say(f"\n  Done. Open {here}/Self-Cloud/ and double-click "
@@ -754,12 +785,32 @@ def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
         except home.PairingDamaged:
             mine = False
         if mine:
-            out("  This Mac already knows it is yours. Nothing to do.")
+            out("  This Mac already knows it is yours.")
+            if (home.owner_dir() / "conscience.json").is_file() and not os.path.lexists(
+                    vol / home.NAMESPACE / "conscience.json"):
+                move = answers.ask_yes_no_or_none(
+                    "  Your memories are still on this Mac. Move them onto the drive? Type yes "
+                    "or no: ", input_fn, out)
+                if move:
+                    try:
+                        move_home_life(vol, out)
+                    except Refused as e:
+                        out(f"  ! {e}")
+                        return 1
+                    except OSError as e:
+                        out(f"  ! Your memories were not moved: {_plain_oserror(e)}. They "
+                            f"are exactly where they were, on this Mac.")
+                        return 1
+                    return 0
+                out("  Nothing was changed. JEFFEREY stays off until they are moved: he will")
+                out("  not start an empty life on the drive.")
+                return 1
+            out("  Nothing to do.")
             return 0
         out("  If you bought it second-hand or it is someone else's, it may hold their life:")
         out("  answer no, and JEFFEREY will not use it.")
-        if not answers.ask_yes_no("  Is this your own Self-Cloud drive? Type yes or no: ",
-                                  input_fn, out):
+        if not answers.ask_yes_no_or_none("  Is this your own Self-Cloud drive? Type yes or "
+                                          "no: ", input_fn, out):
             out("  Nothing was changed. JEFFEREY will not use this drive.")
             return 1
         try:
@@ -769,14 +820,23 @@ def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
             return 1
         out("  ✓ This Mac now knows the drive is yours. Quit Claude completely and open")
         out("    it again so it picks this up.")
-        if (home.owner_dir() / "conscience.json").is_file() and answers.ask_yes_no(
+        if (home.owner_dir() / "conscience.json").is_file():
+            move = answers.ask_yes_no_or_none(
                 "  Your memories are on this Mac. Move them onto the drive? Type yes or no: ",
-                input_fn, out):
-            try:
-                move_home_life(vol, out)
-            except (Refused, OSError) as e:
-                out(f"  ! {e}")
-                return 1
+                input_fn, out)
+            if move:
+                try:
+                    move_home_life(vol, out)
+                except Refused as e:
+                    out(f"  ! {e}")
+                    return 1
+                except OSError as e:
+                    out(f"  ! Your memories were not moved: {_plain_oserror(e)}. They are "
+                        f"exactly where they were, on this Mac.")
+                    return 1
+            else:
+                out("  JEFFEREY stays off until they are moved: he will not start an empty life")
+                out("  on the drive. Double-click this again and answer yes.")
         return 0
     if state == "link":
         out("  The Self-Cloud marker on this drive is a shortcut to somewhere else, so")
@@ -785,21 +845,30 @@ def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
     if state == "invalid":
         out("  This drive's Self-Cloud marker is damaged"
             + (f" (its id was {keep_id})." if keep_id else "."))
-        if not answers.ask_yes_no("  Repair it, keeping its id? Type yes or no: ", input_fn, out):
+        if not answers.ask_yes_no_or_none("  Repair it, keeping its id? Type yes or no: ",
+                                          input_fn, out):
             out("  Nothing was changed.")
             return 1
         force = True
 
+    # No answer stops here, with nothing done (verify I-65: after five
+    # answers it did not understand, it said 'nothing was changed' and went
+    # on to set the drive up).
     rename = False
     if vol.name != NAME:
-        rename = answers.ask_yes_no(f"  Name it '{NAME}' in Finder too? Type yes or no: ",
-                                    input_fn, out)
+        rename = answers.ask_yes_no_or_none(f"  Name it '{NAME}' in Finder too? Type yes or "
+                                            f"no: ", input_fn, out)
+        if rename is None:
+            return 1
     move = False
     if (home.owner_dir() / "conscience.json").is_file():
         out("\n  JEFFEREY has been keeping your memories on this Mac. Moving them onto the")
         out("  drive means they live there from now on; the Mac's copy is put aside, not")
         out("  deleted, until you say so.")
-        move = answers.ask_yes_no("  Move them onto the drive? Type yes or no: ", input_fn, out)
+        move = answers.ask_yes_no_or_none("  Move them onto the drive? Type yes or no: ",
+                                          input_fn, out)
+        if move is None:
+            return 1
     try:
         provision(vol, NAME, rename, force, None, pair=True, move_life=move)
     except Refused as e:

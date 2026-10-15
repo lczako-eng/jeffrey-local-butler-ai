@@ -48,13 +48,13 @@ class UpdateRefused(Exception):
     """Nothing was changed, for a reason in plain words."""
 
 
-def git(repo: Path, *args: str, check: bool = True) -> str:
+def git(repo: Path, *args: str, check: bool = True, strip: bool = True) -> str:
     r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     if check and r.returncode != 0:
         detail = ((r.stderr or r.stdout).strip().splitlines() or [""])[-1][:160]
         raise UpdateRefused(f"the update could not be done in {repo} ({detail}); nothing "
                             f"more was changed")
-    return r.stdout.strip()
+    return r.stdout.strip() if strip else r.stdout
 
 
 def version_of(repo: Path) -> str:
@@ -72,9 +72,11 @@ def is_copy(repo: Path) -> bool:
 
 def clean(repo: Path) -> None:
     """A copy with changes made by hand is never overwritten."""
-    changed = git(repo, "status", "--porcelain", "--untracked-files=no")
-    if changed:
-        files = ", ".join(line[3:] for line in changed.splitlines()[:5])
+    # not stripped: each line starts ' M <file>', and stripping the whole
+    # output cut the first letter off the first file ('onnector/home.py')
+    changed = git(repo, "status", "--porcelain", "--untracked-files=no", strip=False)
+    if changed.strip():
+        files = ", ".join(line[3:] for line in changed.splitlines()[:5] if line.strip())
         raise UpdateRefused(f"the copy at {repo} has changes made by hand ({files}), so "
                             f"nothing was updated. Ask the person who made them to save them first.")
 
@@ -96,6 +98,11 @@ def forward(repo: Path, commit: str) -> bool:
     """Move `repo` to `commit`, forward only. False if it was already there."""
     head = git(repo, "rev-parse", "HEAD")
     if head == commit:
+        return False
+    # already past it (a copy newer than the newest release): nothing to do,
+    # and never 'its own changes'
+    past = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, head])
+    if past.returncode == 0:
         return False
     r = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", head, commit])
     if r.returncode != 0:

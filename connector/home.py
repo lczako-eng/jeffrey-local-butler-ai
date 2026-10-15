@@ -177,9 +177,11 @@ def _pairing() -> dict | None:
     drives = obj.get("drives") if isinstance(obj, dict) else None
     if not isinstance(drives, list):
         raise PairingDamaged("no list of drives")
+    mac = obj.get("mac")
     return {"drives": [d for d in drives if isinstance(d, dict)
                        and isinstance(d.get("id"), str) and _ID.fullmatch(d["id"])],
-            "this_mac": obj.get("this_mac") is True}
+            "this_mac": obj.get("this_mac") is True,
+            "mac": mac if isinstance(mac, str) and _ID.fullmatch(mac) else None}
 
 
 def paired() -> list[dict]:
@@ -236,12 +238,22 @@ def _write_private(path: Path, payload: bytes) -> None:
         raise
 
 
-def _save_pairing(drives: list[dict], this_mac: bool = False) -> Path:
+def _mac_id() -> str:
+    """This Mac's own random name in the pairing (kept in drives.json)."""
+    try:
+        got = _pairing()
+    except PairingDamaged:
+        got = None
+    return (got or {}).get("mac") or secrets.token_hex(8)
+
+
+def _save_pairing(drives: list[dict], this_mac: bool = False, mac: str | None = None) -> Path:
     p = pairing_path()
     body = {"about": "The Self-Cloud drives this Mac knows are yours. JEFFEREY "
                      "uses only these. Change it with: python3 connector/home.py",
             "drives": drives,
-            "this_mac": bool(this_mac and not drives)}
+            "this_mac": bool(this_mac and not drives),
+            "mac": mac or _mac_id()}
     _write_private(p, (json.dumps(body, indent=2, ensure_ascii=False) + "\n").encode())
     return p
 
@@ -267,8 +279,51 @@ def pair(root: Path, marker: dict | None = None, volume_uuid: str | None = None)
     rec.update(name=safe_name(m.get("name"), root.name), mount=str(root), seen=now)
     if uuid:
         rec["volume_uuid"] = uuid
-    _save_pairing(drives)                 # a paired drive ends "this Mac only"
+    mac = _mac_id()
+    proof = _leave_proof(root, mac)
+    if proof:
+        rec["proof"] = proof
+    _save_pairing(drives, mac=mac)        # a paired drive ends "this Mac only"
     return rec
+
+
+def _proof_file(root: Path, mac: str) -> Path:
+    return Path(root) / NAMESPACE / "paired" / f"{mac}.key"
+
+
+def _leave_proof(root: Path, mac: str) -> str | None:
+    """Leave a secret on the drive that only this Mac knows the fingerprint
+    of (verify I-17: a stick that copied the drive's id — printed in its
+    README — was taken for the owner's drive, off a Mac or with no volume
+    UUID, and its planted grants applied). None when it cannot be written."""
+    import hashlib
+    root = Path(root)
+    if not _namespace_ok(root):
+        return None
+    try:
+        for d in (root / ".selfcloud", root / NAMESPACE, root / NAMESPACE / "paired"):
+            try:
+                st = os.lstat(d)
+                if not _stat.S_ISDIR(st.st_mode):
+                    return None
+            except FileNotFoundError:
+                d.mkdir(mode=0o700)
+        secret = secrets.token_hex(16)
+        _write_private(_proof_file(root, mac), secret.encode())
+        return hashlib.sha256(secret.encode()).hexdigest()
+    except OSError:
+        return None
+
+
+def _proof_ok(root: Path, rec: dict, mac: str | None) -> bool:
+    import hashlib
+    if not mac:
+        return False
+    try:
+        got = _read_small(_proof_file(root, mac), 4096).strip()
+    except OSError:
+        return False
+    return hashlib.sha256(got).hexdigest() == rec.get("proof")
 
 
 def unpair(which: str) -> list[dict]:
@@ -469,21 +524,41 @@ REASONS = {
                   "your Self-Cloud drive plugged in it will ask if the drive is yours; "
                   "without one, answer no when it asks about a drive, to keep them on "
                   "this Mac"),
+    "unverified": ("JEFFEREY could not check that the drive plugged in is the very drive "
+                   "this Mac was paired with (the Mac would not say), so it is switched off: "
+                   f"{_OFF}. Eject the drive, plug it back in, and ask again"),
+    "stranded": ("your memories are still on this Mac, and your Self-Cloud drive has none "
+                 "yet, so JEFFEREY is switched off rather than start an empty life on the "
+                 f"drive: {_OFF}. Double-click 'Make this drive a Self-Cloud.command' (or "
+                 "'Install JEFFEREY.command') and answer yes when it offers to move your "
+                 "memories onto the drive"),
     "pairing": ("the list of your own Self-Cloud drives on this Mac is damaged, so "
                 f"JEFFEREY will not guess which drive is yours and is switched off: {_OFF}. "
                 "Double-click 'Install JEFFEREY.command' to set it again"),
 }
 
 
-def _check_drive(root: Path, mk: dict, records: list[dict]) -> Where:
+def _check_drive(root: Path, mk: dict, records: list[dict], mac: str | None = None) -> Where:
     if not _namespace_ok(root):
         return Where("off", root, mk, "link", [mk.get("name", "")])
     rec = next((d for d in records if d["id"] == mk["id"]), None)
+    name = [mk.get("name", "")]
     want = (rec or {}).get("volume_uuid")
     if want:
         have = _volume_uuid(root)
         if have and have.upper() != str(want).upper():
-            return Where("off", root, mk, "copy", [mk.get("name", "")])
+            return Where("off", root, mk, "copy", name)
+        if not have and platform.system() == "Darwin":
+            # verify I-17: an unreadable UUID used to let any drive with the
+            # owner's id through; it fails closed now
+            return Where("off", root, mk, "unverified", name)
+    if rec and rec.get("proof") and not _proof_ok(root, rec, mac):
+        return Where("off", root, mk, "copy", name)
+    # verify I-08: a paired drive with no life of its own, while his life is
+    # still on this Mac, is never begun empty — he is asked to move it
+    if (laptop_life() and not any(os.environ.get(k) for k in _CORE_ENV)
+            and not os.path.lexists(root / NAMESPACE / "conscience.json")):
+        return Where("off", root, mk, "stranded", name)
     return Where("drive", root, mk)
 
 
@@ -506,7 +581,7 @@ def _resolve() -> Where:
             return Where("off", why="not-a-drive")
         if ids and mk["id"] not in ids:
             return Where("off", p, mk, "stranger", [mk.get("name", "")])
-        return _check_drive(p, mk, records)
+        return _check_drive(p, mk, records, (choice or {}).get("mac"))
 
     marked = marked_drives()
     if not ids:
@@ -525,7 +600,7 @@ def _resolve() -> Where:
         return Where("off", why="undecided")
     mine = [(p, m) for p, m in marked if m["id"] in ids]
     if len(mine) == 1:
-        return _check_drive(mine[0][0], mine[0][1], records)
+        return _check_drive(mine[0][0], mine[0][1], records, (choice or {}).get("mac"))
     if len(mine) > 1:
         return Where("off", why="two", names=[m.get("name", "") for _, m in mine])
     others = [m.get("name", "") for p, m in marked]
@@ -757,11 +832,17 @@ def encrypted_from(info: dict) -> bool | None:
         if ("Progress" in k or "Conversion" in k) and v not in (None, "", 0, 100, False):
             if not (isinstance(v, (int, float)) and v >= 100):
                 return False
-    keys = [k for k in ("FileVault", "Encryption", "Encrypted", "CoreStorageEncrypted")
-            if k in info]
+    def yes(v) -> bool:
+        return v is True or str(v).lower().startswith("yes")
+    if "FileVault" in info:
+        # what Disk Utility calls an encrypted volume; 'Encryption' alone can
+        # be true for a disk the Mac decrypts by itself (verify I-42:
+        # FileVault false with Encryption true was shown as encrypted)
+        return yes(info["FileVault"])
+    keys = [k for k in ("Encryption", "Encrypted", "CoreStorageEncrypted") if k in info]
     if not keys:
         return None
-    return any(info[k] is True or str(info[k]).lower().startswith("yes") for k in keys)
+    return any(yes(info[k]) for k in keys)
 
 
 def encrypted(where: str | Path) -> bool | None:
@@ -798,7 +879,17 @@ def describe() -> str:
     if w.state == "drive":
         return f"on your Self-Cloud drive '{safe_name(w.marker.get('name'), w.root.name)}' ({w.root})"
     if w.state == "laptop":
-        return "on this machine (no Self-Cloud drive plugged in)"
+        try:
+            chose = bool((_pairing() or {}).get("this_mac"))
+        except PairingDamaged:
+            chose = False
+        here = marked_drives()
+        if chose and here:
+            return ("on this Mac, as you chose (a Self-Cloud drive is plugged in, but "
+                    "JEFFEREY does not use it)")
+        if chose:
+            return "on this Mac, as you chose"
+        return "on this Mac (no Self-Cloud drive is paired with it)"
     return "nowhere right now: " + (w.reason() or "")
 
 
