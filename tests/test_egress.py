@@ -1112,5 +1112,113 @@ class AMarkNeverShieldsWhatFollowsIt(EgressTest):
             self.assertIn(v, joined)
 
 
+# ===================================================== repair round 5 (R1)
+class APhoneOrReferenceIsSteppedOver(EgressTest):
+    """R1, round 5: to keep JEFFEREY's own answer clean when it came back in,
+    round 4 made a phone number, or a number after 'ref', 'dossier', 'tel' or
+    'call', END the search for the value a word announced. Every note below
+    was then kept on all three surfaces and its PIN went out in clear to
+    claude-raw and gpt-raw. The parent refused them all. A phone or reference
+    number is now stepped over and the reading goes on; a number after 'tel'
+    or 'call' is still the PIN when nothing further on is."""
+
+    KEPT_IN_ROUND_4 = [
+        "The alarm code (call 613-555-0199 if it rings) is 4821",
+        "Le code de l'alarme (appeler le 613 555 0199 si ça sonne) est 4821",
+        "Votre NIP, dossier 8765, est 4321",
+        "My bank PIN (ref 5678) is 4822",
+        "Voicemail PIN: call *98 then 4823",
+        "My PIN, tel 4824",
+        "My debit card PIN: call 4825",
+        "PIN for my phone 4826",
+        "Voicemail PIN: dial 1 800 555 0199 and enter 4827",
+        "Bank code: call 1-800-769-2511 then enter 482193",
+        "NIP du téléphone 4828",
+        "Alarm code, call the company 613 555 0199 first, then 4829",
+        "My PIN [hidden]\n\n4830",
+    ]
+    PINS = ["4821", "4321", "4822", "4823", "4824", "4825", "4826", "4827", "482193",
+            "4828", "4829", "4830"]
+
+    def test_none_of_them_is_kept_on_any_surface(self):
+        r = self.py("""
+            notes = %r
+            import jefferey_chat as jc, jefferey_mcp as m
+            os.environ["JEFFEREY_HTTP_TOKENS"] = %r
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            c = TestClient(h.app)
+            out([[bool(jc.dispatch_tool("remember_fact", {"fact": n}).get("refused")),
+                  bool(mcp_call(m, "remember_fact", {"fact": n}).get("refused")),
+                  c.post("/facts", json={"fact": n}, headers=H(%r)).status_code] for n in notes])
+        """ % (self.KEPT_IN_ROUND_4, TOKENS, TA), JEFFEREY_CLIENT="jefferey")
+        for note, (chat, mcp, http) in zip(self.KEPT_IN_ROUND_4, r):
+            self.assertTrue(chat, ("terminal kept it", note))
+            self.assertTrue(mcp, ("Claude kept it", note))
+            self.assertEqual(http, 403, ("ChatGPT kept it", note))
+        stored = self.store_text()
+        for v in self.PINS:
+            self.assertNotIn(v, stored)
+
+    def test_one_already_kept_goes_out_with_the_pin_hidden_and_the_phone_kept(self):
+        self.py("""
+            seed(os.environ["JEFFEREY_CONSCIENCE_PATH"], facts=%r)
+            out(1)
+        """ % self.KEPT_IN_ROUND_4)
+        r = self.py("""
+            import jefferey_mcp as m
+            con = mcp_call(m, "get_conscience")
+            os.environ["JEFFEREY_HTTP_TOKENS"] = %r
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            g = TestClient(h.app).get("/conscience", headers=H(%r))
+            out({"con": con, "gpt": [g.status_code, g.json()]})
+        """ % (TOKENS, TG), JEFFEREY_CLIENT="claude-raw")
+        self.assertFalse(r["con"].get("refused"), r["con"])
+        self.assertEqual(r["gpt"][0], 200, r["gpt"])
+        sent = json.dumps(r, ensure_ascii=False)
+        for v in self.PINS:
+            self.assertNotIn(v, sent)
+        # what the PIN is not stays readable: the phone and the file numbers
+        # (the alarm and bank notes are private, so they are not in a list)
+        for v in ("1 800 555 0199", "dossier 8765", "call *98 then"):
+            self.assertIn(v, sent)
+
+    def test_jefferey_s_own_mark_does_not_swallow_a_year_or_a_house_number(self):
+        # Round 4 read the mark as not there, so the next number was 'the
+        # code': these were refused, and on release the year was hidden.
+        M = "[hidden: looks like a PIN or a door, alarm or lock code]"
+        notes = [f"Alarm code {M}, the house was built in 1987",
+                 f"Gate code {M} and the gate is at 1550 Elm Road",
+                 f"Garage code {M} - we moved in 2019",
+                 f"Alarm code {M}\nAnna's birthday is 12 May 1975"]
+        r = self.py("""
+            import jefferey_mcp as m
+            out([mcp_call(m, "remember_fact", {"fact": n}).get("refused") for n in %r])
+        """ % notes, JEFFEREY_CLIENT="jefferey")
+        self.assertEqual(r, [None] * 4, r)
+        sys.path.insert(0, str(CONNECTOR))
+        import egress
+        kept = {
+            "My email password is Hunter22! and my daughter Anna lives in Ottawa with her "
+            "two kids": "and my daughter Anna lives in Ottawa with her two kids",
+            "My alarm code is 4821 and my birthday is March 3 1950": "March 3 1950",
+            "My PIN [hidden] and I was born in 1948": "born in 1948",
+            "door code [hidden] — the house number is 4821": "the house number is 4821",
+            "Wifi password: maple-tree-42 (the router is in the basement next to the furnace)":
+                "(the router is in the basement next to the furnace)",
+            "Netflix password Sunflower77 and Disney plus is the same":
+                "and Disney plus is the same",
+        }
+        for text, words in kept.items():
+            masked, _ = egress.mask_text(text)
+            self.assertIn(words, masked, text)
+            self.assertIsNone(egress.looks_secret(masked), masked)
+        for text in ("My email password is Hunter22! and my daughter Anna lives in Ottawa",
+                     "Wifi password: maple-tree-42 (the router is in the basement)"):
+            self.assertNotIn("Hunter22", egress.mask_text(text)[0])
+            self.assertNotIn("maple-tree-42", egress.mask_text(text)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

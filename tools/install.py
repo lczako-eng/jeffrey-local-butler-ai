@@ -533,8 +533,36 @@ def move_life_step(drive: Path, offer: bool, input_fn=input) -> None:
     """His life is still on this Mac and his drive has none: offer to move
     it (verify I-08: the installer paired the drive and left the life behind,
     and JEFFEREY then showed an empty life). Until he says yes, JEFFEREY
-    stays off — it never begins an empty life on the drive."""
-    if not home.laptop_life() or os.path.lexists(drive / home.NAMESPACE / "conscience.json"):
+    stays off — it never begins an empty life on the drive. When the drive
+    already holds his life and a copy was left on the Mac (it could not be
+    put aside, or only part of it), offer to put that copy aside (R7)."""
+    if os.path.lexists(drive / home.NAMESPACE / "conscience.json"):
+        sys.path.insert(0, str(REPO / "tools"))
+        try:
+            import provision_drive as pd
+            left = pd.home_life()
+            state = pd.mac_copy_state(left, drive / home.NAMESPACE) if left else ""
+            if state in ("same", "older"):
+                warn("A copy of your memories is still on this Mac "
+                     f"({home.owner_dir()}); your drive has all of it"
+                     + ("." if state == "same" else ", and what came since."))
+                aside = (answers.ask_yes_no_or_none(
+                    "    Put the Mac's copy aside now (it is kept, not deleted)? Type yes or "
+                    "no: ", input_fn) if offer else None)
+                if aside:
+                    pd.move_home_life(drive, out=say)
+                else:
+                    say(f"    {DIM}JEFFEREY uses the drive's and never reads the Mac's copy. Run "
+                        f"this again whenever you want it put aside.{OFF}")
+            elif state == "different":
+                warn(f"This Mac still holds a different copy of a life ({home.owner_dir()}). "
+                     "JEFFEREY uses the drive's and never reads it; nothing was mixed.")
+        except Exception as e:                 # never stops the install
+            bad(f"The copy left on this Mac could not be looked at: {e}")
+        finally:
+            sys.path.remove(str(REPO / "tools"))
+        return
+    if not home.laptop_life():
         return
     warn("Your memories are on this Mac, and your drive has none yet.")
     move = (answers.ask_yes_no_or_none("    Move them onto the drive? (The Mac's copy is put "

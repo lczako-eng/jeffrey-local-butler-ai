@@ -286,7 +286,17 @@ _NUMBERED = frozenset("applicant applicants claimant person member borrower insu
 # 'Business name', 'Nursing home name', 'Electricity provider').
 # A shop, a store, a dealer: the other side when he buys (R4).
 _SHOPS = frozenset("""shop store merchant retailer dealer dealership magasin marchand
-    commercant detaillant boutique concessionnaire""".split())
+    commercant detaillant boutique concessionnaire supplier distributor installer
+    wholesaler manufacturer fournisseur distributeur installateur grossiste
+    fabricant""".split())
+# ...and the ways a form names the shop without a word for it (R4, round 5:
+# 'Sold by', 'Purchased from' and 'Supplier name' on a warranty card each got
+# his name).
+_SHOP_PHRASES = tuple(tuple(p.split()) for p in (
+    "sold by", "purchased from", "bought from", "purchased at", "bought at",
+    "place of purchase", "where purchased", "where bought", "purchase location",
+    "point of sale", "vendu par", "achete chez", "achete a", "achete de",
+    "lieu d achat", "lieu de l achat"))
 _PLACES = frozenset("""
 employer pharmacy lien business company bank institution school provider insurer
 contractor nursing facility estate work office user username employeur
@@ -300,13 +310,14 @@ PARTY_WORDS = _PEOPLE | _NOT_CURRENT | _PLACES
 # these two sides can be chosen: no caller can make a spouse's or a doctor's
 # box his.
 #
-# A side is taken only when the caller SAID which one, and the form is
-# plainly a sale between two people — it has boxes for both sides, and none
-# for a shop (R4: with the seller as the default on every form, a warranty
-# card's 'Vendor name' and 'Vendor address' got his name and address, and so
-# did the seller's boxes when he was buying and the model said nothing).
-# Otherwise every box for a seller, a buyer, a vendor, a shop or a store is
-# someone else's, and goes back to him.
+# A side is taken only when the caller SAID which one (R4: with the seller
+# as the default on every form, a warranty card's 'Vendor name' and 'Vendor
+# address' got his name and address, and so did the seller's boxes when he
+# was buying and the model said nothing) — on any form with that side's
+# boxes, but not on one that also has boxes for him himself, where the
+# vendor is the shop (taken_side). A shop's, dealer's or supplier's box is
+# never his. Otherwise every box for a seller, a buyer, a vendor, a shop or a
+# store is someone else's, and goes back to him.
 _SIDE_WORDS = {"seller": frozenset("seller vendor vendeur vendeuse".split()),
                "buyer": frozenset("buyer purchaser acheteur acheteuse".split())}
 _SIDE_NAMES = {w: side for side, ws in _SIDE_WORDS.items() for w in ws}
@@ -315,7 +326,16 @@ _SIDE_NAMES.update({"sellers": "seller", "selling": "seller", "vendors": "seller
 _ANY_SIDE = frozenset().union(*_SIDE_WORDS.values())
 # A form with a box for one of these is a shop's form (a warranty card from
 # the store, a dealer's sale), not a sale between two people.
-_SHOP_WORDS = _SHOPS | frozenset("shops stores merchants retailers dealers".split())
+_SHOP_WORDS = _SHOPS | frozenset("""shops stores merchants retailers dealers suppliers
+    distributors installers manufacturers""".split())
+
+
+def _shop_phrase(toks: list[str]) -> str:
+    """'sold by', 'purchased from' … when these words name the shop."""
+    for ph in _SHOP_PHRASES:
+        if _has_phrase(toks, ph):
+            return " ".join(ph)
+    return ""
 
 
 def owner_side(owner_is) -> str | None:
@@ -339,14 +359,55 @@ def sale_between_two(texts) -> bool:
     """Is this form plainly a sale between two people: boxes for both the
     seller and the buyer, and nothing of a shop?"""
     words = {w for t in texts for w in _tokens(t)}
-    return sale_sides(texts) == set(_SIDE_WORDS) and not words & _SHOP_WORDS
+    return (sale_sides(texts) == set(_SIDE_WORDS) and not words & _SHOP_WORDS
+            and not any(_shop_phrase(_tokens(t)) for t in texts))
+
+
+_OWN_BOXES = frozenset({"full_name", "first_name", "last_name", "email", "phone",
+                        "address_line1", "address_line2"})
+
+
+def _groups(boxes) -> list[list[str]]:
+    """Each box as the list of its own texts (a label, or a PDF box's name
+    and description)."""
+    return [[str(x) for x in b] if isinstance(b, (list, tuple)) else [str(b)] for b in boxes]
+
+
+def own_boxes(boxes) -> list[str]:
+    """The boxes of a form that ask for the owner himself, with no side or
+    other party named in any of their words ('Your name', 'Address')."""
+    return [g[0] for g in _groups(boxes)
+            if any(Representative._normalize_field(t) in _OWN_BOXES for t in g)
+            and not parties(*g, long=True)]
 
 
 def taken_side(stated: str, texts) -> str:
     """The side of a sale the owner is on THIS form: the one the caller
-    said, and only on a form that is plainly a sale between two people.
-    '' otherwise (R4)."""
-    return stated if stated in _SIDE_WORDS and sale_between_two(texts) else ""
+    SAID — there is no default (R4). On a form that also has boxes for him
+    himself ('Your name' beside 'Vendor name', a warranty card), the side
+    named is someone else — the shop — and no side is taken. A shop's,
+    dealer's or supplier's box is never his, whatever was said (R4, round 5:
+    a side said on a form with one side only, or with a dealer's box, was
+    ignored, and his own bill of sale filled nothing)."""
+    boxes = _groups(texts)
+    if stated not in _SIDE_WORDS:
+        return ""
+    if stated in sale_sides([t for g in boxes for t in g]) and own_boxes(boxes):
+        return ""
+    return stated
+
+
+def _why_no_side(stated: str, texts) -> str:
+    """Why no side of a sale was taken on this form, in a few words."""
+    own = own_boxes(texts)
+    if not stated:
+        # beside boxes for him himself, a buyer's box is plainly someone else's
+        return "" if own else "nobody said he is on that side of a sale"
+    if own:
+        return (f"you said he is the {stated}, but this form also has boxes for him himself "
+                f"({_quoted(own[:3])}), so its {stated}'s boxes are someone else's — most "
+                f"likely the shop's")
+    return ""
 
 
 _PLURAL = {"children": "child", "kids": "kid", "parents": "parent", "mothers": "mother",
@@ -378,6 +439,8 @@ def parties(*texts: str, among: frozenset = PARTY_WORDS, long: bool = False,
             if not long:
                 continue
             words = among & _PEOPLE
+        if "shop" in words and _shop_phrase(toks):
+            out.add(_shop_phrase(toks))
         for k, w in enumerate(toks):
             w = _PLURAL.get(w, w)
             if w in words:
@@ -597,30 +660,120 @@ def _kind_vocab(kinds) -> set[str]:
 # A payment card's number or security code: these go only into a box that is
 # a payment-card box in every word it carries (R3).
 _PAYMENT_KINDS = frozenset({"card_number", "card_security"})
-_PAYMENT_CARTE = _PAYMENT_CARD | frozenset("bancaire paiement".split())
-_CARD_NEUTRAL = OWNER_QUALIFIERS | _AROUND | frozenset("or and back front card".split())
+# What a payment card's box may say about the card, and nothing else (R3,
+# round 5: a 'Card number' box described as 'Membership number', 'Aeroplan
+# number', 'Library', 'Health', 'Patient number' or 'Veterans Affairs Canada
+# client number' named no other CARD, so it 'asked for nothing' and got his
+# credit card). Every word that says WHICH number or card a box means must
+# name a payment card, a bank, or nothing in particular; any other word is
+# another number, and the box goes back to him. A word missing here sends a
+# box to him, never his card to the wrong box.
+_PAY_WORDS = _PAYMENT_CARD | frozenset("""master american express discover interac jcb
+    unionpay diners pay paying paid pays purchase purchases billing charged deposit
+    bancaire paiement credito debito""".split())
+_BANK_WORDS = frozenset("""rbc td bmo cibc scotiabank scotia desjardins tangerine simplii
+    hsbc mbna atb laurentian national nbc capital one pc financial canadian tire triangle
+    eq koho neo brim vancity servus meridian coast caisse banque royal dominion nova
+    chase citi citibank wells fargo union""".split())
+_CARD_HEADS = frozenset("card cards number numbers no num nbr id carte cartes numero".split())
+_BRANDS = frozenset("visa mastercard master amex discover interac jcb unionpay diners".split())
+_CARD_STOPS = frozenset("""the your my his her our their a an of on for with from to at in by
+    or and de d du des la le les l votre vos ton ta mon ma sa son au aux en sur this that
+    which you it is are be will do any""".split())
+_CARD_PLAIN = _AROUND | OWNER_QUALIFIERS | frozenset("""front back long digits digit
+    main valid same embossed printed raised shown appears side signature next spaces space
+    dashes dash hyphens without we accept accepted use used using enter type below above
+    security code cvv cvc cvn cvv2 cvc2 verification value ending ends last four three
+    sixteen mandatory chiffres chiffre dos devant recto verso sans espaces securite
+    accepte acceptees acceptee""".split())
+_GENERIC_BOX = re.compile(r"(?:text|field|textfield|txt|fill|box|untitled|undefined|"
+                          r"champ|zone)\d*")
+_NEGATION = frozenset("not never pas jamais ne n".split())
 
 
-def names_other_card(*texts: str) -> bool:
-    """Does any of these words name a card that is not a payment card —
-    'Health card number', 'Your library card number', 'Costco membership
-    card', 'carte Costco'? A box labelled 'Card number' whose description
-    says one of these is that other card (R3: each got his credit card)."""
+def names_something_else(*texts: str) -> str | None:
+    """The first word of these texts that names some other number or card
+    than a payment card ('membership', 'aeroplan', 'library', 'patient',
+    'client', 'sante'), or None. A word after 'not' or 'never' is what the
+    box is NOT ('Credit card number - not your gift card')."""
+    known = _PAY_WORDS | _BANK_WORDS | _CARD_PLAIN | _CARD_HEADS
     for t in texts:
-        toks = _tokens(t)
+        for clause in re.split(r"[.;:!?,()\[\]/]|\s[-–—]\s", _terminal(str(t or ""))):
+            toks = _tokens(clause)
+            for i, w in enumerate(toks):
+                if w in _NEGATION:
+                    toks = toks[:i]
+                    break
+            if not toks:
+                continue
+            heads = [i for i, w in enumerate(toks) if w in _CARD_HEADS]
+            if not heads:
+                # the word just before a card's brand is who issued it ('your
+                # Costco Mastercard', 'TD Visa'): a payment card all the same
+                words = [w for j, w in enumerate(toks)
+                         if w not in _CARD_STOPS and not w.isdigit()
+                         and not _GENERIC_BOX.fullmatch(w)
+                         and not (j + 1 < len(toks) and toks[j + 1] in _BRANDS)]
+                if len(words) <= 4:            # a short description says which number
+                    for w in words:
+                        if w not in known:
+                            return w
+                continue
+            for i in heads:
+                if toks[i] in ("carte", "cartes", "numero"):
+                    j = i + 1
+                    while j < len(toks) and toks[j] in _CARD_STOPS:
+                        j += 1
+                    nxt = toks[j] if j < len(toks) else ""
+                    if nxt and nxt not in known and not nxt.isdigit():
+                        return nxt
+                    continue
+                k = i - 1
+                while k >= 0 and toks[k] not in _CARD_STOPS:
+                    m = toks[k]
+                    if m not in known and not m.isdigit() and not _GENERIC_BOX.fullmatch(m):
+                        return m
+                    k -= 1
+    return None
+
+
+_NUMBER_WORDS = frozenset("number numbers no num nbr numero cc".split())
+
+
+_WHERE = frozenset("to beside near by under above below behind on of sur pres cote dos".split())
+_WHERE_DET = frozenset("the your my his her a an la le les votre ma mon sa son l de".split())
+
+
+def _asks(text: str) -> set[str]:
+    """What one text of a box asks for. What it says only to tell where
+    something is ('On the back of your credit card', '3 digits next to your
+    signature on the card') or what the box is not ('the card you pay with,
+    not your health card') asks for nothing, and a text that names the
+    payment card without asking for its number ('Your RBC card') is saying
+    which card, not asking for its number."""
+    keep: list[str] = []
+    for clause in re.split(r"[.;:!?,()\[\]/]|\s[-–—]\s", _terminal(str(text or ""))):
+        toks = _tokens(clause)
         for i, w in enumerate(toks):
-            if w in ("card", "cards"):
-                prev = toks[i - 1] if i else ""
-                if prev and prev not in _PAYMENT_CARD and prev not in _CARD_NEUTRAL:
-                    return True
-            elif w in ("carte", "cartes"):
-                j = i + 1
-                while j < len(toks) and toks[j] in ("de", "d", "du", "a"):
-                    j += 1
-                nxt = toks[j] if j < len(toks) else ""
-                if nxt and nxt not in _PAYMENT_CARTE and nxt not in _CARD_NEUTRAL:
-                    return True
-    return False
+            if w in _NEGATION:
+                toks = toks[:i]
+                break
+        i = 0
+        while i < len(toks):
+            if toks[i] in _WHERE:
+                i += 1
+                while i < len(toks) and toks[i] in _WHERE_DET:
+                    i += 1
+                while i < len(toks) and toks[i] not in _WHERE and toks[i] not in _CARD_STOPS:
+                    i += 1
+                continue
+            keep.append(toks[i])
+            i += 1
+        keep.append("|")
+    k = set().union(*(secret_kinds(c) for c in " ".join(keep).split("|")))
+    if k == {"card_number"} and not set(keep) & _NUMBER_WORDS:
+        return set()
+    return k
 
 
 def box_disagrees(*texts: str) -> str | None:
@@ -628,12 +781,14 @@ def box_disagrees(*texts: str) -> str | None:
     'Card number' and its description 'Health card number'. What it is, in
     the owner's words, or None. Such a box is never filled from the vault:
     it goes back to the owner (R3)."""
-    asked = [k for k in (secret_kinds(t) for t in texts) if k]
+    asked = [k for k in (_asks(t) for t in texts) if k]
     if len(asked) > 1 and not set.intersection(*asked):
         said = sorted({SECRET_WORDS[k] for ks in asked for k in ks})
         return "its name and its description ask for different things: " + " or ".join(said)
-    if set().union(*asked) & _PAYMENT_KINDS and names_other_card(*texts):
-        return "its words name another card, so it may not be a payment card at all"
+    if (set().union(*asked) & _PAYMENT_KINDS or set().union(*map(secret_kinds, texts))
+            & _PAYMENT_KINDS) and names_something_else(*texts):
+        return ("its words name another number or card, so it may not be a payment card "
+                "at all")
     return None
 
 
@@ -670,10 +825,12 @@ def vault_fits(name: str, *texts: str) -> bool:
         # each of the box's own words, its description too, asks for this
         # secret or for nothing in particular — never for another one
         for t in texts:
-            k = secret_kinds(t)
+            k = _asks(t)
             if k and not nk & k:
                 return False
-        if nk & _PAYMENT_KINDS and names_other_card(*texts):
+        # a payment card: every word that says which card or number names a
+        # payment card, a bank, or nothing in particular (R3)
+        if nk & _PAYMENT_KINDS and names_something_else(*texts):
             return False
         allowed = set(_tokens(name)) | OWNER_QUALIFIERS | _AROUND | _kind_vocab(nk)
         for t in texts:
@@ -2115,7 +2272,7 @@ class Representative:
         if stated is None:
             return _no(_WHICH_SIDE, owner_is_can_be=sorted(_SIDE_WORDS))
         side = taken_side(stated, [str(f) for f in fields])
-        two_sided = sale_between_two([str(f) for f in fields])
+        two_sided = "" if side else _why_no_side(stated, [str(f) for f in fields])
         filled: dict[str, str] = {}
         needs_you: list[dict] = []
         from_vault: list[dict] = []
@@ -2231,7 +2388,7 @@ class Representative:
             fields = _form_fields(pypdf.PdfReader(str(p)))
         except Exception:
             return {"error": _NO_PDF}
-        side = taken_side(stated, [t for f in fields.values() for t in f["texts"]])
+        side = taken_side(stated, [f["texts"] for f in fields.values()])
         described, sensitive, others, signing, suspicious = {}, [], [], [], []
         needs_you: list[dict] = []
         for name, f in sorted(fields.items()):
@@ -2275,7 +2432,8 @@ class Representative:
                 out[k] = v
         if suspicious:
             out["warning"] = _TRAP
-        out.update(_side_note(side, [t for f in fields.values() for t in f["texts"]], stated))
+        out.update(_side_note(side, [t for f in fields.values() for t in f["texts"]], stated,
+                              [f["texts"] for f in fields.values()]))
         return out
 
     def fill_pdf(self, pdf_path: str, values: dict[str, str], out_path: str = "",
@@ -2287,7 +2445,7 @@ class Representative:
         that signs or swears for the owner needs authorize_action on
         'paperwork' (I-57); the hidden actions a form carries are taken out
         of the copy (I-31). On a bill of sale his side is the one `owner_is`
-        names, on a form with boxes for both sides; his details never go into
+        names (taken_side); his details never go into
         the other side's boxes, nor into any seller's, buyer's, vendor's or
         shop's box when no side was named (R4)."""
         import access
@@ -2314,7 +2472,7 @@ class Representative:
         if not fields:
             return _no("This PDF has no boxes JEFFEREY can fill (it may be a scan). The "
                        "owner fills it by hand. Nothing was written.")
-        side = taken_side(stated, [t for f in fields.values() for t in f["texts"]])
+        side = taken_side(stated, [f["texts"] for f in fields.values()])
 
         # Which boxes each name reaches: its full name, or its short name
         # (a short name can reach several boxes — 'SIN' under both the
@@ -2371,7 +2529,7 @@ class Representative:
                                         long=True, side=side)
                                 for f in hits[k]))
         if theirs:
-            two = sale_between_two([t for f in fields.values() for t in f["texts"]])
+            two = "" if side else _why_no_side(stated, [f["texts"] for f in fields.values()])
             unsided = [k for k in theirs if any(_unsided(t, side, two) for f in hits[k]
                                                 for t in f["texts"])]
             return _no("These boxes are about someone else, and what was handed in is the "
@@ -2411,20 +2569,24 @@ class Representative:
                 if bad:
                     also = [f["name"] for f in bad if f["name"] != k]
                     odd = next((o for o in (box_disagrees(*f["texts"]) for f in bad) if o), None)
-                    wrong.append({"field": k, "secret": name,
+                    wrong.append({"field": k, "secret": name, "odd": odd,
                                   "why": (f"vault:{name} does not belong in '{k}'"
                                           + (f" ({odd})" if odd else "") if not also
                                           else f"the name '{k}' also reaches "
                                                + ", ".join(f"'{a}'" for a in also)
                                                + f", where vault:{name} does not belong")})
             if wrong:
+                # a box whose own words disagree about what it is goes back to
+                # him (R3); a box that plainly asks for something else — the
+                # 'Comments' a form told you to put his SIN in — is only refused
+                odd_boxes = [{"field": w["field"], "why": (
+                    "the owner writes this box himself, or tells you what it is")}
+                    for w in wrong if w["odd"]]
                 return {
                     "error": "refused", "refused": True,
                     "wrong_boxes": [{"field": w["field"], "secret": w["secret"]}
                                     for w in wrong],
-                    "needs_you": [{"field": w["field"], "why": (
-                        "the owner writes this box himself, or tells you what it is")}
-                        for w in wrong],
+                    **({"needs_you": odd_boxes} if odd_boxes else {}),
                     "reason": (
                         "A secret from the vault goes only into a box that asks for "
                         "exactly that secret, about the owner himself: "
@@ -3258,42 +3420,43 @@ _WHICH_SIDE = ("owner_is says which side of a sale the owner is on this form: 's
                "anyone else is never his.")
 
 
-def _unsided(label: str, side: str, two_sided: bool) -> str:
+def _unsided(label: str, side: str, why: str) -> str:
     """Why a box for one side of a sale ('Seller name', 'Buyer address') is
-    left for the owner on a sale between two people where nobody said which
-    side he is on; '' when it is not such a box, or a side was taken (R4)."""
-    if side or not two_sided:
+    left for the owner when no side was taken (`why`, from _why_no_side);
+    '' when it is not such a box, or a side was taken (R4)."""
+    if side or not why:
         return ""
     ps = parties(label, long=True)
     if not ps or not ps <= _ANY_SIDE:
         return ""
-    return (f"a box for one side of a sale ({_quoted(ps)}) — nobody said he is on that "
-            f"side of a sale between two people, so it is left for him")
+    return f"a box for one side of a sale ({_quoted(ps)}) — {why}, so it is left for him"
 
 
-def _side_note(side: str, texts: list[str], stated: str = "") -> dict:
+def _side_note(side: str, texts: list[str], stated: str = "", boxes=None) -> dict:
     """When a form has boxes for a side of a sale, or a shop: which side
     JEFFEREY took the owner to be, or why it took none, and how to say it
     (selling-30, R4)."""
     words = {_PLURAL.get(w, w) for t in texts for w in _tokens(t)}
-    if not words & (_ANY_SIDE | _SHOP_WORDS):
+    if not words & (_ANY_SIDE | _SHOP_WORDS) and not any(_shop_phrase(_tokens(t))
+                                                          for t in texts):
         return {}
+    shops = (" A shop's, dealer's or supplier's box is never his." if words & _SHOP_WORDS
+             or any(_shop_phrase(_tokens(t)) for t in texts) else "")
     if side:
         other = "buyer" if side == "seller" else "seller"
         return {"owner_is": side,
                 "sides": (f"JEFFEREY took the owner to be the {side} on this form, as you "
                           f"said: the {side}'s boxes are his, the {other}'s are someone "
-                          f"else's and never get his details.")}
+                          f"else's and never get his details." + shops)}
     left = ("every box for a seller, a buyer, a vendor or a shop was left for him: none "
             "of them got his details.")
-    if not sale_between_two(texts):
-        why = (f"You said he is the {stated}, but this" if stated else "This")
+    if stated:
+        why = _why_no_side(stated, boxes if boxes is not None else texts)
         return {"owner_is": None,
-                "sides": (why + " form is not plainly a sale between two people (that needs "
-                          "boxes for both the seller and the buyer, and none for a shop or a "
-                          "dealer), so " + left)}
+                "sides": (why[:1].upper() + why[1:] + ", so " + left
+                          + " Ask him which boxes are his.")}
     return {"owner_is": None,
-            "sides": ("Nobody said which side of this sale he is on, so " + left
+            "sides": ("Nobody said which side of a sale he is on, so " + left + shops
                       + " If he is selling or buying this himself, ask him, then ask again "
                         "with owner_is='seller' or owner_is='buyer'.")}
 

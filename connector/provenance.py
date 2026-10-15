@@ -44,12 +44,19 @@ UNKNOWN_SOURCE = {"stated_by": UNKNOWN,
 
 # What the owner typed at his own terminal this session, word for word. Only
 # 'Talk to JEFFEREY on this Mac' fills it; over MCP and HTTP JEFFEREY never
-# sees what the owner said, only what the AI chose to send. Each message is
-# kept as the sentences that are his own voice: words in quotation marks, and
-# a sentence that reports what someone else says ('My sister says cost
-# matters more than safety'), are somebody else's words even when he typed
-# them (R9: that sentence, followed by 'Ridiculous.', made an AI's cost >
-# safety 'his words' and reversed his own safety > cost).
+# sees what the owner said, only what the AI chose to send.
+#
+# Each message is kept whole: a fact or a memory he typed is his words, even
+# when it tells what someone else said ('Mom said we would never go hungry',
+# 'My doctor says I am allergic to penicillin') — only the words inside
+# quotation marks are someone else's (R9, round 5: round 4 dropped every
+# reported sentence, so his own life stories became 'an AI's words, not his
+# own'). A RANKING is read more strictly: a sentence that reports what someone
+# else thinks ('My sister says…', 'Karen's view is that…', 'My sister: …') is
+# never his ranking, and any word of rejection anywhere in the message
+# ('Never!', 'No way', 'I don't buy it', 'Ridiculous', 'said no one ever')
+# means it is not his (R9: 'My sister says cost matters more than safety.
+# Ridiculous.' made an AI's cost > safety his words).
 _messages: list[dict] = []
 _turn: int | None = None
 _MAX_TYPED = 400
@@ -63,46 +70,86 @@ _HEADERS = re.compile(r"^\s*(?:from|to|subject|sent|date|cc|reply-to|de|à|objet
 # never an apostrophe ("Mom's").
 _QUOTED = re.compile(r"[\"“”«»„‟][^\"“”«»„‟]*[\"“”«»„‟]?"
                      r"|(?:(?<=\s)|^)['‘][^'‘’\n]{2,}?['’](?=[\s.,!?;:)]|$)")
-_SENTENCES = re.compile(r"[.!?;\n]+|\s[-–—]+\s|:\s")
+_SENTENCES = re.compile(r"[.!?;\n]+|\s[-–—]+\s")
 # Someone else's opinion, reported: 'my sister says', 'the doctor thinks',
-# 'she has always said', 'according to Karen', 'ma soeur dit'. His own ('I
-# think', "I've always said", 'I really believe') is his.
-_REPORTED_ANY = re.compile(r"\b(?:according to|selon|d'?apr[eè]s|apparently|supposedly"
-                           r"|allegedly)\b", re.I)
+# 'she has always said', 'according to Karen', 'ma soeur dit', 'Karen's view
+# is'. His own ('I think', "I've always said", 'according to me', "let's say",
+# 'like you said') is his.
+_REPORTED_ANY = re.compile(r"\b(?:according to(?! (?:me|us)\b)|selon(?! (?:moi|nous)\b)"
+                           r"|d'?apr[eè]s(?! (?:moi|nous)\b)|apparently|supposedly|allegedly"
+                           r"|in (?!my\b|our\b)[^\W\d_]+'s (?:view|opinion|eyes|mind|book))\b",
+                           re.I)
 _REPORTER = re.compile(
     r"\b(?P<who>[^\W\d_]+)(?:'s|'ve|'d|'ll|'m)?\s+"
     r"(?:(?:has|have|had|always|often|keeps|keep|kept|also|really|still|just|once|would"
-    r"|will|did|does|do|honestly|truly|personally|a|ne|n'a|toujours)\s+)*"
+    r"|will|did|does|do|honestly|truly|personally|a|ne|n'a|m'a|m'avait|toujours)\s+)*"
     r"(?:says|said|say|saying|thinks|think|thought|believes|believe|believed|claims|claim"
-    r"|claimed|insists|insist|insisted|reckons|reckon|feels|felt|tells me|told me|tell me"
-    r"|wants me to|dit|disait|pense|pensait|croit|croyait|trouve|affirme|pretend)\b", re.I)
-_HIS_OWN = frozenset("i we je j nous moi".split())
+    r"|claimed|insists|insist|insisted|reckons|reckon|reckoned|feels|felt|tells me|told me"
+    r"|tell me|telling me|tells us|told us|telling us|telling|tells|wants me to|swears"
+    r"|swore|argues|argued|maintains|suggests|suggested|wrote|writes|written|texted|emailed"
+    r"|posted|goes on about|go on about|went on about|going on about|keeps saying"
+    r"|dit|disait|pense|pensait|croit|croyait|trouve|affirme|pretend|prétend|écrit|ecrit"
+    r"|a écrit|a ecrit)\b", re.I)
+_OPINION_OF = re.compile(r"\b(?P<who>[^\W\d_]+)'s\s+(?:view|opinion|take|position|belief"
+                         r"|feeling|idea|thinking|advice|argument)\b", re.I)
+_HIS_OWN = frozenset("i we je j nous moi let my our".split())
+_AGREEING = re.compile(r"\b(?:like|as) you (?:said|say)\b|\bcomme (?:tu|vous) (?:dis|dites)\b",
+                       re.I)
+_I_AGREE = re.compile(r"\b(?:i agree|and i agree|so do i|me too|i think so too"
+                      r"|je suis d'?accord|moi aussi)\b", re.I)
+# Any of these anywhere in the message: what it ranks is not his ranking.
+_REJECTING = frozenset("""not never no nope less longer don't dont doesn't doesnt isn't isnt
+    wasn't wasnt didn't didnt instead ne pas plus moins jamais non ridiculous ridicule
+    nonsense rubbish absurd absurde wrong faux bull bullshit baloney hogwash laughable
+    crazy silly yeah_right""".split())
+# His own change of mind, in the first person: then a value he had stated
+# himself is turned round at once, as he says (R9, round 5).
+_CHANGED_MIND = re.compile(
+    r"\b(?:i|i've|i have|i'?ve|we|we've)\s+(?:\w+\s+)?(?:changed my mind|changed our mind"
+    r"|change my mind|reconsidered|rethought|decided)\b|\bon second thought\b"
+    r"|\bmy mind (?:has )?changed\b|\bj'?ai chang[ée] d'?avis\b|\bje change d'?avis\b"
+    r"|\bj'?ai (?:bien )?r[ée]fl[ée]chi\b|\bj'?ai d[ée]cid[ée]\b", re.I)
 
 
 def _reported(piece: str) -> bool:
     n = grounding.normalise(piece)
-    if _REPORTED_ANY.search(n):
+    if _REPORTED_ANY.search(n) or any(m.group("who") not in _HIS_OWN
+                                      for m in _OPINION_OF.finditer(n)):
         return True
+    n = _AGREEING.sub(" ", n)
     return any(m.group("who") not in _HIS_OWN for m in _REPORTER.finditer(n))
 
 
-def _own_voice(text: str) -> list[list[str]]:
-    """The owner's own sentences in what he typed, as runs: sentences next to
-    each other stay together, a quoted or reported one breaks the run."""
+# 'My sister: cost matters more than safety' — someone named, then what they
+# say. 'Safety: it matters more than cost' and 'For the car: …' are his.
+_SPEAKER = re.compile(r"^\s*(?P<label>[^:]{1,40}?)\s*:\s+(?P<rest>.+)$", re.S)
+
+
+def _speaker(label: str) -> bool:
+    ws = grounding.words(label)
+    if not ws or len(ws) > 4:
+        return False
+    if {grounding.stem(w) for w in ws} & grounding.SOMEONE_WORDS:
+        return True
+    raw = label.strip().split()
+    # 'Karen:' — a name standing alone
+    return len(raw) == 1 and raw[0][:1].isupper() and raw[0][1:].islower()
+
+
+def _rank_pieces(text: str) -> list[tuple[str, str]]:
+    """His own sentences, for rankings: (label, sentence). A quoted or
+    reported sentence is left out; a sentence 'X: …' keeps X as its label,
+    so it can be read as the subject ('Safety: it matters…') or as the one
+    speaking ('Karen: …')."""
     t = _QUOTED.sub(" | ", text)
-    runs: list[list[str]] = [[]]
+    out: list[tuple[str, str]] = []
     for part in _SENTENCES.split(t):
-        pieces = part.split("|")
-        for k, piece in enumerate(pieces):
-            if k:
-                runs.append([])               # a quotation broke the sentence
-            if not piece.strip():
+        for piece in part.split("|"):
+            if not piece.strip() or _reported(piece):
                 continue
-            if _reported(piece):
-                runs.append([])
-                continue
-            runs[-1].append(piece)
-    return [r for r in runs if r]
+            m = _SPEAKER.match(piece)
+            out.append((m.group("label"), m.group("rest")) if m else ("", piece))
+    return out
 
 
 def _now() -> str:
@@ -113,23 +160,50 @@ def owner_typed(text: str) -> None:
     """The owner typed this at his own terminal (it is about to be sent).
     It starts a new turn. A pasted message — e-mail headers, or text hidden
     in an HTML comment — is somebody else's words, so it never counts as his;
-    nor do the words he quotes, or what he reports someone else saying."""
+    nor do the words he puts in quotation marks."""
     global _turn
     _turn = (_turn or 0) + 1
     t = str(text or "")
     if _HEADERS.search(t):
         return
     t = _HIDDEN.sub(" ", t)
-    runs = _own_voice(t)
-    sentences = [(" ".join(grounding.words(x)), frozenset(grounding.content(x)))
-                 for run in runs for x in run]
-    sentences = [(w, b) for w, b in sentences if w]
-    if not sentences:
+    ws = grounding.words(t)
+    if not ws:
         return
+    # which words are inside quotation marks that someone else said ('Karen
+    # said "the cottage goes to Mike"'); his own motto in quotes is his
+    quoted: list[bool] = []
+    last = 0
+    for m in _QUOTED.finditer(t):
+        head = _SENTENCES.split(t[:m.start()])[-1]
+        tail = _SENTENCES.split(t[m.end():])[0]
+        theirs = _reported(head + " " + tail)
+        quoted += [False] * len(grounding.words(t[last:m.start()]))
+        quoted += [theirs] * len(grounding.words(m.group()))
+        last = m.end()
+    quoted += [False] * len(grounding.words(t[last:]))
+    if len(quoted) != len(ws):                 # never trust a count that does not add up
+        quoted = [False] * len(ws)
+    low = grounding.normalise(t)
+    own = set(grounding.words(low.replace("yeah right", "yeah_right")))
+    pieces = [(lab, " ".join(grounding.words(x)), frozenset(grounding.content(x)),
+               frozenset(grounding.content(lab)))
+              for lab, x in _rank_pieces(t)]
     _messages.append({
-        "runs": [" ".join(w for x in run for w in grounding.words(x)) for run in runs],
-        "sentences": sentences,
-        "bag": frozenset().union(*(b for _, b in sentences)),
+        "words": ws, "quoted": quoted,
+        "bag": frozenset(grounding.content(t)),
+        "pieces": [p for p in pieces if p[1]],
+        "rejects": bool(own & _REJECTING) or "said no one ever" in low
+                   or "n'importe quoi" in low or "pas du tout" in low,
+        "agrees": bool(_I_AGREE.search(low)),
+        "changed_mind": bool(_CHANGED_MIND.search(low)),
+        "reports": any(_reported(x) for x in _SENTENCES.split(_QUOTED.sub(" ", t)) if x.strip())
+                   or bool(_QUOTED.search(t)),
+        "all_pieces": [(lab, " ".join(grounding.words(x)), frozenset(grounding.content(x)),
+                        frozenset(grounding.content(lab)))
+                       for lab, x in ((m.group("label"), m.group("rest")) if m else ("", x)
+                                      for x in _SENTENCES.split(_QUOTED.sub(" ", t))
+                                      for m in [_SPEAKER.match(x)] if x.strip())],
     })
     del _messages[:-_MAX_TYPED]
 
@@ -166,7 +240,7 @@ _DENIED_BEFORE = re.compile(
 _DENIED_AFTER = re.compile(
     r"^\s*(?:\w+ ){0,2}(?:is|was|that'?s|that is|which is|it'?s|its)? ?(?:a lie|a lie|not true|"
     r"false|untrue|wrong|nonsense|rubbish|a rumou?r|made up|never happened|faux|pas vrai)\b")
-# A message that turns a ranking round: 'not', 'less', 'no longer'.
+# A sentence that turns a ranking round: 'not', 'less', 'no longer'.
 _REVERSING = frozenset("""not never no less longer don't dont doesn't doesnt isn't isnt
     wasn't wasnt didn't didnt rather_not instead ne pas plus moins jamais""".split())
 
@@ -174,20 +248,24 @@ _REVERSING = frozenset("""not never no less longer don't dont doesn't doesnt isn
 def verbatim(text) -> bool:
     """Is this, word for word (ignoring case and punctuation), something the
     owner typed at his terminal this session — in ONE message (two messages
-    are never stitched together), and not inside words that deny it ('I
+    are never stitched together), not all of it inside quotation marks (what
+    he quotes is someone else's), and not inside words that deny it ('I
     never said …', '… that is a lie')?"""
     ws = grounding.words(text)
     if not ws or not _messages:
         return False
-    needle = " " + " ".join(ws) + " "
-    for said in (run for m in _messages for run in m["runs"]):
-        hay = f" {said} "
-        i = hay.find(needle)
-        while i >= 0:
-            before, after = hay[:i + 1].strip(), hay[i + len(needle) - 1:]
+    n = len(ws)
+    for m in _messages:
+        said, quoted = m["words"], m["quoted"]
+        for i in range(len(said) - n + 1):
+            if said[i:i + n] != ws:
+                continue
+            if all(quoted[i:i + n]):
+                continue                       # only what he quotes: someone else's
+            before = " ".join(said[:i])
+            after = " ".join(said[i + n:])
             if not _DENIED_BEFORE.search(before) and not _DENIED_AFTER.match(after):
                 return True
-            i = hay.find(needle, i + 1)
     return False
 
 
@@ -201,6 +279,40 @@ def said_by_owner(*values) -> bool:
     return bool(need) and any(need <= m["bag"] for m in _messages)
 
 
+def _ranks(said: str, hi: set, lo: set) -> bool:
+    ws = said.split()
+    if set(ws) & _REVERSING:
+        return False
+    stems = [grounding.stem(w) for w in ws]
+
+    def first(group):
+        want = {grounding.stem(w) for w in group}
+        return min((i for i, w in enumerate(stems) if w in want), default=None)
+    a, b = first(hi), first(lo)
+    return a is not None and b is not None and a < b
+
+
+def _backing(higher, lower) -> list[dict]:
+    """The messages in which the owner himself put HIGHER before LOWER."""
+    hi, lo = grounding.content(higher), grounding.content(lower)
+    if not hi or not lo:
+        return []
+    out = []
+    for m in _messages:
+        if m["rejects"]:
+            continue                       # 'Never!', 'Ridiculous', 'I don't buy it'
+        pieces = m["all_pieces"] if m["agrees"] else m["pieces"]
+        for label, said, bag, lab in pieces:
+            if label and not (lab & (hi | lo)):
+                if _speaker(label):
+                    continue               # 'My sister: …' — what she says
+            words = (" ".join(grounding.words(label)) + " " + said) if label else said
+            if (hi | lo) <= (bag | lab) and _ranks(words.strip(), hi, lo):
+                out.append(m)
+                break
+    return out
+
+
 def ranked_by_owner(higher, lower) -> bool:
     """Did the owner himself put HIGHER before LOWER, in one sentence of his
     own, with no word that turns it round? 'safety matters more than cost'
@@ -209,24 +321,15 @@ def ranked_by_owner(higher, lower) -> bool:
     matters more than safety. Ridiculous.' backs nothing: it is his sister's
     ranking, which he rejects (R9). When in doubt, it is not his: the value
     waits for his yes."""
-    hi, lo = grounding.content(higher), grounding.content(lower)
-    if not hi or not lo:
-        return False
-    for said, bag in (x for m in _messages for x in m["sentences"]):
-        if not (hi | lo) <= bag:
-            continue
-        ws = said.split()
-        if set(ws) & _REVERSING:
-            continue
-        stems = [grounding.stem(w) for w in ws]
+    return bool(_backing(higher, lower))
 
-        def first(group):
-            want = {grounding.stem(w) for w in group}
-            return min((i for i, w in enumerate(stems) if w in want), default=None)
-        a, b = first(hi), first(lo)
-        if a is not None and b is not None and a < b:
-            return True
-    return False
+
+def changed_his_mind(higher, lower) -> bool:
+    """Did the owner himself say he changed his mind, in the very message in
+    which he put HIGHER before LOWER — first person, nothing quoted or
+    reported in it ('I changed my mind. For the car, cost matters more than
+    safety now')? Then turning round a value he had stated is his own doing."""
+    return any(m["changed_mind"] and not m["reports"] for m in _backing(higher, lower))
 
 
 def _engine_label() -> str:

@@ -1436,5 +1436,89 @@ class TheMacCopyThatCouldNotBePutAside(DriveTest):
         self.assertIn("put aside", "\n".join(said))
 
 
+class AnOlderMacCopyIsStillOffered(DriveTest):
+    """R7, round 5: the offer to put the Mac's copy aside came only while the
+    two copies were the same byte for byte. Once an AI had kept one fact (so
+    the drive's memory file and its record changed), the window said 'This
+    Mac already knows it is yours. Nothing to do.' with his whole life left
+    in ~/.jefferey — and a put-aside that stopped halfway, after the memory
+    file had gone, left the rest with no offer at all. The installer never
+    looked. An older copy of the drive's own life is recognised and offered
+    on all of them, and 'Nothing to do' is never said with a copy left."""
+
+    laptop_life = AfterTheFixes.laptop_life
+    failing_aside = TheMacCopyThatCouldNotBePutAside.failing_aside
+
+    def use_once(self):
+        r = self.py("""
+            import jefferey_mcp as m
+            out(mcp_call(m, "remember_fact", {"fact": "Anna calls on Sundays"}))
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertFalse(r.get("refused"), r)
+
+    def window(self, *answers):
+        said: list[str] = []
+        feed = iter(answers)
+        with mock.patch.object(pd, "_why_not", lambda v: None):
+            rc = pd.interactive(lambda _: next(feed), said.append, bases=[str(self.vols)])
+        return rc, "\n".join(said)
+
+    def left(self) -> bool:
+        return (self.home / ".jefferey" / "conscience.json").exists() or \
+            (self.home / ".jefferey" / "egress.jsonl").exists()
+
+    def test_after_he_used_jefferey_the_window_still_offers_to_put_it_aside(self):
+        self.laptop_life("The blue kettle was Mum's")
+        vol = self.drive()
+        with self.failing_aside():
+            self.window("1", "yes")
+        self.use_once()
+        rc, text = self.window("1", "yes")
+        self.assertNotIn("Nothing to do", text)
+        self.assertIn("older copy of the same life", text)
+        self.assertEqual(rc, 0, text)
+        self.assertFalse(self.left(), text)
+        kept = list((self.home / ".jefferey").glob("moved-to-self-cloud-*/conscience.json"))
+        self.assertEqual(len(kept), 1, "the Mac's copy is kept, never deleted")
+        self.assertTrue((vol / home.NAMESPACE / "conscience.json").exists())
+
+    def test_a_put_aside_that_stopped_halfway_is_finished_later(self):
+        import errno
+        self.laptop_life("The blue kettle was Mum's")
+        self.drive()
+        real = os.rename
+
+        def rename(a, b, *k, **kw):          # the memory file goes, the record does not
+            if "moved-to-self-cloud" in str(b) and Path(a).name == "egress.jsonl":
+                raise OSError(errno.EACCES, "Permission denied", str(b))
+            return real(a, b, *k, **kw)
+        with mock.patch.object(pd.os, "rename", rename):
+            self.window("1", "yes")
+        self.assertFalse((self.home / ".jefferey" / "conscience.json").exists())
+        self.assertTrue((self.home / ".jefferey" / "egress.jsonl").exists())
+        self.use_once()
+        rc, text = self.window("1", "yes")
+        self.assertNotIn("Nothing to do", text)
+        self.assertEqual(rc, 0, text)
+        self.assertFalse(self.left(), text)
+
+    def test_saying_no_never_says_nothing_to_do_and_the_installer_offers_too(self):
+        import install
+        self.laptop_life("The blue kettle was Mum's")
+        vol = self.drive()
+        with self.failing_aside():
+            self.window("1", "yes")
+        self.use_once()
+        rc, text = self.window("1", "no")
+        self.assertNotIn("Nothing to do", text)
+        self.assertIn("still in", text)
+        self.assertTrue(self.left())
+        feed = iter(["yes"])
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            install.move_life_step(vol, True, lambda _: next(feed))
+        self.assertIn("still on this Mac", buf.getvalue())
+        self.assertFalse(self.left(), buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

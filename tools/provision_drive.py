@@ -379,22 +379,35 @@ def move_home_life(drive_root: Path, out=say) -> dict:
     src = home.owner_dir()
     dst = Path(drive_root) / home.NAMESPACE
     items = home_life()
-    if not (src / "conscience.json").is_file():
+    if not items or (not (src / "conscience.json").is_file()
+                     and not (dst / "conscience.json").is_file()):
         return {"moved": 0}
     if (dst / "conscience.json").exists():
-        if same_on_drive(items, dst):
+        state = mac_copy_state(items, dst)
+        if state in ("same", "older"):
             # an earlier move put everything on the drive but could not put
-            # the Mac's copy aside (R7): that is finished now, nothing more
+            # the Mac's copy aside, or only part of it, and he may have used
+            # JEFFEREY since (R7): that is finished now, nothing more
             try:
                 aside, done = _put_aside(src, items)
             except _AsideFailed as e:
                 _left_on_mac(out, 0, src, e)
                 return {"moved": 0, "aside": None, "left_on_mac": str(src),
                         "problem": e.why}
-            out("  ✓ your memories were already on the drive, every byte the same as the")
-            out(f"    Mac's copy. The Mac's old copy is now put aside in {aside}.")
+            if state == "same":
+                out("  ✓ your memories were already on the drive, every byte the same as the")
+                out("    Mac's copy.")
+            else:
+                out("  ✓ your memories were already on the drive. What was left on this Mac is")
+                out("    an older copy of the same life: the drive has all of it, and more.")
+            out(f"    The Mac's old copy is now put aside in {aside}.")
             out("    JEFFEREY never reads it again.")
             return {"moved": 0, "aside": str(aside), "finished": len(done)}
+        if not (src / "conscience.json").is_file():
+            out(f"  ! Some files of a life are still on this Mac, in {src}, and they are not")
+            out("    the drive's. Nothing was moved or mixed: JEFFEREY uses the drive's and")
+            out("    never reads them. Ask someone you trust to look at them with you.")
+            return {"moved": 0, "both": True, "left_on_mac": str(src)}
         out("  ! Your drive already holds memories, and this Mac holds some too. Nothing")
         out("    was moved or mixed: JEFFEREY will use the drive's. The Mac's copy stays")
         out(f"    where it is ({src}); ask someone you trust to help you bring the two together.")
@@ -460,6 +473,121 @@ def move_home_life(drive_root: Path, out=say) -> dict:
     return {"moved": len(copied), "aside": str(aside)}
 
 
+def _rev_of(p: Path) -> int | None:
+    try:
+        r = json.loads(p.read_text(encoding="utf-8")).get("_rev")
+        return r if isinstance(r, int) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _ids_of(p: Path) -> set[str]:
+    """The ids of the things a memory file holds (facts, memories, people …)."""
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    out: set[str] = set()
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, list):
+                out |= {str(x["id"]) for x in v if isinstance(x, dict) and x.get("id")}
+    return out
+
+
+def _snap_rev(p: Path) -> int | None:
+    try:
+        return int(p.stem.rsplit("-", 1)[-1])
+    except ValueError:
+        return None
+
+
+def _is_prefix(a: Path, b: Path) -> bool:
+    """Is file `a` the beginning of file `b` (a log that only grows)?"""
+    try:
+        n = a.stat().st_size
+        if n > b.stat().st_size:
+            return False
+        h = hashlib.sha256()
+        with open(b, "rb") as f:
+            left = n
+            while left:
+                chunk = f.read(min(1 << 20, left))
+                if not chunk:
+                    return False
+                h.update(chunk)
+                left -= len(chunk)
+        return h.hexdigest() == _sha_file(a)
+    except OSError:
+        return False
+
+
+def mac_copy_state(items: list[Path], dst: Path) -> str:
+    """How what is left of his life on this Mac stands to the drive's life:
+    'same' — byte for byte; 'older' — an earlier state of the drive's own
+    life: every copy the Mac keeps in its history is on the drive too (or
+    older than any the drive still keeps), its memory file is one of the
+    drive's copies or older than the drive's, and its record of what left is
+    the beginning of the drive's; 'different' — another life, never mixed;
+    '' — nothing of a life is on this Mac (R7, round 5: after JEFFEREY was
+    used once, the two copies were no longer the same, and the window said
+    'Nothing to do' with his whole life left on the Mac)."""
+    if not items:
+        return ""
+    if same_on_drive(items, dst):
+        return "same"
+    try:
+        dh = dst / "conscience.history"
+        drive_hist = _tree(dh) if dh.is_dir() else []
+        shas = {_sha_file(f) for f in drive_hist}
+        revs = [r for r in (_snap_rev(f) for f in drive_hist) if r is not None]
+        oldest = min(revs) if revs else None
+        shared = False                 # a copy of the same life on both: the same past
+        for it in items:
+            if it.is_dir():
+                for f in _tree(it):
+                    if _sha_file(f) in shas:
+                        shared = True
+                    elif not (oldest is not None and (_snap_rev(f) or 0) < oldest):
+                        return "different"   # a copy the drive never had: its own past
+        src = items[0].parent
+        aside = any((a / "conscience.json").is_file() for a in src.glob("moved-to-self-cloud-*"))
+        for it in items:
+            there = dst / it.name
+            if (it.name.startswith("egress.jsonl") and it.is_file() and there.is_file()
+                    and it.stat().st_size and _is_prefix(it, there)):
+                shared = True          # the record of what left only grows: the same past
+            if it.name == "conscience.json" and there.is_file() and not shared:
+                mine, theirs = _ids_of(it), _ids_of(there)
+                if mine and mine <= theirs:
+                    shared = True      # every thing the Mac's copy holds, the drive holds too
+        for it in items:
+            there = dst / it.name
+            if it.is_dir():
+                continue
+            if it.name == "conscience.json":
+                if _sha_file(it) in shas or (there.is_file() and _sha_file(it) == _sha_file(there)):
+                    shared = True
+                    continue
+                mine, theirs = _rev_of(it), _rev_of(there)
+                if shared and mine is not None and theirs is not None and mine < theirs:
+                    continue
+                return "different"
+            if it.name.startswith("egress.jsonl"):
+                # the record of what left only grows; one rewritten since (a
+                # forget takes words out of it) is still the same life's
+                if there.is_file() and (_is_prefix(it, there) or shared or aside):
+                    continue
+                return "different"
+            # the small files beside the memory (changes waiting, keys) go
+            # with the life they belong to
+            if not (shared or aside):
+                return "different"
+        return "older" if (shared or aside) else "different"
+    except (OSError, ValueError):
+        return "different"
+
+
 def same_on_drive(items: list[Path], dst: Path) -> bool:
     """Is every one of these Mac items on the drive too, byte for byte?"""
     if not items:
@@ -500,7 +628,12 @@ def _put_aside(src: Path, items: list[Path]) -> tuple[Path, list[str]]:
         try:
             os.rename(a, aside / a.name)
         except OSError as e:
-            raise _AsideFailed(_plain_oserror(e), aside, done) from None
+            if not done:
+                try:
+                    aside.rmdir()          # nothing went in: no empty folder left behind
+                except OSError:
+                    pass
+            raise _AsideFailed(_plain_oserror(e), aside if done else None, done) from None
         done.append(a.name)
     return aside, done
 
@@ -859,17 +992,30 @@ def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
             mine = False
         if mine:
             out("  This Mac already knows it is yours.")
-            if ((home.owner_dir() / "conscience.json").is_file()
-                    and same_on_drive(home_life(), vol / home.NAMESPACE)):
-                # an earlier move could not put the Mac's copy aside (R7)
-                out("  Your memories are on the drive. The copy left on this Mac is the same,")
-                out("  byte for byte, and JEFFEREY does not read it.")
+            left = home_life()
+            state = (mac_copy_state(left, vol / home.NAMESPACE)
+                     if left and (vol / home.NAMESPACE / "conscience.json").is_file() else "")
+            if state in ("same", "older"):
+                # an earlier move could not put the Mac's copy aside, or only
+                # part of it, and he may have used JEFFEREY since (R7)
+                out("  Your memories are on the drive. A copy is still on this Mac, in")
+                out(f"  {home.owner_dir()}.")
+                out("  It is " + ("the same, byte for byte" if state == "same" else
+                              "an older copy of the same life: the drive has all of it, and more")
+                    + ". JEFFEREY does not read it.")
                 if answers.ask_yes_no_or_none(
                         "  Put the Mac's copy aside now (it is kept, not deleted)? Type yes or "
                         "no: ", input_fn, out):
                     res = move_home_life(vol, out)
                     return 0 if res.get("aside") else 1
-                out("  Nothing was changed.")
+                out(f"  Nothing was changed. The Mac's copy is still in {home.owner_dir()};")
+                out("  double-click this again whenever you want it put aside.")
+                return 0
+            if state == "different":
+                out("  ! Your drive holds your memories, and this Mac still holds a different")
+                out(f"    copy of a life, in {home.owner_dir()}. Nothing was moved or mixed:")
+                out("    JEFFEREY uses the drive's and never reads the Mac's. Ask someone you")
+                out("    trust to help you bring the two together.")
                 return 0
             if (home.owner_dir() / "conscience.json").is_file() and not os.path.lexists(
                     vol / home.NAMESPACE / "conscience.json"):
@@ -890,6 +1036,11 @@ def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
                 out("  Nothing was changed. JEFFEREY stays off until they are moved: he will")
                 out("  not start an empty life on the drive.")
                 return 1
+            if home_life():
+                out(f"  Some files of a life are still on this Mac, in {home.owner_dir()}, but")
+                out("  not its memory file. JEFFEREY does not read them; ask someone you trust")
+                out("  to look at them with you.")
+                return 0
             out("  Nothing to do.")
             return 0
         out("  If you bought it second-hand or it is someone else's, it may hold their life:")

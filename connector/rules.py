@@ -66,6 +66,20 @@ def _aud(r: dict) -> str:
     return grounding.norm_audience(r.get("audience", "")) or SELF
 
 
+def _plain(r: dict, data: dict) -> bool:
+    """Is it plain who this rule is for (grounding.names_someone)?"""
+    return grounding.names_someone(r.get("audience", ""), data.get("people") or [],
+                                   (data.get("selfcloud_grants") or {}).keys())
+
+
+def _no_aud(r: dict, data: dict) -> str:
+    """Who a rule that says NO is for. When its audience names nobody it is
+    plain who ('members of the public', 'les gens', 'quiconque', a name not
+    in his life story), it is a no for everyone: deny by default (R2)."""
+    a = _aud(r)
+    return a if a == ANYONE or _plain(r, data) else ANYONE
+
+
 def _says_no_to(r: dict, names, people) -> bool:
     """Does this NO rule reach an audience known by these names? Its own
     audience, each word of it, or the recorded person it names (verify I-24:
@@ -88,8 +102,8 @@ def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, l
     reps = [r for r in rs if r.get("kind") == "representation" and hit(r)]
     for level, (names_no, names_yes) in enumerate(((broad, strict), ({ANYONE}, {ANYONE}))):
         no = [r for r in disc if not r.get("allow") and (
-            _aud(r) in names_no if level else
-            _aud(r) != ANYONE and _says_no_to(r, names_no, people))]
+            _no_aud(r, data) in names_no if level else
+            _no_aud(r, data) != ANYONE and _says_no_to(r, names_no, people))]
         if no:
             return False, no[0], []
         yes = [r for r in disc if r.get("allow") and _aud(r) in names_yes]
@@ -191,6 +205,18 @@ class ConscienceRules:
         }
         self.c.data["rules"].append(rule)
         self.c._save()
+        return self._as_read(rule)
+
+    def _as_read(self, rule: dict) -> dict:
+        """The rule, and — for a no whose audience names nobody plain — that
+        it holds for everyone, said so he knows."""
+        if (rule.get("kind") == "disclosure" and not rule.get("allow")
+                and _aud(rule) != ANYONE and not _plain(rule, self.c.data)):
+            return {**rule, "holds_for": "everyone",
+                    "note": (f"JEFFEREY does not know who '{rule.get('audience')}' is, so this "
+                             "no holds for everyone. To make it a no for one person or "
+                             "group only, name them: someone in his life story, 'the "
+                             "family', 'my doctor', 'the neighbours'.")}
         return rule
 
     def remove_rule(self, rule_id_or_text: str = "", confirm: str = "") -> dict:
@@ -203,6 +229,10 @@ class ConscienceRules:
     def rules(self, kind: str = "") -> list[dict]:
         rs = self.c.data.get("rules", [])
         return [r for r in rs if not kind or r["kind"] == kind.lower()]
+
+    def listed(self, kind: str = "") -> list[dict]:
+        """The rules as he reads them: each no that holds for everyone says so."""
+        return [self._as_read(r) for r in self.rules(kind)]
 
     # ------------------------------------------------------------ enforcement
     def check_disclosure(self, audience: str, tags: str | list) -> dict:
@@ -299,9 +329,9 @@ class ConscienceRules:
         for r in self.rules("disclosure"):
             if r.get("allow") or not r.get("tags"):
                 continue
-            if _aud(r) in broad:
+            if _no_aud(r, self.c.data) != ANYONE and _aud(r) in broad:
                 out += r["tags"]
-            elif _aud(r) == ANYONE:
+            elif _no_aud(r, self.c.data) == ANYONE:
                 # a yes for exactly this audience opens it again
                 if not any(x.get("allow") and _aud(x) in strict
                            and set(x.get("tags") or []) & set(r["tags"])

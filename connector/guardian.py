@@ -186,30 +186,58 @@ sports optical dental clinic salon spa food foods liquor beer wine catering
 """.split())
 _PRICE_BAND = (0.5, 2.0)        # a new price, not a different purchase
 # A membership is a fee for the right to shop somewhere (Costco, Amazon
-# Prime). What else that place charges is shopping, never the fee billed
-# again: only a charge near the fee (a new price, or the fee with tax) is the
-# membership (R5: three Costco purchases inside the year became 'duplicate'
-# membership bills, and $274.50 was claimed from Costco).
+# Prime, CAA). What else that place charges is shopping, never the fee billed
+# again (R5: three Costco purchases inside the year became 'duplicate'
+# membership bills, and $274.50 was claimed from Costco). An amount near the
+# fee cannot tell them apart — real purchases near the fee's size always
+# happen (round 5: 'COSTCO.CA' $66.10, $70.00 and $58.20 were three
+# 'duplicates') — so a charge is the fee only when:
+#   - its own name says so: 'COSTCO MEMBERSHIP', 'CAA RENEWAL', 'AMAZON PRIME',
+#     'SYNDICAT COTISATION' — then it is the fee whatever the amount, so a new
+#     price or a second bill is still caught;
+#   - or he said this statement name is it (name_for_charge);
+#   - or the place never says so (a gym, 'GOODLIFE FITNESS'; 'SUN LIFE'), and
+#     the fee itself — the agreed amount, or with sales tax — was billed under
+#     exactly this name: then this name is how the fee is billed, and a new
+#     price under it (up to double) is the fee too.
+# Once a place bills the fee under a name that says so, its other names are
+# shopping, even at the fee's amount.
 _MEMBERSHIP_WORDS = frozenset("membership memberships member members adhesion cotisation "
                               "prime".split())
-_MEMBERSHIP_BAND = (0.85, 1.20)
+_FEE_WORDS = frozenset("""membership memberships member members mbr mbrs mbrshp mbshp mbrship
+    memb renewal renewals renew rnwl adhesion adhesions cotisation cotisations dues fee fees
+    annual annuel annuelle subscription subscr abonnement""".split())
+_TAX_RATES = (0.0, 0.05, 0.11, 0.12, 0.13, 0.14975, 0.15)
+
+
+def _words_of(merchant: Any) -> set[str]:
+    return set(re.findall(r"[^\W\d_]+", _fold(merchant)))
 
 
 def _is_membership(e: dict | None) -> bool:
     if not e:
         return False
-    return bool(set(re.findall(r"[^\W\d_]+", _fold(e.get("merchant", "")))) & _MEMBERSHIP_WORDS)
+    return bool(_words_of(e.get("merchant", "")) & _MEMBERSHIP_WORDS)
 
 
-def _near_fee(fee: float, amount: float) -> bool:
-    """Is this amount the membership fee itself (a new price, or with tax)?"""
-    return fee > 0 and _MEMBERSHIP_BAND[0] <= abs(amount) / fee <= _MEMBERSHIP_BAND[1]
+def _names_fee(e: dict, merchant: Any) -> bool:
+    """Does this charge's own name say it is the membership ('COSTCO
+    MEMBERSHIP', 'CAA RENEWAL', 'AMAZON PRIME' for an Amazon Prime)?"""
+    own = _words_of(e.get("merchant", "")) & _MEMBERSHIP_WORDS
+    return bool(_words_of(merchant) & (_FEE_WORDS | own))
 
 
-def _a_purchase(e: dict | None, amount: float | None) -> bool:
-    """A charge at the place of a membership that is not the fee: shopping."""
-    return (_is_membership(e) and amount is not None and e.get("amount_known", True)
-            and (e.get("amount") or 0) > 0 and not _near_fee(e["amount"], amount))
+def _exact_fee(fee: float, amount: float) -> bool:
+    """The agreed fee, or the fee with a Canadian sales tax on it."""
+    return fee > 0 and any(abs(abs(amount) - round(fee * (1 + t), 2)) <= 0.01
+                           for t in _TAX_RATES)
+
+
+def _desc(merchant: Any) -> str:
+    """A statement name as written, its numbers left out ('GOODLIFE FITNESS
+    #0123' is 'goodlife fitness')."""
+    return " ".join(t for t in _segment_tokens(_fold(merchant))
+                    if not any(ch.isdigit() for ch in t))
 
 
 def _extra(q: tuple[str, ...], r: tuple[str, ...]) -> tuple[str, ...]:
@@ -687,6 +715,10 @@ class Guardian:
         self.c.data.setdefault("charges_seen", [])
         self.owner_present = owner_present or _owner_hands
         self._today = today or _dt.date.today
+        # while one statement is checked: the names each membership's fee is
+        # billed under, and the lines of that statement (R5)
+        self._fees: dict | None = None
+        self._fees_now: list = []
 
     # ---------------------------------------------------------- old shapes
     def _entries(self) -> list[dict]:
@@ -819,37 +851,76 @@ class Guardian:
         return _forms(e.get("merchant", "")) + tuple(
             tuple(a.split()) for a in e.get("aliases", []) if a)
 
+    def _name_score(self, e: dict, merchant: Any) -> tuple[float, tuple[str, ...]]:
+        """How surely a statement name is this entry's, by name alone, and
+        the words it adds after the entry's name."""
+        best, extra = 0.0, ()
+        for qf in _forms(merchant):
+            for rf in self._entry_forms(e):
+                s = _score(qf, rf)
+                x = _extra(qf, rf) if s >= STRONG else ()
+                if s > best or (s == best and extra and not x):
+                    best, extra = s, x
+        return best, extra
+
+    def _fee_names(self, e: dict) -> set[str]:
+        """The statement names this membership's fee is billed under: those
+        that say so, or else those the fee itself was charged under (R5)."""
+        cache = self._fees if self._fees is not None else {}
+        if e["id"] in cache:
+            return cache[e["id"]]
+        pool = [(r.get("merchant"), r.get("amount")) for r in self._charges()
+                if not r.get("unreadable")] + list(self._fees_now)
+        named, exact = set(), set()
+        for m, amt in pool:
+            if amt is None or self._name_score(e, m)[0] < WEAK:
+                continue
+            if _names_fee(e, m):
+                named.add(_desc(m))
+            elif amt > 0 and _exact_fee(e["amount"], amt):
+                exact.add(_desc(m))
+        cache[e["id"]] = named or exact
+        return cache[e["id"]]
+
+    def _is_fee(self, e: dict, merchant: Any, amount: float | None) -> bool:
+        """Is this charge the membership's fee itself, not shopping at the
+        same place (R5)? Every charge is, when the entry is no membership or
+        the amount is not known."""
+        if (not _is_membership(e) or amount is None or not e.get("amount_known", True)
+                or (e.get("amount") or 0) <= 0 or amount < 0):
+            return True
+        if _names_fee(e, merchant) or _norm(merchant) in e.get("aliases", []):
+            return True
+        ratio = abs(amount) / e["amount"]
+        return (_desc(merchant) in self._fee_names(e)
+                and _PRICE_BAND[0] <= ratio <= _PRICE_BAND[1])
+
     def _ranked(self, merchant: Any, amount: float | None = None) -> list[tuple[float, dict]]:
         """Register entries this name may be, with how surely. A name that
         only starts with an entry's name, then names another business or a
         far-off amount, or that names a gift card or 'tech support' when the
-        entry does not, counts as a 'did you mean' only (verify I-36)."""
-        q = _forms(merchant)
+        entry does not, counts as a 'did you mean' only (verify I-36); so
+        does shopping where he holds a membership (R5)."""
         scam = bool(_SCAM.search(_fold(merchant)))
         out = []
         for e in self._entries():
             if e.get("merged_into"):
                 continue
-            best, extra = 0.0, ()
-            for qf in q:
-                for rf in self._entry_forms(e):
-                    s = _score(qf, rf)
-                    x = _extra(qf, rf) if s >= STRONG else ()
-                    if s > best or (s == best and extra and not x):
-                        best, extra = s, x
+            best, extra = self._name_score(e, merchant)
             if best < WEAK:
                 continue
-            if self._only_a_likeness(e, extra, amount, scam):
+            if self._only_a_likeness(e, extra, amount, scam,
+                                     not self._is_fee(e, merchant, amount)):
                 best = HINT          # a 'did you mean', never matched, whatever the amount
             out.append((best, e))
         return out
 
     @staticmethod
     def _only_a_likeness(e: dict, extra: tuple[str, ...], amount: float | None,
-                         scam: bool) -> bool:
+                         scam: bool, purchase: bool = False) -> bool:
         if scam and not _SCAM.search(_fold(e.get("merchant", ""))):
             return True                  # 'NETFLIX GIFT CARD', 'NETFLIX TECH SUPPORT'
-        if _a_purchase(e, amount):
+        if purchase:
             return True                  # 'COSTCO.CA' $89.99 is shopping, not the $65 fee
         if not extra:
             return False
@@ -1484,6 +1555,13 @@ class Guardian:
         keep = record and not errors and not _door_shut()
 
         def run() -> dict:
+            self._fees, self._fees_now = {}, [(x["merchant"], x["amount"]) for x in parsed]
+            try:
+                return judge_all()
+            finally:
+                self._fees, self._fees_now = None, []
+
+        def judge_all() -> dict:
             groups: dict[tuple, tuple] = {}
 
             def group(merchant, amount):
@@ -1496,6 +1574,10 @@ class Guardian:
             for line in parsed:
                 g, entry, hint = group(line["merchant"], line["amount"])
                 line.update(group=g, entry=entry, hint=hint)
+                line["member_shop"] = (entry is None and hint is not None
+                                       and _is_membership(hint)
+                                       and not self._is_fee(hint, line["merchant"],
+                                                            line["amount"]))
                 n = counts[(g, line["cents"], line["date"])] = \
                     counts.get((g, line["cents"], line["date"]), 0) + 1
                 line["seq"] = n
@@ -1740,28 +1822,18 @@ class Guardian:
                   f"when you agreed, this is a renewal you never authorized.", False)
             v["ask_first"] = agreed
             return v
-        if _a_purchase(entry, amt):
-            # shopping where he holds a membership is never the fee (R5)
-            return V("unexpected_merchant", 0.1, 0.0,
-                     f"{_m(amt)} at '{it['merchant']}'{when} is a purchase at the place of "
-                     f"your {name} ({_m(reg)} {_CADENCE_SAID.get(cad, cad)}), not the "
-                     f"membership itself — most likely ordinary shopping. Nothing to do "
-                     f"unless you don't recognize it.", True)
         if d is not None and prior and (cad in CADENCES or cad == "unknown"):
             min_gap = CADENCES[cad][1] if cad in CADENCES else 1
             # A plan billed every three months or longer is billed once in its
             # period, whatever the amount: a second charge inside it is a
             # second bill, not a price change (verify I-38: $59.99 against a
-            # yearly $119.99 was 'less than expected. Nothing to do'). Not a
-            # membership: there only the fee itself can be billed twice, and
-            # shopping there never counts against it (R5).
-            member = _is_membership(entry)
-            long = cad in CADENCES and CADENCES[cad][0] >= 91 and not member
+            # yearly $119.99 was 'less than expected. Nothing to do'). At a
+            # membership only the fee itself ever reaches here: shopping at
+            # the same place is never matched to it (R5, _is_fee).
+            long = cad in CADENCES and CADENCES[cad][0] >= 91
             # measured from the last charge that was itself accepted: an extra
             # bill must not push the next real renewal into looking early
-            same = [p for p in prior if (long or _same_amount(p["amount"], amt)
-                                         or (member and _near_fee(reg, p["amount"])))
-                    and not (member and not _near_fee(reg, p["amount"]))
+            same = [p for p in prior if (long or _same_amount(p["amount"], amt))
                     and p.get("_verdict") not in ("duplicate", "possible_card_testing")]
             if same:
                 p = same[-1]
@@ -1817,9 +1889,10 @@ class Guardian:
     def _result(line: dict, v: dict, already: bool, kept: bool) -> dict:
         entry, hint = line["entry"], line["hint"]
         detail = v["detail"]
-        member_shop = (hint is not None and entry is None
-                       and v["verdict"] == "unexpected_merchant"
-                       and _a_purchase(hint, line["amount"]))
+        # shopping where he holds a membership, said plainly — but a large
+        # amount still asks him to make sure he recognizes it (R5)
+        member_shop = (line.get("member_shop") and v["verdict"] == "unexpected_merchant"
+                       and abs(line["amount"]) < 500)
         if member_shop:
             detail = (f"{_m(line['amount'])} at '{line['merchant']}'"
                       f"{' on ' + line['date'] if line['date'] else ''} looks like a purchase "

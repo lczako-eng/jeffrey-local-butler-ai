@@ -1389,5 +1389,43 @@ class OnlyAPersonIsLetIn(AuthorityTest):
             self.assertIn("into the house", json.dumps(v), d)
 
 
+class OnlyTheCatIsLetIn(AuthorityTest):
+    """R10, round 5: the door rule tripped only on people named in a list,
+    so anyone missing from it was let in under any 'act' category: the dog
+    walker, the PSW, the realtor, the meter reader, his brother, his ex, his
+    grandkids. And the French was never read. Now only what is plainly not a
+    person — the cat, the dog, the fresh air — may be let in; anything else
+    is taken for someone, in English and in French."""
+
+    PEOPLE = ["Let the dog walker in", "Let the pet sitter in", "Let the PSW in",
+              "Let the exterminator in", "Let the realtor in", "Let the babysitter in",
+              "Let the property manager in", "Let the meter reader in", "Let the appraiser in",
+              "Let the landscaper in", "Let the chimney sweep in", "let my grandkids in",
+              "Let the assessor in", "Let the surveyor in", "Let the pest control in",
+              "let my brother in", "let my ex in", "let mom in", "let the census taker in",
+              "Laisse entrer le plombier", "Fais entrer le technicien",
+              "Ouvre la porte au plombier", "Laisser entrer l'exterminateur",
+              "Laisse le voisin entrer"]
+    NOT_PEOPLE = ["Let the cat in", "let the dog in before the storm", "let the fresh air in",
+                  "Laisse entrer le chat", "let in the cat at 9"]
+
+    def test_anyone_not_plainly_an_animal_or_the_air_stays_out(self):
+        r = self.py("""
+            import access
+            from conscience import Conscience
+            c = Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"])
+            with access.owner_console():
+                c.set_permission("pets", "act")
+                c.set_permission("lights", "act")
+            out({"no": [(d, c.authorize_action(k, d)) for d in %r for k in ("pets", "lights")],
+                 "yes": [(d, c.authorize_action("pets", d)) for d in %r]})
+        """ % (self.PEOPLE, self.NOT_PEOPLE))
+        for d, v in r["no"]:
+            self.assertFalse(v["allowed"], (d, v))
+            self.assertIn("into the house", json.dumps(v), d)
+        for d, v in r["yes"]:
+            self.assertTrue(v["allowed"], (d, v))
+
+
 if __name__ == "__main__":
     unittest.main()

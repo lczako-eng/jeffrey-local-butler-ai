@@ -151,38 +151,49 @@ def stem(w: str) -> str:
     return w
 
 
-# Two-letter words that say what something is about. Any other word of two
-# letters ('go', 'oh', 'ya') grounds nothing (R11: once two-letter words
-# counted, "is it ok to go up there" grounded on two unrelated facts).
-KNOWN_SHORT = frozenset("""
-tv ac er gp id pc pt ot iv bp hr rn md ct ex uk eu ai uv cd vr rv ev va ei hq pr ip os
-bc ab sk mb qc nb ns pe nl yt nt nu
+# Two-letter words that are only the grammar of a sentence, in English and
+# French: 'go', 'va' ('on y va'), 'ai' ("j'ai"). Every other two-letter word
+# says what something is about — a name ('Ed', 'Jo', 'Li', 'Dr Wu'), a brand
+# or an abbreviation ('HP', 'LG', 'CN', 'RA', 'TV', 'ER') — and one written in
+# capitals in the text ('VA', 'AI', 'GM', 'VW') always does (R11, round 5: a
+# short list of abbreviations that may count left every name and every
+# abbreviation missing from it out, so 'Ed' found nothing, 'Li has HIV' was
+# no longer private, and a value for "Ed's care" reached "Mom's care").
+SHORT_GRAMMAR = frozenset("""
+go va vu eu ai pu su lu dû du mû ah aw hm mm uh um oh ok eh ha ho hi yo ya ye ow oy
+lo ta an as at by he me my of on or so to up us we be do is it if in no am
 """.split())
+_CAPS2 = re.compile(r"(?<![^\W\d_])[A-Z]{2}(?![^\W\d_])")
 
 
-def _keeps(s: str) -> bool:
+def _keeps(s: str, caps: frozenset = frozenset()) -> bool:
     """Is this (stemmed) word enough to say what something is about? Three
-    letters or more; two letters only for a known abbreviation ('TV', 'AC',
-    'ER', 'GP'); a number, or letters with a number ('5G'); a Chinese or
-    Japanese pair (or a single character standing alone); or an emoji. The
-    little words are already gone (STOP)."""
+    letters or more; two letters unless they are only grammar ('go', 'va'),
+    and always when written in capitals ('VA', 'GM'); a number, or letters
+    with a number ('5G'); a Chinese or Japanese pair (or a single character
+    standing alone); or an emoji. The little words are already gone (STOP)."""
     if _RUN.match(s) or _is_symbol(s) or s.isdigit():
         return True
     if len(s) == 2:
-        return s in KNOWN_SHORT or any(c.isdigit() for c in s)
+        return s in caps or any(c.isdigit() for c in s) or s not in SHORT_GRAMMAR
     return len(s) >= 3
 
 
 @functools.lru_cache(maxsize=1 << 16)
 def _content(t: str) -> frozenset:
+    n = unicodedata.normalize("NFKC", t)
+    long = re.findall(r"[^\W\d_]{3,}", n)
+    shouting = bool(long) and sum(w.isupper() for w in long) >= 0.6 * len(long)
+    # in a message typed all in capitals, capitals say nothing
+    caps = frozenset() if shouting else frozenset(w.casefold() for w in _CAPS2.findall(n))
     out = set()
     for w in _words(t):
-        if w in STOP:
+        if w in STOP and w not in caps:
             continue
         s = stem(w)
-        if s in STOP:
+        if s in STOP and s not in caps:
             continue
-        if _keeps(s):
+        if _keeps(s, caps):
             out.add(s)
     return frozenset(out)
 
@@ -537,10 +548,79 @@ _ANY_DETERMINER = re.compile(r"^(?:my|the|our|ma|mon|mes|le|la|les|tout\s+le|all
 # public', 'public', 'the world' and 'world' are all 'anyone' (R2: 'the ' was
 # taken off before the list was read, so 'the public' and 'the world' never
 # matched, and a no for them let the family key read his health).
-_ANYONE_ALL = _ANYONE | frozenset(_ANY_DETERMINER.sub("", a) for a in _ANYONE) \
-    | frozenset({"general public", "public at large", "whole world", "the whole world",
-                 "the general public", "le public", "le monde", "le grand public",
-                 "grand public", "monde"})
+_ANYONE_ALL = (_ANYONE | frozenset(_ANY_DETERMINER.sub("", a) for a in _ANYONE)
+               | frozenset({"general public", "public at large", "whole world",
+                            "the whole world", "the general public", "le public",
+                            "le grand public", "grand public"})) - {"monde", "le monde"}
+# Not 'le monde' or 'monde': that is also a newspaper, or a person's name, and
+# a yes for it must not open a subject to everyone (a no for it still holds
+# for everyone: it names nobody plain — see names_someone).
+
+
+# The kinds of people and groups a rule can mean. A rule that says NO to an
+# audience naming none of these — nor anyone in his life story, nor one of
+# his keys, nor an address, nor 'Mrs. Patel' — is a no for everyone (R2,
+# round 5: 'members of the public', 'the entire world', 'les gens',
+# 'quiconque' each named nobody, so the family key read his diabetes; a
+# list of ways to say 'anyone' can never be complete, so when it is not
+# plain who a no is for, it is for everyone — silence is a no).
+SOMEONE_WORDS = FAMILY_WORDS | _stems("""
+    ex exwife exhusband fiance fiancee girlfriend boyfriend widow widower inlaws
+    stepchild stepson stepdaughter kid children grandkid grandchildren relative relatives
+    friend neighbour neighbor roommate tenant landlord landlady caretaker executor
+    trustee guardian doctor physician nurse psw caregiver carer pharmacist dentist
+    therapist psychologist psychiatrist specialist surgeon physio chiropractor
+    optometrist counsellor counselor hospital clinic pharmacy bank banker lawyer
+    notary accountant advisor adviser planner broker insurer insurance realtor agent
+    attorney priest pastor minister rabbi imam church parish congregation choir club
+    colleague coworker boss employer employee manager government police officer court
+    judge school teacher press newspaper reporter journalist media plumber
+    electrician contractor mechanic visitor guest buyer seller
+    voisin voisine voisins voisines ami amie amis amies médecin medecin docteur
+    infirmier infirmière infirmiere pharmacien dentiste banque banquier avocat
+    notaire comptable conseiller assureur propriétaire proprietaire locataire sœur
+    soeur frère frere fils fille femme mari mère mere père pere maman papa oncle
+    tante neveu nièce niece cousine épouse epouse époux epoux conjoint conjointe
+    enfant enfants famille prêtre pretre pasteur église eglise patron collègue
+    collegue gouvernement école ecole journaliste
+    """)
+# Words that make an audience everyone, whatever else it says ('anyone at
+# all', 'every person', 'tout le monde sauf moi').
+_QUANTIFIERS = frozenset("""any anyone anybody anything all every everyone everybody
+    whoever whomever whatever quiconque tout tous toute toutes chacun chacune chaque
+    personne n'importe nimporte""".split())
+
+
+def names_someone(audience, people=(), keys=()) -> bool:
+    """Is it plain who this audience is: the owner, 'anyone', a person in his
+    life story or their relationship, one of his keys, an AI's maker, an
+    e-mail address, a title and a name ('Mrs. Patel'), or a kind of person
+    or group ('my doctor', 'the neighbours', 'the bank')? A phrase that
+    names nobody of these, or that says 'any', 'all' or 'every' of someone,
+    is not plain."""
+    n = norm_audience(audience)
+    if not n:
+        return False
+    if n in (SELF, "anyone"):
+        return True
+    raw = normalise(audience)
+    ws = words(raw)
+    if any(w in _QUANTIFIERS for w in ws) or "n'importe" in raw:
+        return False
+    if _emails_in(raw):
+        return True
+    if n in {normalise(k) for k in keys or ()}:
+        return True
+    if n in {"ai", "an ai", "any ai", "engines", "engine", "ais", "anthropic", "claude",
+             "openai", "chatgpt", "gpt", "legacy", "family"}:
+        return True
+    if len(ws) >= 2 and ws[0] in _TITLES:
+        return True                                   # Mrs. Patel, Dr. Wu
+    if {stem(w) for w in ws} & SOMEONE_WORDS:
+        return True
+    names = rule_names(audience, people)
+    return any(norm_audience(p.get("name", "")) in names
+               for p in people or () if isinstance(p, dict) and p.get("name"))
 
 
 def norm_audience(s) -> str:

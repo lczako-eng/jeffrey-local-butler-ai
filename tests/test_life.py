@@ -1451,6 +1451,98 @@ class WhatHeQuotesIsNotWhatHeSays(LifeTest):
                          "his own yes changes it")
 
 
+class HisRejectionAnywhereAndHisOwnStories(LifeTest):
+    """R9, round 5: splitting what he typed into sentences lost the
+    rejection that came after the ranking ('… I don't buy it.', '… Never!'),
+    'Karen's view is that …', 'My sister: …' and 'kept telling me …' were
+    his words, and once his value was locked the AI could not correct its
+    own mistake. The filter also reached every fact and memory, so his life
+    stories became 'an AI's words', and his own change of mind waited for
+    /confirm. A ranking is his only with no rejection anywhere in the
+    message and no one else's voice; his stories and facts are his words."""
+
+    NOT_HIS = ["The doctor told us cost matters more than safety. I don't buy it.",
+               "My son wrote that cost matters more than safety. No way.",
+               "Cost matters more than safety? Never!",
+               "Cost matters more than safety — said no one ever.",
+               "Karen's view is that cost matters more than safety.",
+               "My sister: cost matters more than safety.",
+               "My sister's opinion: cost matters more than safety.",
+               "The salesman kept telling me cost matters more than safety.",
+               "My brother-in-law always goes on about how cost matters more than safety."]
+    HIS = ["D'après moi la sécurité passe avant le coût", "Safety: it matters more than cost",
+           "For the car: safety matters more than cost", "I think safety matters more than cost"]
+
+    def test_a_ranking_with_a_rejection_or_someone_elses_voice_is_never_his(self):
+        r = self.py("""
+            import provenance
+            res = {}
+            for ph in %r:
+                provenance.reset(); provenance.owner_typed(ph)
+                res[ph] = provenance.ranked_by_owner("cost", "safety")
+            mine = {}
+            for ph in %r:
+                provenance.reset(); provenance.owner_typed(ph)
+                fr = "coût" in ph
+                mine[ph] = provenance.ranked_by_owner("sécurité" if fr else "safety",
+                                                      "coût" if fr else "cost")
+            out({"res": res, "mine": mine})
+        """ % (self.NOT_HIS, self.HIS))
+        for ph, his in r["res"].items():
+            self.assertFalse(his, ph)
+        for ph, his in r["mine"].items():
+            self.assertTrue(his, ph)
+
+    def test_an_ai_can_still_correct_a_ranking_he_rejected(self):
+        r = self.py("""
+            import jefferey_chat as jc, provenance
+            d = jc.dispatch_tool
+            provenance.owner_typed("For groceries, cost matters more than safety? Never!")
+            a = d("set_priority", {"context": "groceries", "higher": "cost", "lower": "safety"})
+            provenance.owner_typed("Yes, I mean it: safety first.")
+            b = d("set_priority", {"context": "groceries", "higher": "safety", "lower": "cost"})
+            row = [p for p in store()["priorities"] if p["context"] == "groceries"][0]
+            out({"a": a, "b": b, "row": row})
+        """)
+        self.assertTrue(r["a"].get("unconfirmed"), r["a"])
+        self.assertIsNot(r["b"].get("changed"), False, r["b"])
+        self.assertEqual((r["row"]["higher"], r["row"]["lower"]), ("safety", "cost"))
+
+    def test_his_stories_and_facts_are_his_words_and_his_change_of_mind_is_his(self):
+        r = self.py("""
+            import jefferey_chat as jc, provenance
+            d = jc.dispatch_tool
+            mem = []
+            for s in ('My father always said "work hard and be kind", and I have lived by it.',
+                      "Mom said we would never go hungry, and we never did, even in 1956.",
+                      "The doctor told me I was lucky to survive the heart attack in 1999."):
+                provenance.owner_typed(s)
+                mem.append(jc.life.add_memory(s))
+            facts = []
+            for typed, fact in (("My doctor says I am allergic to penicillin",
+                                 "I am allergic to penicillin"),
+                                ("The house feels cold in winter so I keep the heat at 22",
+                                 "I keep the heat at 22")):
+                provenance.owner_typed(typed)
+                facts.append(d("remember_fact", {"fact": fact}))
+            provenance.owner_typed("For the car, safety matters more than cost.")
+            d("set_priority", {"context": "the car", "higher": "safety", "lower": "cost"})
+            provenance.owner_typed("I changed my mind. For the car, cost matters more than "
+                                   "safety now, money is tight.")
+            ch = d("set_priority", {"context": "the car", "higher": "cost", "lower": "safety"})
+            row = [p for p in store()["priorities"] if p["context"] == "the car"][0]
+            out({"mem": mem, "facts": facts, "ch": ch, "row": row})
+        """)
+        for m in r["mem"]:
+            self.assertTrue(m["verbatim"], m)
+            self.assertNotEqual(m.get("status"), "pending", m)
+        for f in r["facts"]:
+            self.assertNotEqual(f.get("status"), "pending", f)
+        self.assertNotEqual(r["ch"].get("changed"), False, r["ch"])
+        self.assertEqual((r["row"]["higher"], r["row"]["lower"]), ("cost", "safety"))
+        self.assertNotIn("proposed", r["row"])
+
+
 # ===================================================== repair round 4 (R11)
 class ALittleWordGroundsNothing(LifeTest):
     """R11: once two-letter words counted ('TV', 'AC'), so did 'go': "is it
@@ -1476,6 +1568,60 @@ class ALittleWordGroundsNothing(LifeTest):
         self.assertEqual(r["mcp"], [], r["mcp"])
         self.assertEqual(r["tv"], 1)
         self.assertEqual(r["er"], 1)
+
+
+class ANameOfTwoLettersIsStillAName(LifeTest):
+    """R11, round 5: 'go' was dropped by allowing only a short list of
+    two-letter abbreviations, so every name and abbreviation not on it
+    stopped counting: 'Ed', 'Jo', 'Dr Wu', 'VW', 'GM', 'RA' found nothing, a
+    draft to the neighbours saying 'Li has HIV' was no longer caught, and a
+    value for "Ed's care" was cited for "Mom's care". The French 'va' still
+    grounded ('on y va'). Now only the grammar of a sentence is left out
+    ('go', 'va', 'up', 'ok'), and two letters in capitals always count."""
+
+    FACTS = ["Ed's birthday is May 3", "Al from next door borrowed the ladder",
+             "Dr Wu is my heart doctor", "He drives a VW Golf", "Dad worked at GM for 30 years",
+             "The HP printer needs ink", "Jo is my granddaughter",
+             "Le chat va au vétérinaire le lundi", "Il va à la messe le dimanche"]
+    FINDS = {"Ed": "Ed's birthday is May 3", "Al": "Al from next door borrowed the ladder",
+             "Dr Wu": "Dr Wu is my heart doctor", "VW": "He drives a VW Golf",
+             "GM pension": "Dad worked at GM for 30 years", "HP": "The HP printer needs ink",
+             "Jo": "Jo is my granddaughter"}
+
+    def test_names_and_abbreviations_find_their_facts_and_little_words_nothing(self):
+        r = self.py("""
+            import jefferey_chat as jc
+            d = jc.dispatch_tool
+            for t in %r:
+                d("remember_fact", {"fact": t, "category": "general"})
+            ask = lambda q: [x.get("fact") for x in d("explain_basis", {"topic": q})
+                             .get("facts", [])]
+            out({"finds": {q: ask(q) for q in %r},
+                 "none": {q: ask(q) for q in ("on y va", "va", "is it ok to go up there",
+                                              "Can we go?")}})
+        """ % (self.FACTS, list(self.FINDS)), JEFFEREY_CLIENT="jefferey")
+        for q, want in self.FINDS.items():
+            self.assertIn(want, r["finds"][q], q)
+        for q, got in r["none"].items():
+            self.assertEqual(got, [], q)
+
+    def test_a_draft_repeating_a_short_named_private_fact_is_caught(self):
+        r = self.py("""
+            import jefferey_chat as jc, provenance
+            d = jc.dispatch_tool
+            for t in ("Li has HIV", "Jo is in AA now", "Mom has RA"):
+                d("remember_fact", {"fact": t, "category": "health"})
+            drafts = [d("check_draft", {"text": t, "audience": "the neighbours"})
+                      for t in ("Li has HIV", "Jo is in AA now", "Mom has RA")]
+            provenance.owner_typed("For Ed's care, staying at home matters more than cost.")
+            d("set_priority", {"context": "Ed's care", "higher": "staying at home",
+                               "lower": "cost"})
+            mom = d("explain_basis", {"topic": "Mom's care"})
+            out({"drafts": drafts, "mom": mom})
+        """, JEFFEREY_CLIENT="jefferey")
+        for x in r["drafts"]:
+            self.assertFalse(x["ok"], x)
+        self.assertNotIn("Ed's care", json.dumps(r["mom"].get("priorities", [])), r["mom"])
 
 
 # ===================================================== repair round 4 (R2)
@@ -1558,6 +1704,70 @@ class ANoForThePublicIsANoForEveryone(LifeTest):
                  ("the family", "my sister", "the public", "the world", "La Rue", "Le Blanc")])
         """)
         self.assertEqual(r, ["family", "sister", "anyone", "anyone", "la rue", "le blanc"])
+
+
+class ANoForNobodyPlainIsANoForEveryone(LifeTest):
+    """R2, round 5: the fix for 'the public' grew the list of ways of saying
+    'anyone', and every wording not on it named nobody: 'members of the
+    public', 'the entire world', 'les gens', 'quiconque', 'tout le monde sauf
+    moi'. A no for them let the family key read his diabetes on HTTP and over
+    Claude. A no whose audience names nobody plain now holds for everyone;
+    a no for someone plain ('the neighbours', 'my sister') still names only
+    them; and 'Le Monde' (a newspaper) is no longer 'anyone' for a yes."""
+
+    NOBODY_PLAIN = ["members of the public", "the entire world", "anyone at all", "all people",
+                    "every person", "everyone in the world", "the world at large",
+                    "anyone who asks", "les gens", "quiconque", "le monde entier",
+                    "tout le monde sauf moi", "Le Monde"]
+    PLAIN = ["the neighbours", "my sister", "the bank", "Mrs. Patel"]
+
+    def test_a_no_for_nobody_plain_holds_his_health_back_and_a_plain_no_does_not_spread(self):
+        self.py("""
+            import access, jefferey_chat as jc
+            with access.owner_console():
+                jc.life.add_memory("Diagnosed with type 2 diabetes in June.", visibility="family")
+                jc.life.add_memory("The orb made her laugh.", visibility="family")
+            out(1)
+        """)
+        r = self.py("""
+            import access
+            auds = %r
+            h, c = http()
+            import jefferey_mcp as m
+            seen, said = {}, {}
+            for a in auds:
+                with access.owner_console():
+                    h.conscience.save_fresh(lambda d: d.__setitem__("rules", []))
+                    said[a] = h.rules.set_rule("disclosure", "health", "Never tell my health to "
+                                               + a, audience=a, allow=False).get("holds_for")
+                m.conscience.refresh()
+                seen[a] = {"http": [x["text"] for x in c.get("/life", headers=H(TF)).json()["moments"]],
+                           "mcp": [x["text"] for x in mcp_call(m, "who_am_i")["moments"]]}
+            out({"seen": seen, "said": said})
+        """ % (self.NOBODY_PLAIN + self.PLAIN), JEFFEREY_CLIENT="family")
+        for a in self.NOBODY_PLAIN:
+            for where, texts in r["seen"][a].items():
+                self.assertNotIn("diabetes", " ".join(texts), (a, where))
+                self.assertIn("The orb made her laugh.", texts, (a, where))
+            self.assertEqual(r["said"][a], "everyone", a)
+        for a in self.PLAIN:
+            for where, texts in r["seen"][a].items():
+                self.assertIn("Diagnosed with type 2 diabetes in June.", texts, (a, where))
+            self.assertIsNone(r["said"][a], a)
+
+    def test_a_yes_for_le_monde_opens_nothing_to_anyone_else(self):
+        r = self.py("""
+            import access, grounding, jefferey_chat as jc
+            with access.owner_console():
+                jc.rules.set_rule("disclosure", "recipes", "Le Monde may print my recipes",
+                                  audience="Le Monde", allow=True)
+            out({"norm": [grounding.norm_audience(a) for a in ("Le Monde", "Monde")],
+                 "other": jc.rules.check_disclosure("my sister", "recipes")["allowed"],
+                 "them": jc.rules.check_disclosure("le monde", "recipes")["allowed"]})
+        """)
+        self.assertEqual(r["norm"], ["le monde", "monde"])
+        self.assertFalse(r["other"])
+        self.assertTrue(r["them"])
 
 
 if __name__ == "__main__":

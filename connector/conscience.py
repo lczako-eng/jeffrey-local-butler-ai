@@ -564,42 +564,57 @@ _NEVER_IN_TEXT = (
      "speaking for the owner on the phone or in his voice"),
 )
 # 'Let the plumber in', 'buzz the courier in', 'let Mike into the house',
-# 'let in whoever is at the door': a PERSON let into the home. 'Let the cat
-# in' and 'let the fresh air in' are not (R10: the cat was refused as
-# 'letting anyone into the house').
-_LET_IN = re.compile(r"\b(?:let|buzz|allow)\s+(?P<who>(?:[\w'’-]+\s+){1,5}?)(?:in|into|inside)\b"
+# 'let in whoever is at the door', 'laisse entrer le plombier', 'ouvre la
+# porte': letting someone into the home. Only what is plainly not a person
+# may be let in — the cat, the dog, the fresh air, the light (R10: 'Let the
+# cat in' was refused). Anything else is taken for someone: a list of people
+# can never be complete (round 5: the dog walker, the PSW, the realtor, his
+# grandkids and his brother were let in because they were not on it), so a
+# word not known to be an animal or the air keeps the door shut.
+_LET_IN = re.compile(r"\b(?:let|buzz)\s+(?P<who>(?:[\w'’-]+\s+){1,5}?)(?:in|into|inside)\b"
+                     r"|\ballow\s+(?P<who2>(?:[\w'’-]+\s+){1,5}?)(?:into|inside)\b"
                      r"|\b(?:let|buzz)\s+in\s+(?P<after>(?:[\w'’-]+\s*){1,3})", re.I)
-_PERSONS = frozenset("""him her them us someone somebody anyone anybody everyone everybody
-    whoever people person persons man men woman women guy guys lady ladies gentleman
-    stranger strangers visitor visitors guest guests caller callers courier couriers
-    driver drivers delivery deliveryman deliverymen plumber plumbers electrician
-    electricians technician technicians tech techs contractor contractors worker workers
-    workman workmen repairman repairmen handyman installer installers mover movers crew
-    inspector inspectors agent agents officer officers police cop cops nurse nurses
-    caregiver caregivers carer carers cleaner cleaners maid neighbour neighbours neighbor
-    neighbors friend friends relative relatives family cousin cousins nephew nephews niece
-    nieces grandson grandsons granddaughter granddaughters grandchild grandchildren son sons
-    daughter daughters boy boys girl girls kid kids child children teen teens teenager
-    teenagers salesman salesmen salesperson rep reps representative serviceman landlord
-    superintendent super janitor locksmith gardener gardeners painter painters roofer
-    roofers builder builders mechanic doctor paramedic paramedics firefighter firefighters
-    fireman firemen staff employee employees client clients customer customers buyer buyers
-    tenant tenants he she they whoever's somebody's someone's""".split())
-_NOT_A_NAME = frozenset("""the a an my his her our their this that these those some any
-    in into inside cat cats dog dogs kitty kitten puppy pup bird birds air light sunshine
-    sun water rain heat cold breeze""".split())
+_LAISSER = re.compile(r"\b(?:laiss\w*|fai[st]|faire|faites|fera|ferai)\s+entrer"
+                      r"(?:\s+(?P<after>(?:[\w'’-]+\s*){1,3}))?"
+                      r"|\blaiss\w*\s+(?P<who>(?:[\w'’-]+\s+){1,4}?)entrer\b"
+                      r"|\b(?:ouvr\w*|ouvert\w*)\s+(?:la\s+|les\s+)?portes?\b", re.I)
+_NOT_A_PERSON = frozenset("""cat cats dog dogs kitty kitties kitten kittens puppy puppies pup
+    pups pet pets bird birds air light sunlight sunshine sun breeze heat warmth cold
+    chat chats chatte chien chiens chienne chaton chatons chiot chiots oiseau lumiere
+    lumière soleil""".split())
+_ONLY_SAYS = frozenset("""the a an my our his her their this that these those some little bit
+    of fresh more le la les l un une des du de d mon ma mes notre nos son sa ses peu""".split())
+
+
+# Where what is let in ends: 'let in the cat at 9', 'laisse entrer le chat ce soir'.
+_LET_ENDS = frozenset("""at before after when while on for by until till then now tonight
+    today tomorrow please if so because à a avant après apres quand ce cette maintenant
+    pour si""".split())
+
+
+def _plainly_no_one(words: list[str]) -> bool:
+    ws = [w.lower().strip("'’.,!?;:") for w in words]
+    ws = [w for w in ws if w]
+    for i, w in enumerate(ws):
+        if i and w in _LET_ENDS:
+            ws = ws[:i]
+            break
+    for i, w in enumerate(ws):           # l'air, d'air: the article goes
+        if w[:2] in ("l'", "d'", "l’", "d’"):
+            ws[i] = w[2:]
+    return bool(ws) and all(w in _NOT_A_PERSON or w in _ONLY_SAYS for w in ws) and any(
+        w in _NOT_A_PERSON for w in ws)
 
 
 def _lets_someone_in(description: str) -> bool:
-    """Does this description let a person into the home?"""
-    for m in _LET_IN.finditer(str(description or "")):
-        raw = (m.group("who") or m.group("after") or "").split()
-        for w in raw:
-            low = w.lower().strip("'’")
-            if low.removesuffix("'s").removesuffix("’s") in _PERSONS or low in _PERSONS:
-                return True
-            # a name: 'let Mike in', 'buzz Karen in'
-            if w[:1].isupper() and w[1:].islower() and low not in _NOT_A_NAME:
+    """Does this description let anyone into the home? Yes, unless what is
+    let in is plainly not a person."""
+    text = str(description or "")
+    for rx in (_LET_IN, _LAISSER):
+        for m in rx.finditer(text):
+            d = m.groupdict()
+            raw = (d.get("who") or d.get("who2") or d.get("after") or "").split()
+            if not raw or not _plainly_no_one(raw):
                 return True
     return False
 
@@ -2365,10 +2380,14 @@ class Conscience:
             legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else {}
             locked = (bool(p.get("stated")) and not provenance.pending(p)) or (
                 (_real_number(legacy.get("confidence")) or 0) >= 0.8)
-            # Reversing what he stated is always his to confirm: even when
-            # the AI's words look like his own, they may be what he quoted
-            # and rejected (R9). Only his own hands change it at once.
-            if locked and engine:
+            # Reversing what he stated is his to confirm: even when the AI's
+            # words look like his own, they may be what he quoted and
+            # rejected (R9). His own hands change it at once — and so does
+            # his own change of mind, said in the first person at his own
+            # terminal in the very message that ranks it ('I changed my mind.
+            # For the car, cost matters more than safety now'; R9, round 5).
+            if locked and engine and not (status == "confirmed"
+                                          and provenance.changed_his_mind(higher, lower)):
                 p["proposed"] = {"higher": higher, "lower": lower, "confidence": c,
                                  "source": src, "at": _now()}
                 self._log_change("reversal_asked", context, was, now, src, applied=False)

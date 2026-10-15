@@ -180,10 +180,10 @@ RELEASE: dict[str, frozenset[str]] = {
     "conscience_include": frozenset({"id", "ref", "added"}),
     "conscience_exclude": FORGET | {"excluded"},
     "set_rule": frozenset({"id", "kind", "tags", "audience", "allow",
-                           "instruction", "added"}),
+                           "instruction", "added", "holds_for"}),
     "remove_rule": FORGET | {"removed"},
     "list_rules": frozenset({"id", "kind", "tags", "audience", "allow",
-                             "instruction", "added"}),
+                             "instruction", "added", "holds_for"}),
     "daily_brief": frozenset({"orb", "active_goals", "opportunities",
                               "recent_actions", "recent_observations",
                               "corrections_learned_from", "notices",
@@ -488,6 +488,8 @@ manager same le la les un une des de du dans sur sous pas plus encore aussi ici
 mon ma mes ton ta tes son sa ses notre votre nos vos leur leurs oublie perdu
 change changer requis expire nouveau nouvelle ancien ancienne bon mauvais el los
 las una unos en mi tu su der die das ein eine mein dein sein nicht
+and or but so then because which who when while if et ou mais donc puis car qui que
+quand si und oder aber y o pero
 """.split())
 # A number right after one of these is that thing's number, not the secret.
 _LABEL = frozenset(
@@ -614,8 +616,54 @@ def _house_hits(n: str) -> list[tuple[int, int, str]]:
     return out
 
 
+def _after_mark_value(fam: str, n: str, t: re.Match, raw: str, prev: str,
+                      first: bool, conn: bool, says: bool) -> bool:
+    """After a hidden mark, is this token still a secret? The mark stands
+    where the announced value was, so the slot is filled: the token right
+    after it is read as if the mark were not there ('My PIN [hidden] 4821'),
+    and anything further on only when it has a secret's own shape — never a
+    year, a street number, a phone or reference number, a unit, a dose or
+    an amount of money ('Alarm code [hidden], the house was built in 1987')."""
+    v = raw.lstrip(_LEAD + "-").rstrip(_TRAIL)
+    if not v or _DATE_SHAPE.fullmatch(v):
+        return False
+    at = t.start() + raw.find(v)
+    d = _ndigits(v)
+    if _PIN_VALUE.fullmatch(v) and (prev in _LABEL or prev in _NOT_A_CODE_BEFORE):
+        return False                    # 'ref 5678', 'apartment 1204'
+    if d:
+        if (_STREET_AFTER.match(n, t.end()) or _PHONE_AT.match(n, at) or _PHONE_WRITTEN.match(n, at)
+                or _UNIT_AFTER.match(n, t.end()) or _MONEY_AFTER.match(n, t.end())
+                or _MONEY_BEFORE.search(n[max(0, at - 2):at])):
+            return False
+    if first:
+        if fam in ("pw", "weak") and not d:
+            return False   # a plain word after a mark is the sentence going on
+        return _is_value(fam, raw, conn, 0, prev, says)
+    if _YEAR.fullmatch(v):
+        return False
+    if fam in ("pin", "code"):
+        return bool(_PIN_VALUE.fullmatch(v)) and (fam == "pin" or 4 <= d <= 8)
+    letters = any(c.isalpha() for c in v)
+    return (d >= 4 and bool(_PIN_VALUE.fullmatch(v))) or (d > 0 and letters and len(v) >= 4)
+
+
+def _shaped_run(n: str, end: int) -> int:
+    """Where a password ends when more password-shaped words follow it at
+    once ('password: Hunter22 Tulip99'): they go with it, so what is hidden is
+    the whole of it, and clean when read again."""
+    for u in _TOK.finditer(n, end):
+        if n[end:u.start()].strip(" \t") or _ndigits(u.group()) == 0:
+            break
+        uv = u.group().lstrip(_LEAD).rstrip(_TRAIL)
+        if not (any(c.isalpha() for c in uv) and len(uv) >= 4):
+            break
+        end = u.end()
+    return end
+
+
 def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
-    out = _house_hits(n)
+    out = _house_hits(n) if _PH not in n else []
     for m in _KW.finditer(n):
         fam = m.lastgroup
         what = PASSWORD if fam in ("pw", "weak") else CODE
@@ -630,50 +678,101 @@ def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
         # the value after the word: "PIN 4821", "mot de passe Desjardins est Soleil24"
         conn, says, gap, prev, last = False, False, 0, "", m.end()
         just_said, linked = False, False
+        # a hidden mark seen (the value's slot is filled), and whether this
+        # is the token right after it
+        marked, first = False, False
+        # the number after 'ref', 'tel' or 'call': most likely what they
+        # name, so the search goes on past it — but if nothing further on is
+        # the value, it is (a PIN after 'tel' is still a PIN)
+        candidate, skip_to = None, -1
+        found, stepped = False, False
         for t in _TOK.finditer(n, m.end(), min(len(n), m.end() + 200)):
+            if t.start() < skip_to:
+                last = t.end()
+                continue
             between = n[last:t.start()]
-            if "\n" in between and (gap or "\n\n" in between):
-                break
             raw = t.group()
             low = raw.lower()
+            if raw == _PH:
+                marked, first, prev, last = True, True, "", t.end()
+                continue
+            if "\n" in between and (gap or "\n\n" in between) and not first:
+                break
             if low in _CONNECT:
                 conn, says, last = True, low in _SAYS, t.end()
                 # what stood before 'is' was not the value's label: 'the door
                 # code at the new house is 4821' is a code, not a house number
                 just_said, prev = low in _SAYS, ""
+                first = False
                 continue
+            v_at = t.start() + len(raw) - len(raw.lstrip(_LEAD))
             # a phone number written as one ('appeler le 613 555 0199') is
-            # never the code, and nothing after it is either; nor is the
-            # number after 'ref' or 'dossier' — a hidden value no longer
-            # stops the search, so these are where it ends (R1)
-            if gap and _PHONE_WRITTEN.match(n, t.start() + len(raw) - len(raw.lstrip(_LEAD))):
-                break
-            if fam in ("pin", "code") and prev in _NOT_THE_VALUE_BEFORE and _ndigits(raw):
-                break
-            # a plain-word password right after 'is' or ':', when the words
-            # before it said whose ('Mot de passe de ma banque: soleil')
-            plain_ok = (fam == "pw" and just_said and linked and gap <= _MAX_GAP)
-            spaced = _spaced_pin(n, t.start()) if fam == "pin" and (gap == 0 or just_said) else None
-            if spaced:
-                out.append((*_trim(n, t.start(), spaced), what))
-                break
-            if ((gap <= _MAX_GAP or just_said)
-                    and _is_value(fam, raw, conn, 0 if plain_ok else gap, prev, says)
-                    and not (fam in ("pin", "code", "pw") and _ndigits(raw)
-                             and _UNIT_AFTER.match(n, t.end()))):
-                end = t.end()
-                if fam in ("pin", "code"):
-                    out += _more_codes(n, t.end(), what)
-                if fam in ("pw", "weak") and raw[-1:] not in ".,;!?\"'":
-                    # a passphrase can be several words: hide to the end of the clause
-                    for k, u in enumerate(_TOK.finditer(n, end, min(len(n), end + 120))):
-                        if k >= 5 or "\n" in n[end:u.start()]:
-                            break
-                        end = u.end()
-                        if u.group()[-1:] in ".,;!?\"'":
-                            break
-                out.append((*_trim(n, t.start(), end), what))
-                break
+            # never the code: step over it and read on
+            ph = _PHONE_WRITTEN.match(n, v_at) if (gap or marked) else None
+            if ph:
+                skip_to, gap, prev, last, first = ph.end(), gap + 1, "phone", ph.end(), False
+                stepped = True
+                continue
+            if marked:
+                spaced = _spaced_pin(n, t.start()) if fam == "pin" and first else None
+                if spaced:
+                    out.append((*_trim(n, t.start(), spaced), what))
+                    break
+                if _after_mark_value(fam, n, t, raw, prev, first, conn, says):
+                    end = _shaped_run(n, t.end()) if fam in ("pw", "weak") else t.end()
+                    out.append((*_trim(n, t.start(), end), what))
+                    if fam in ("pin", "code"):
+                        out += _more_codes(n, t.end(), what)
+                    break
+                if "\n" in between or low.strip(_LEAD + _TRAIL) in _LABEL:
+                    break      # a new line, or the sentence has moved on to a house, a unit …
+                first = False
+            else:
+                if (fam in ("pin", "code") and prev in _NOT_THE_VALUE_BEFORE
+                        and _PIN_VALUE.fullmatch(raw.lstrip(_LEAD + "-").rstrip(_TRAIL))):
+                    if candidate is None and _is_value(fam, raw, conn, gap, "", says):
+                        candidate = _trim(n, t.start(), t.end())
+                    gap, prev, last = gap + 1, low.strip(_LEAD + _TRAIL), t.end()
+                    just_said, stepped = False, True
+                    if raw[-1:] in ".!?;":
+                        break
+                    continue
+                # a plain-word password right after 'is' or ':', when the words
+                # before it said whose ('Mot de passe de ma banque: soleil')
+                plain_ok = (fam == "pw" and just_said and linked and gap <= _MAX_GAP)
+                spaced = _spaced_pin(n, t.start()) if fam == "pin" and (gap == 0 or just_said) else None
+                if spaced:
+                    out.append((*_trim(n, t.start(), spaced), what))
+                    found = True
+                    break
+                # past a phone or reference number stepped over, the value
+                # may stand as far off as after 'is' ('Alarm code, call the
+                # company 613 555 0199 first, then 4821')
+                if ((gap <= _MAX_GAP or just_said or (stepped and gap <= _MAX_GAP_FAR))
+                        and _is_value(fam, raw, conn, 0 if plain_ok else gap, prev, says)
+                        and not (fam in ("pin", "code", "pw") and _ndigits(raw)
+                                 and _UNIT_AFTER.match(n, t.end()))):
+                    end = t.end()
+                    if fam in ("pin", "code"):
+                        out += _more_codes(n, t.end(), what)
+                    if (fam in ("pw", "weak") and raw[-1:] not in ".,;!?\"'"
+                            and not (_ndigits(raw) and any(c.isalpha() for c in raw))):
+                        # a passphrase can be several words: hide to the end of
+                        # the clause — not past a bracket or a dash, and not
+                        # after a password that is whole already ('maple-tree-42
+                        # (the router is in the basement)')
+                        for k, u in enumerate(_TOK.finditer(n, end, min(len(n), end + 120))):
+                            if (k >= 5 or "\n" in n[end:u.start()] or u.group() == _PH
+                                    or u.group()[:1] in "([{<-"):
+                                break
+                            end = u.end()
+                            if u.group()[-1:] in ".,;!?\"'":
+                                break
+                    if fam in ("pw", "weak"):
+                        end = _shaped_run(n, end)
+                    out.append((*_trim(n, t.start(), end), what))
+                    found = True
+                    break
             gap += 1
             just_said = False
             if low.strip(_LEAD + _TRAIL) in _WHOSE:
@@ -685,6 +784,9 @@ def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
             if (gap > _MAX_GAP and not far) or raw[-1:] in ".!?;":
                 break
             prev, last = low.strip(_LEAD + _TRAIL), t.end()
+        if candidate and not found and not marked:
+            out.append((*candidate, what))
+            out += _more_codes(n, candidate[1], what)
         # ...or before it: "4821 is my PIN", "Soleil2024 est mon mot de passe"
         if fam in ("pw", "pin"):
             b = _BEFORE.search(n[max(0, m.start() - 80):m.start()])
@@ -968,30 +1070,41 @@ _HEXID = re.compile(r"(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{20,}")
 # engine that writes "My PIN [hidden] 4821" or "password: [hidden: looks like
 # a password] Hunter22!" has hidden nothing — the secret is right there — and
 # when the mark was read as a wall the scan never saw it, so it was kept and
-# later went out in clear to any guest. So the text is scanned as if every
-# mark were not there at all: once with each mark simply taken out (a secret
-# split by a mark, 'Hun[hidden]ter22!', joins up again) and once with each
-# mark and the spaces around it read as one space ('My PIN 4821'). JEFFEREY's
-# own hiding (mask_text) runs until nothing is left to find that way, so what
-# it sends out is always clean when it comes back in.
+# later went out in clear to any guest.
+#
+# So a mark is read for what it is: the place where a value was. For the
+# words that announce a secret, a mark fills the value's slot — the token
+# right after it is read as if the mark were not there ('My PIN [hidden]
+# 4821'), anything further on only when it has a secret's own shape ('…,
+# changed to 5932 today'), and never a year, a street or house number, a
+# phone or reference number ('Alarm code [hidden], the house was built in
+# 1987' is clean, and so is JEFFEREY's own answer handed back). A mark inside
+# a word is simply taken out, so a secret split by one joins up again
+# ('Hun[hidden]ter22!', 'PI[hidden]N 4821'). For shapes that need no word (a
+# card, a SIN, a key) every mark is read as not there at all, once taken out
+# and once as a space ('4111 1111 [hidden] 1111 1111').
 _MARK = re.compile(r"\[hidden(?::[^\[\]]{0,120})?\]")
 _MARK_SPACED = re.compile(r"[ \t]*\[hidden(?::[^\[\]]{0,120})?\][ \t]*")
+_MARK_IN_WORD = re.compile(r"(?<=[^\W_])\[hidden(?::[^\[\]]{0,120})?\](?=[^\W_])")
+_PH = "\ue000"   # a mark, for the words that announce a value (a private-use letter)
+_SLOT = re.compile(_MARK_IN_WORD.pattern + "|" + _MARK_SPACED.pattern)
 
 
-def _without_marks(text: str, rx: re.Pattern, glue: str
+def _without_marks(text: str, rx: re.Pattern, glue
                    ) -> tuple[str, list[int], dict[int, int]]:
-    """`text` with every mark replaced by `glue`; where each character of the
-    result came from in `text` (glue points at the start of its mark); and
-    where each such mark ends."""
+    """`text` with every mark replaced by `glue` (a string, or a function of
+    the match); where each character of the result came from in `text` (glue
+    points at the start of its mark); and where each such mark ends."""
     out: list[str] = []
     src: list[int] = []
     ends: dict[int, int] = {}
     last = 0
     for m in rx.finditer(text):
+        g = glue(m) if callable(glue) else glue
         out.append(text[last:m.start()])
         src.extend(range(last, m.start()))
-        out.append(glue)
-        src.extend([m.start()] * len(glue))
+        out.append(g)
+        src.extend([m.start()] * len(g))
         ends[m.start()] = m.end()
         last = m.end()
     out.append(text[last:])
@@ -999,31 +1112,60 @@ def _without_marks(text: str, rx: re.Pattern, glue: str
     return "".join(out), src, ends
 
 
+def _slot(m: re.Match) -> str:
+    """A mark inside a word goes; any other stands as the value's place."""
+    s, e, t = m.start(), m.end(), m.string
+    inside = (t[s:s + 1] == "[" and t[e - 1:e] == "]" and s > 0 and e < len(t)
+              and _WORDCH.match(t, s - 1) and _WORDCH.match(t, e))
+    return "" if inside else f" {_PH} "
+
+
+_WORDCH = re.compile(r"[^\W_]")
+
+
 def find_secrets(text: str) -> list[tuple[int, int, str]]:
     """Every secret-shaped span in `text`: (start, end, what), in the
     original text's positions, overlapping spans merged, in order. A hidden
-    mark is read as if it were not there (see _MARK above)."""
+    mark is read for what it is (see _MARK above)."""
     if not isinstance(text, str) or len(text) < 6 or _HEXID.fullmatch(text):
         return []                      # a sha256 or other long hex id: never a secret
+    if _PH in text:
+        text = text.replace(_PH, " ")  # one character for one: places are kept
     if "[hidden" not in text:
         return _find(text)
     hits: list[tuple[int, int, str]] = []
-    for rx, glue in ((_MARK, ""), (_MARK_SPACED, " ")):
+    for rx, glue, scan in ((_SLOT, _slot, _words), (_MARK, "", _shapes),
+                           (_MARK_SPACED, " ", _shapes)):
         plain, src, ends = _without_marks(text, rx, glue)
-        if not plain.strip():
+        if not plain.strip(" " + _PH):
             continue
-        for s, e, w in _find(plain):
+        for s, e, w in _find(plain, scan):
+            if not plain[s:e].strip(" " + _PH):
+                continue                # the mark itself: hidden already
             last = src[e - 1]
             # a span that ends on a mark's glue covers that whole mark
-            hits.append((src[s], ends[last] if glue and last in ends else last + 1, w))
+            hits.append((src[s], ends[last] if last in ends and plain[e - 1] in " " + _PH
+                         else last + 1, w))
     return _merge(hits)
 
 
-def _find(text: str) -> list[tuple[int, int, str]]:
+def _words(n: str) -> list[tuple[int, int, str]]:
+    return _keyword_hits(n)
+
+
+def _shapes(n: str) -> list[tuple[int, int, str]]:
+    return _key_hits(n) + _house_hits(n) + _number_hits(n) + _id_hits(n)
+
+
+def _everything(n: str) -> list[tuple[int, int, str]]:
+    return _key_hits(n) + _keyword_hits(n) + _number_hits(n) + _id_hits(n)
+
+
+def _find(text: str, scan=_everything) -> list[tuple[int, int, str]]:
     if len(text) < 3:
         return []
     n, src = _normalise(text)
-    hits = _key_hits(n) + _keyword_hits(n) + _number_hits(n) + _id_hits(n)
+    hits = scan(n)
     if not hits:
         return []
     if src is not None:
@@ -1065,7 +1207,7 @@ def mask_text(text: str) -> tuple[str, list[str]]:
     for the gate'); this runs until nothing more is found, and what it
     returns is clean when scanned again."""
     whats: list[str] = []
-    for _ in range(8):
+    for _ in range(32):
         hits = find_secrets(text)
         if not hits:
             break

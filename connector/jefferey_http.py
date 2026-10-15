@@ -639,10 +639,11 @@ def fill_form(f: FormIn) -> dict:
     """Given a form's field labels, return what Jefferey can fill from the
     user's own profile and exactly what he cannot. He never guesses, never
     fills a box about someone else with the owner's details, and never fills
-    sensitive identifiers — those go back to the user. On a bill of sale
-    between two people, say which side he is on: owner_is='seller' or
-    'buyer'; with nothing said, every seller's, buyer's, vendor's or shop's
-    box is left for him."""
+    sensitive identifiers — those go back to the user. When he is selling
+    or buying something himself, say which side he is on: owner_is='seller'
+    or 'buyer'; with nothing said, every seller's, buyer's, vendor's or
+    shop's box is left for him, and a shop's, dealer's or supplier's box is
+    never his."""
     return rep.fill_form(f.fields, f.owner_is)
 
 
@@ -1108,7 +1109,7 @@ def remove_rule(rule_id_or_text: str = "", confirm: str = "") -> dict:
 @gate("rules.read")
 def list_rules(kind: str = "") -> list:
     """Every standing rule the owner has written."""
-    return rules.rules(kind)
+    return rules.listed(kind)
 
 
 @door(app.get("/rules/check", operation_id="check_disclosure"))

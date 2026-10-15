@@ -1239,5 +1239,77 @@ class ShoppingIsNotTheMembership(Temp):
                          "duplicate")
 
 
+class TheFeeIsWhatSaysSoOrWhatItWasBilledAs(Temp):
+    """R5, round 5: the round-4 fix took any charge within 85-120% of a
+    membership's fee for the fee, so Costco purchases of $66.10, $70.00 and
+    $58.20 were still three 'duplicates' ($194.30 claimed). And it took any
+    other amount for shopping, so a real price rise, a renewal named as such,
+    or a double bill at another amount was waved through, and a large
+    charge lost its 'make sure you recognize it'. A charge is the fee when
+    its own name says so, or when it is billed under the very name the fee
+    itself was billed under; everything else there is shopping."""
+
+    def test_purchases_near_the_fee_are_shopping(self):
+        g = self.guard()
+        g.expect_charge("Costco Membership", 65.00, "yearly")
+        st = g.review_statement([
+            {"merchant": "COSTCO MEMBERSHIP", "amount": 65.00, "date": "2026-08-01"},
+            {"merchant": "COSTCO.CA", "amount": 66.10, "date": "2026-09-03"},
+            {"merchant": "COSTCO", "amount": 70.00, "date": "2026-09-10"},
+            {"merchant": "COSTCO.CA", "amount": 58.20, "date": "2026-09-20"}])
+        self.assertEqual(st["recoverable_total"], 0.0, st)
+        for r in st["flagged"]:
+            self.assertEqual(r["verdict"], "unexpected_merchant", r)
+        alone = self.guard(name="alone.json")
+        alone.expect_charge("Costco Membership", 65.00, "yearly")
+        r = alone.check_charge("COSTCO.CA", 71.18, "2026-09-03")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("unexpected_merchant", 0.0), r)
+
+    def test_a_charge_that_says_it_is_the_membership_is_the_membership(self):
+        g = self.guard()
+        g.expect_charge("Costco Membership", 65.00, "yearly")
+        g.check_charge("COSTCO MEMBERSHIP", 65.00, "2026-08-01")
+        r = g.check_charge("COSTCO MEMBERSHIP RENEWAL", 199.99, "2026-09-03")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", 199.99), r)
+        up = self.guard(name="up.json")
+        up.expect_charge("Costco Membership", 65.00, "yearly")
+        up.check_charge("COSTCO MEMBERSHIP", 65.00, "2025-10-01")
+        r = up.check_charge("COSTCO MEMBERSHIP", 130.00, "2026-10-01")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("amount_increased", 65.0), r)
+        p = self.guard(name="p.json")
+        p.expect_charge("Amazon Prime", 79.00, "yearly")
+        p.check_charge("AMAZON PRIME", 79.00, "2025-10-01")
+        r = p.check_charge("AMAZON PRIME", 99.00, "2026-10-01")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("amount_increased", 20.0), r)
+
+    def test_a_fee_billed_under_a_plain_name_still_shows_a_rise_or_a_second_bill(self):
+        g = self.guard()
+        g.expect_charge("GoodLife Fitness membership", 54.99, "monthly")
+        g.check_charge("GOODLIFE FITNESS", 54.99, "2026-08-01")
+        g.check_charge("GOODLIFE FITNESS", 54.99, "2026-09-01")
+        r = g.check_charge("GOODLIFE FITNESS", 69.99, "2026-10-01")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("amount_increased", 15.0), r)
+        two = self.guard(name="two.json")
+        two.expect_charge("GoodLife Fitness membership", 54.99, "monthly")
+        two.check_charge("GOODLIFE FITNESS", 54.99, "2026-09-01")
+        r = two.check_charge("GOODLIFE FITNESS", 109.98, "2026-10-01")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("amount_increased", 54.99), r)
+        caa = self.guard(name="caa.json")
+        caa.expect_charge("CAA membership", 120.00, "yearly")
+        caa.check_charge("CAA SOUTH CENTRAL ONT", 120.00, "2026-03-01")
+        r = caa.check_charge("CAA SOUTH CENTRAL ONT", 180.00, "2026-09-01")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", 180.0), r)
+
+    def test_a_large_charge_at_the_place_of_a_membership_is_still_called_large(self):
+        g = self.guard()
+        g.expect_charge("Amazon Prime", 99.00, "yearly")
+        g.expect_charge("CAA Membership", 120.00, "yearly")
+        for name, amt in (("AMAZON.CA", 1499.99), ("CAA TRAVEL", 1200.00)):
+            r = g.check_charge(name, amt, "2026-09-03")
+            self.assertEqual(r["verdict"], "unexpected_merchant", r)
+            self.assertIn("large amount", r["what_happened"], r)
+            self.assertIn("recognize", r["what_happened"], r)
+
+
 if __name__ == "__main__":
     unittest.main()
