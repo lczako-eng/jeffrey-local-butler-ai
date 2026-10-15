@@ -151,57 +151,112 @@ def stem(w: str) -> str:
     return w
 
 
-# Two-letter words that are only the grammar of a sentence, in English and
-# French: 'go', 'va' ('on y va'), 'ai' ("j'ai"). Every other two-letter word
-# says what something is about — a name ('Ed', 'Jo', 'Li', 'Dr Wu'), a brand
-# or an abbreviation ('HP', 'LG', 'CN', 'RA', 'TV', 'ER') — and one written in
-# capitals in the text ('VA', 'AI', 'GM', 'VW') always does (R11, round 5: a
-# short list of abbreviations that may count left every name and every
-# abbreviation missing from it out, so 'Ed' found nothing, 'Li has HIV' was
-# no longer private, and a value for "Ed's care" reached "Mom's care").
+# Words of two letters or fewer (R11, round 6). Round 4 let them count only
+# from a short list of abbreviations ('Ed', 'Jo', 'Dr Wu', 'VW' found nothing);
+# round 5 let every one count but a list of grammar words, and units, streets
+# and suffixes ('kg', 'Rd', 'Jr', 'où') and capitals typed for emphasis ('Is
+# it OK to GO UP there?') grounded unrelated facts. Now a short word counts
+# only when it is WRITTEN CAPITALISED — as a name ('Ed', 'Jo', 'Li', 'Wu') or
+# an abbreviation in capitals ('RA', 'GM', 'AA', 'ER', 'MS') — and the same
+# rule on both sides means it grounds only when the subject and the fact both
+# write it so. Never the grammar of a sentence, however written ('Do',
+# 'An', 'OK', 'ON', 'là', 'va'), never a unit, a street or a suffix ('kg',
+# 'km', 'Rd', 'St', 'Jr'), and never in a message typed all in capitals,
+# where capitals say nothing.
 SHORT_GRAMMAR = frozenset("""
-go va vu eu ai pu su lu dû du mû ah aw hm mm uh um oh ok eh ha ho hi yo ya ye ow oy
-lo ta an as at by he me my of on or so to up us we be do is it if in no am
+go va vu eu ai pu dû du mû ah aw hm mm uh um oh ok eh ha hi yo ya ye ow oy lo ta an as at by
+he me my of on or so to up us we be do is it if in no am ça ca là la où ou es tu il je le ma mi
+ne ni nu té te né ne se si sa ce un et en de au aux ex ps vs eg ie re cc ad
 """.split())
-_CAPS2 = re.compile(r"(?<![^\W\d_])[A-Z]{2}(?![^\W\d_])")
+_UNITS = frozenset("kg km mg cm mm ml lb oz ft mi hr gb mb kb tb hz kw am pm rd st ln av "
+                   "jr sr mt pl ct hw bd".split())
+# titles and a hesitation: never as 'Dr', 'Ms', 'Mr', 'Er' — but 'MS', 'ER' are
+_TITLES_SHORT = frozenset("dr mr ms er".split())
+# ...and the few grammar words that are also people's names ('Mr. Do', 'An'):
+# a draft that repeats one with a private fact about them is still caught
+# (check_draft reads names this way; grounding never does)
+_NAMES_TOO = frozenset("do an ma ha vu vo ly".split())
+_ALPHA2 = re.compile(r"^[^\W\d_]{1,2}$")
 
 
-def _keeps(s: str, caps: frozenset = frozenset()) -> bool:
-    """Is this (stemmed) word enough to say what something is about? Three
-    letters or more; two letters unless they are only grammar ('go', 'va'),
-    and always when written in capitals ('VA', 'GM'); a number, or letters
-    with a number ('5G'); a Chinese or Japanese pair (or a single character
-    standing alone); or an emoji. The little words are already gone (STOP)."""
+def _short_keeps(w: str, low: str, shouting: bool, names: bool) -> bool:
+    """Does a word of two letters or fewer, written `w`, say what something
+    is about? Only capitalised, and never grammar, a unit or a title."""
+    if len(low) != 2 or not w[:1].isupper():
+        return False
+    caps = w.isupper()
+    if low in _UNITS or (low in _TITLES_SHORT and not caps):
+        return False
+    if names:
+        return low not in SHORT_GRAMMAR or low in _NAMES_TOO
+    return not shouting and low not in SHORT_GRAMMAR
+
+
+def _keeps(s: str) -> bool:
+    """Is this (stemmed) word of three letters or more, a number, letters
+    with a number ('5G'), a Chinese or Japanese pair (or a single character
+    standing alone) or an emoji enough to say what something is about? The
+    little words are already gone (STOP)."""
     if _RUN.match(s) or _is_symbol(s) or s.isdigit():
         return True
-    if len(s) == 2:
-        return s in caps or any(c.isdigit() for c in s) or s not in SHORT_GRAMMAR
+    if any(c.isdigit() for c in s):
+        return True
     return len(s) >= 3
 
 
 @functools.lru_cache(maxsize=1 << 16)
-def _content(t: str) -> frozenset:
-    n = unicodedata.normalize("NFKC", t)
+def _content(t: str, names: bool = False) -> frozenset:
+    n = unicodedata.normalize("NFKC", t).translate(_QUOTES)
     long = re.findall(r"[^\W\d_]{3,}", n)
     shouting = bool(long) and sum(w.isupper() for w in long) >= 0.6 * len(long)
-    # in a message typed all in capitals, capitals say nothing
-    caps = frozenset() if shouting else frozenset(w.casefold() for w in _CAPS2.findall(n))
     out = set()
-    for w in _words(t):
-        if w in STOP and w not in caps:
+    for m in _TOKEN.finditer(n):
+        run, w = m.group("run"), m.group("w")
+        if run:
+            low = _normalise(run)
+            out.update([low] if len(low) == 1 else (low[i:i + 2] for i in range(len(low) - 1)))
             continue
-        s = stem(w)
-        if s in STOP and s not in caps:
+        if not w:
+            sym = m.group("sym")
+            if sym and _is_symbol(sym):
+                out.add(sym)
             continue
-        if _keeps(s, caps):
-            out.add(s)
+        if "'" in w:
+            head, _, tail = w.partition("'")
+            if len(head) == 1 or head.casefold() == "qu":   # l'alarme, d'abord, qu'il
+                w = tail.replace("'", "")
+            elif tail.casefold() == "s":                    # possessive
+                w = head
+            else:
+                w = w.replace("'", "")
+        if not w:
+            continue
+        low = _normalise(w)
+        if _ALPHA2.match(low):
+            if _short_keeps(w, low, shouting, names):
+                out.add(low)
+            continue
+        if low in STOP:
+            continue
+        st = stem(low)
+        if st in STOP:
+            continue
+        if _keeps(st):
+            out.add(st)
     return frozenset(out)
 
 
 def content(text) -> set[str]:
     """The words that say what something is about: whole, stemmed, without
-    the little words (see _keeps)."""
+    the little words; a word of two letters or fewer only when written
+    capitalised as a name or an abbreviation (see _short_keeps)."""
     return set(_content(str(text or "")))
+
+
+def name_words(text) -> set[str]:
+    """content(), and also the short names that are grammar words too ('Mr.
+    Do', 'An'): how check_draft reads a private fact and a draft (R11)."""
+    return set(_content(str(text or ""), True))
 
 
 # A few everyday words that mean the same subject, so 'booking a flight'
@@ -262,7 +317,7 @@ def context_problem(context, engine: bool) -> str | None:
                     "himself. Name the subject it is about (for example 'Mom's care' "
                     "or 'travel'); nothing was stored.")
         return None
-    if not content(n):
+    if not content(context):
         return ("Name the subject this value is about in a word or two (for example "
                 "'travel' or 'Mom's care'); nothing was stored.")
     if engine and not {stem(w) for w in words(n)} - _BROAD:
@@ -279,7 +334,7 @@ def context_match(context, topic_words: set[str]) -> tuple[str, str] | None:
     n = normalise(context)
     if n in CATCH_ALL:
         return ("general", "a value he holds about everything")
-    c = content(n)
+    c = content(context)             # as written: "Ed's care" keeps 'Ed' (R11)
     if not c:
         return None
     if c <= topic_words:

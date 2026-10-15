@@ -471,7 +471,9 @@ def authorize_action(a: ActionAskIn) -> dict:
     single-use authorization_id, good for 30 minutes; cite it in log_action.
     A no is final: recommend instead — only the owner can raise the level.
     Moving money, gift cards, crypto, phone calls and the doors are never
-    approved."""
+    approved as a category; a description that lets someone into his home,
+    or names moving money, gift cards, crypto or a call as him, is 'ask the
+    owner first'."""
     return conscience.authorize_action(a.category, a.description, a.amount,
                                        a.currency, a.recurring)
 
@@ -644,9 +646,13 @@ def fill_form(f: FormIn) -> dict:
     fills a box about someone else with the owner's details, and never fills
     sensitive identifiers — those go back to the user. When he is selling
     or buying something himself, say which side he is on: owner_is='seller'
-    or 'buyer'; with nothing said, every seller's, buyer's, vendor's or
-    shop's box is left for him, and a shop's, dealer's or supplier's box is
-    never his."""
+    or 'buyer'. On a form with both sides a plain 'Phone' or 'Address'
+    follows that side; with nothing said, every seller's, buyer's, vendor's
+    or shop's box, and a plain box on a two-sided form, is left for him. A
+    form with one side only beside a shop or a 'Your name' box is the shop's,
+    and a shop's, dealer's or supplier's box is never his. His payment card
+    goes only into a box that names a credit, debit or payment card and
+    nothing else; a plain 'Card number' comes back under needs_you."""
     return rep.fill_form(f.fields, f.owner_is)
 
 
@@ -744,7 +750,9 @@ def check_charge(c: ChargeIn) -> dict:
     refund. unexpected_merchant is informational (offer a dispute only if
     they say it is not theirs); needs_date: ask for the date;
     possible_card_testing / possible_scam: the next step is the bank, on the
-    number on the card. The rest: say it plainly and offer a dispute_pack."""
+    number on the card. The rest: say it plainly and offer a dispute_pack —
+    but when the action says to ask him first (a charge near a membership's
+    fee that may be shopping there), ask him first."""
     return guard.check_charge(c.merchant, c.amount, c.date, ref=c.ref)
 
 

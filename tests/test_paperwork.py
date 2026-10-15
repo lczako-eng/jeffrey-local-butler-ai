@@ -472,7 +472,7 @@ class SecretsGoOnlyIntoTheirOwnBoxes(PaperworkTest):
               "Spouse's SIN", "Child's SIN", "Health card number", "Business number (BN)",
               "Business name", "Pinecrest Lodge resident?", "Missing items",
               "Using a wheelchair?", "Housing type", "Closing date", "SIN", "PIN",
-              "Card number"]
+              "Card number", "Credit card number"]
 
     def test_fill_form_maps_each_secret_only_to_a_box_that_asks_for_it(self):
         r = self.py("""
@@ -482,13 +482,16 @@ class SecretsGoOnlyIntoTheirOwnBoxes(PaperworkTest):
             out(jc.dispatch_tool("fill_form", {"fields": %r}))
         """ % (SIN, self.LABELS), JEFFEREY_CLIENT="jefferey")
         refs = {k: v for k, v in r["filled"].items() if str(v).startswith("vault:")}
+        # a plain 'Card number' names no payment card, so it goes back to him
+        # (R3, round 6); 'Credit card number' does
         self.assertEqual(refs, {"SIN": "vault:sin", "PIN": "vault:pin",
-                                "Card number": "vault:card_number"}, r["filled"])
+                                "Credit card number": "vault:card_number"}, r["filled"])
         self.assertEqual(r["filled"]["Shipping address"], "12 Elm St")
         why = {n["field"]: n["why"] for n in r["needs_you"]}
         self.assertIn("someone else's social insurance number", why["Spouse's SIN"])
         self.assertIn("someone else's", why["Child's SIN"])
         self.assertIn("sensitive", why["Health card number"])
+        self.assertIn("credit, debit or payment card", why["Card number"])
         says = [x["say"] for x in r["from_your_vault"]]
         self.assertIn("Your social insurance number (SIN), from your vault, will go into "
                       "the box 'SIN'.", says)
@@ -935,7 +938,7 @@ class AfterTheFixes(PaperworkTest):
                  "Blue Cross card number", "Pharmacy card number", "OAS card number",
                  "Transit card number", "Visa number", "Voicemail PIN", "Phone PIN",
                  "My Account PIN"]
-        right = ["Credit card number", "Card number", "PIN"]
+        right = ["Credit card number", "Card number", "PIN"]     # 'Card number': R3, round 6
         r = self.py("""
             import jefferey_chat as jc
             keep_secrets(visa_card=%r, pin="8421")
@@ -949,8 +952,8 @@ class AfterTheFixes(PaperworkTest):
             self.assertNotIn(n, r["plan"]["filled"], n)
             self.assertTrue(r["fills"][n].get("refused"), (n, r["fills"][n]))
         self.assertEqual(r["plan"]["filled"], {"Credit card number": "vault:visa_card",
-                                               "Card number": "vault:visa_card",
                                                "PIN": "vault:pin"})
+        self.assertIn("Card number", [n["field"] for n in r["plan"]["needs_you"]])
         self.assertNotIn(CARD, self.egress.read_text() if self.egress.exists() else "")
 
     def test_an_ai_cannot_change_who_he_is_by_itself(self):
@@ -1323,18 +1326,20 @@ class ASideHeNamesIsHisAndAShopNeverIs(PaperworkTest):
 
     SELLING_30 = ["Seller full name", "Seller address", "Driver's licence number", "VIN",
                   "Odometer reading", "Sale price", "Seller signature"]
+    # round 6 (R4): a form with one side only beside a shop's word (a dealer,
+    # a 'vendor' at a market) is a shop's form: its party boxes go back to him
+    # whatever was said
     STATED = [
         (["Purchaser name", "Purchaser address", "Purchaser phone", "Dealer name",
-          "Date of purchase", "Model number"], "buyer",
-         ["Purchaser name", "Purchaser address", "Purchaser phone"], "Dealer name"),
+          "Date of purchase", "Model number"], "buyer", [], "Dealer name"),
         (["Buyer name", "Buyer address", "Buyer phone", "Item"], "buyer",
          ["Buyer name", "Buyer address", "Buyer phone"], None),
         (["Seller name", "Seller address", "Seller phone", "Item description"], "seller",
          ["Seller name", "Seller address", "Seller phone"], None),
         (["Vendor name", "Vendor address", "Vendor phone", "Products sold"], "seller",
-         ["Vendor name", "Vendor address", "Vendor phone"], None),
+         [], "Vendor name"),
         (["Purchaser name", "Purchaser address", "Dealership name", "Salesperson", "VIN"],
-         "buyer", ["Purchaser name", "Purchaser address"], "Dealership name"),
+         "buyer", [], "Dealership name"),
     ]
     SHOPS = ["Sold by", "Purchased from", "Supplier name", "Bought from", "Distributor name",
              "Installer name", "Vendu par"]
@@ -1366,7 +1371,7 @@ class ASideHeNamesIsHisAndAShopNeverIs(PaperworkTest):
         self.assertEqual(r["silent"]["filled"], {}, "with nothing said, still nothing")
         for (fields, side, his, shop), x in zip(self.STATED, r["rest"]):
             self.assertEqual(sorted(x["filled"]), sorted(his), (fields, x))
-            self.assertEqual(x["owner_is"], side)
+            self.assertEqual(x["owner_is"], side if his else None)
             if shop:
                 self.assertIn(shop, [n["field"] for n in x["needs_you"]])
 
@@ -1439,7 +1444,8 @@ class APaymentCardOnlyIntoAPaymentCardBox(PaperworkTest):
             good = mcp_call(m, "fill_pdf", {"pdf_path": ok,
                                             "values": {"Card number": "vault:visa_card"}})
             plan = jc.dispatch_tool("fill_form", {"fields": ["Card number (Health card)",
-                                                             "Card number"]})
+                                                             "Card number",
+                                                             "Credit card number"]})
             out({"res": res, "good": good, "plan": plan, "outbox": outbox()})
         """ % (CARD, self.OTHER), JEFFEREY_CLIENT="jefferey")
         for tip, x in r["res"].items():
@@ -1450,8 +1456,11 @@ class APaymentCardOnlyIntoAPaymentCardBox(PaperworkTest):
                              ["Card number"], (tip, x["read"]))
         self.assertIn("written", r["good"], "a box that is plainly a payment card still fills")
         self.assertEqual(len(r["outbox"]), 1)
-        self.assertEqual(r["plan"]["filled"], {"Card number": "vault:visa_card"})
-        self.assertIn("Card number (Health card)", [n["field"] for n in r["plan"]["needs_you"]])
+        # a plain 'Card number' names no payment card: it goes back to him too
+        # (R3, round 6)
+        self.assertEqual(r["plan"]["filled"], {"Credit card number": "vault:visa_card"})
+        for label in ("Card number (Health card)", "Card number"):
+            self.assertIn(label, [n["field"] for n in r["plan"]["needs_you"]])
         self.assertNotIn(CARD, self.egress.read_text() if self.egress.exists() else "")
 
     def test_a_box_whose_name_and_description_ask_for_different_secrets_is_left(self):
@@ -1469,11 +1478,11 @@ class APaymentSecretOnlyWhereAPaymentCardIsNamed(PaperworkTest):
     """R3, round 5: a description that named another NUMBER without the word
     'card' ('Membership number', 'Aeroplan number', 'Library', 'Patient
     number') 'asked for nothing', so fill_pdf wrote his credit card into the
-    copy. Every word that says which number a box means must now name a
-    payment card, a bank, or nothing in particular. And the cures that
-    over-refused are undone: the CVV 'on the back of your credit card', 'Your
-    RBC card', and a 'Comments' box that is plainly not his is refused, not
-    sent back as his to fill."""
+    copy. Round 6: a payment card's secret goes only where a credit, debit or
+    payment card is NAMED and nothing else is (tests/test_corpus_forms.py);
+    the CVV 'on the back of your credit card' still fits, a bank's name
+    alone ('Your RBC card') does not, and a 'Comments' box that is plainly
+    not his is refused, not sent back as his to fill."""
 
     OTHER = [("Card number", "Membership number"), ("Card number", "Aeroplan number"),
              ("Card number", "Air Miles collector number"), ("Card number", "Library"),
@@ -1504,10 +1513,14 @@ class APaymentSecretOnlyWhereAPaymentCardIsNamed(PaperworkTest):
                              [x["name"]], (x["tip"], x["read"]))
         self.assertEqual(r["outbox"], [])
 
-    def test_a_card_described_by_where_it_is_or_by_its_bank_still_fits(self):
+    def test_a_card_described_by_where_it_is_still_fits_and_a_bank_alone_does_not(self):
+        # round 6 (R3): a payment card's secret needs a box that NAMES a
+        # credit, debit or payment card; 'Your RBC card' names a bank, and a
+        # plain 'Card number' box with it goes back to him
         r = self.py("""
             import representative as rp
             out([rp.vault_fits("visa_cvv", "Security code", "On the back of your credit card"),
+                 rp.vault_fits("visa_card", "Card number", "Your TD Visa card"),
                  rp.vault_fits("visa_cvv", "Security code",
                                "3 digits next to your signature on the card"),
                  rp.vault_fits("visa_card", "Card number", "Your RBC card"),
@@ -1516,7 +1529,7 @@ class APaymentSecretOnlyWhereAPaymentCardIsNamed(PaperworkTest):
                  rp.vault_fits("visa_card", "Card number", "Credit card number - not your gift card"),
                  rp.vault_fits("visa_cvv", "Card number", "Security code")])
         """)
-        self.assertEqual(r, [True, True, True, True, True, False, False])
+        self.assertEqual(r, [True, True, False, False, False, False, False, False])
 
     def test_a_secret_put_in_comments_is_refused_and_not_handed_back_as_his(self):
         r = self.py("""

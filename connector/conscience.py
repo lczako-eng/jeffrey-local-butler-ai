@@ -540,8 +540,14 @@ _NEVER = (
     (re.compile(r"\b(?:unlock\w*|locks?|alarms?|garage ?doors?|garage ?openers?|doors?)$"),
      "letting anyone into the house"),
 )
-# Inside a description, under any category, only the unmistakable ones.
-_NEVER_IN_TEXT = (
+# Inside a description: never a 'never' (R10, round 6). The words of a
+# description are an engine's, and reading them for 'never' refused ordinary
+# errands as 'letting anyone into the house … it may be a scam' ('Let me
+# know in an hour', 'Let it sit in the fridge'). What a description names
+# that only the owner decides — moving money, gift cards, crypto, phoning
+# as him, a door or an alarm, letting someone in — is 'ask the owner
+# first': not allowed for the engine, said plainly, with no accusation.
+_ASK_IN_TEXT = (
     (re.compile(r"\b(?:e-?\s?transfer\w*|wire\s+(?:transfer|\$|money|funds|it|the)\w*"
                 r"|by\s+wire\b|interac|western\s?union|money\s?gram|money\s?order"
                 r"|(?:bank|money|wire|fund)\s+transfers?\b"
@@ -554,8 +560,11 @@ _NEVER_IN_TEXT = (
     (re.compile(r"\b(?:bitcoin|crypto\w*|btc|ethereum|usdt|usdc|tether|stablecoins?)\b"),
      "crypto-currency"),
     (re.compile(r"\b(?:unlock\s+(?:the\s+)?(?:front|back|side|garage|door|house|gate|lock)\w*"
-                r"|disarm\w*|open\s+(?:the\s+)?(?:front\s+|back\s+|side\s+)?(?:door|garage|gate))"),
-     "letting anyone into the house"),
+                r"|disarm\w*|d[ée]sarm\w*|d[ée]verrouill\w*"
+                r"|open\s+(?:up\s+)?(?:the\s+)?(?:front\s+|back\s+|side\s+|main\s+)?"
+                r"(?:door|garage|gate)s?\b(?!\s+(?:for|to)\b)"
+                r"|ouvr\w*\s+(?:la\s+|les\s+)?portes?\b(?!\s+(?:à|a|au|aux|pour)\b))"),
+     "opening the house"),
     (re.compile(r"\b(?:phone\s?call|place\s+a\s+call|in\s+(?:my|his|her)\s+voice"
                 r"|call\s+(?:him|her|them|back|the\s+(?:bank|police|number|office)"
                 r"|[a-z]+\s+and\s+(?:tell|say|ask))"
@@ -563,60 +572,314 @@ _NEVER_IN_TEXT = (
                 r"|phone\s+(?:him|her|them|the\s+(?:bank|police|office)|back|up))"),
      "speaking for the owner on the phone or in his voice"),
 )
-# 'Let the plumber in', 'buzz the courier in', 'let Mike into the house',
-# 'let in whoever is at the door', 'laisse entrer le plombier', 'ouvre la
-# porte': letting someone into the home. Only what is plainly not a person
-# may be let in — the cat, the dog, the fresh air, the light (R10: 'Let the
-# cat in' was refused). Anything else is taken for someone: a list of people
-# can never be complete (round 5: the dog walker, the PSW, the realtor, his
-# grandkids and his brother were let in because they were not on it), so a
-# word not known to be an animal or the air keeps the door shut.
-_LET_IN = re.compile(r"\b(?:let|buzz)\s+(?P<who>(?:[\w'’-]+\s+){1,5}?)(?:in|into|inside)\b"
-                     r"|\ballow\s+(?P<who2>(?:[\w'’-]+\s+){1,5}?)(?:into|inside)\b"
-                     r"|\b(?:let|buzz)\s+in\s+(?P<after>(?:[\w'’-]+\s*){1,3})", re.I)
-_LAISSER = re.compile(r"\b(?:laiss\w*|fai[st]|faire|faites|fera|ferai)\s+entrer"
-                      r"(?:\s+(?P<after>(?:[\w'’-]+\s*){1,3}))?"
-                      r"|\blaiss\w*\s+(?P<who>(?:[\w'’-]+\s+){1,4}?)entrer\b"
-                      r"|\b(?:ouvr\w*|ouvert\w*)\s+(?:la\s+|les\s+)?portes?\b", re.I)
+# --- letting a person into the home (R10, round 6) --------------------------
+# Read by the shape of the words, not by a list of who may come in. Round 4
+# refused only people on a list (the dog walker, the PSW, his brother were let
+# in); round 5 refused every 'let … in' that was not plainly an animal or the
+# air, and so 'Let me know in an hour' and 'Let the dough rise in a warm place'.
+# A door phrase is a verb that lets someone in (let, buzz, allow …; laisser /
+# faire entrer, ouvrir à), the one let in, and a word that says IN: 'in' at
+# the end, before a time ('at 9', 'now', 'and'), or before the house ('in the
+# back', 'in through the garage'); or 'into', 'inside', 'up', 'through'. 'Let
+# me know in an hour' has no one let in ('me know'), and 'in an hour' is not
+# a way in. The one let in is a person unless it is plainly not: an animal,
+# the air, the light, a thing ('it'), a time ('3 days') — anyone else, named
+# or not, is the owner's to let in.
+_DOOR_VERBS = frozenset("let lets letting buzz buzzes buzzing allow allows allowing".split())
+# ...verbs that let in only someone plainly named a person ('Show the
+# plumber in', 'Bring the realtor inside'; 'bring the plants inside' is not)
+_WEAK_VERBS = frozenset("show shows bring brings usher ushers invite invites have".split())
+_ASK_TO = frozenset("tell tells ask asks get".split())          # 'tell the plumber to come in'
+_PARTICLES = frozenset("in into inside indoors upstairs through onto".split())
+_UP_VERBS = frozenset("let lets letting buzz buzzes buzzing bring brings show shows".split())
+_MOVE = frozenset("come comes coming get go walk step head pop wander drop".split())
+_AFTER_IN = frozenset("""at now then and or but so please first quickly today tonight tomorrow
+    later through by before after when while if from via too also again right for once as
+    early soon ahead here there""".split())
+_HOUSE = frozenset("""house home building apartment apt condo flat lobby garage basement back
+    front side door doors gate yard kitchen unit place room hall hallway porch backyard
+    entrance suite shed attic bedroom living foyer""".split())
+_DETS = frozenset("""the a an my our his her their your this that these those some any le la
+    les l un une des du de mon ma mes ton ta tes son sa ses notre nos votre vos leur leurs
+    ce cet cette ces""".split())
+_FILLERS = frozenset("too also please now first again as well tout de suite svp".split())
+_PERSON_PRONOUNS = frozenset("""him her them me us you someone somebody anyone anybody everyone
+    everybody whoever whomever people folks visitors guests strangers lui eux elle elles il
+    ils le la les quelqu quelqu'un quiconque personne""".split())
+_LEADING_ANYONE = frozenset("""whoever whomever someone somebody anyone anybody everyone
+    everybody people quelqu quelqu'un quiconque""".split())
+_THING_PRONOUNS = frozenset("it this that these those everything something nothing anything "
+                            "ça ca cela ceci".split())
+_TIME_UNITS = frozenset("""minute minutes hour hours day days week weeks month months year years
+    time while moment moments jour jours semaine semaines heure heures mois an ans annee annees
+    temps""".split())
 _NOT_A_PERSON = frozenset("""cat cats dog dogs kitty kitties kitten kittens puppy puppies pup
-    pups pet pets bird birds air light sunlight sunshine sun breeze heat warmth cold
-    chat chats chatte chien chiens chienne chaton chatons chiot chiots oiseau lumiere
-    lumière soleil""".split())
-_ONLY_SAYS = frozenset("""the a an my our his her their this that these those some little bit
-    of fresh more le la les l un une des du de d mon ma mes notre nos son sa ses peu""".split())
+    pups pet pets bird birds chicken chickens hen hens rooster roosters goat goats horse horses
+    pony ponies cow cows sheep pig pigs duck ducks goose geese rabbit rabbits bunny bunnies
+    hamster hamsters animal animals livestock cattle air light lights sunlight sunshine sun
+    breeze heat warmth cold water rain chat chats chatte chien chiens chienne chaton chatons
+    chiot chiots oiseau oiseaux poule poules cheval chevaux chevre chèvre lumiere lumière
+    soleil""".split())
+_PLAIN_THINGS = frozenset("fresh more little bit of some cool warm natural noir noire petit "
+                          "petite".split())
+# words that say the one 'let' is doing something, not coming in ('let the
+# dough rise', 'let it sit', 'let the kids choose')
+_DOING = frozenset("""know see hear sit rise dry soak steep warm cool run rest set settle lapse
+    sign log fit read choose put be drain thaw chill simmer bake cook grow stay stand sleep
+    play wait hang burn melt freeze breathe expire slide ride pass slip roll marinate defrost
+    charge decide pick take keep make finish start fall sink float dissolve cure rinse catch
+    check print load install update upload download sync connect join buy pay order book try
+    use eat drink think talk speak write look sort""".split())
+# people, by what they are (only ever a reason to treat someone as a person;
+# anyone missing from it is still a person after 'let')
+_PERSON_WORDS = frozenset("""plumber plumbers electrician electricians technician technicians
+    tech techs repairman repairmen handyman handymen contractor contractors crew worker workers
+    tradesman tradesmen tradespeople installer installers inspector inspectors exterminator
+    realtor realtors agent agents appraiser assessor surveyor landscaper gardener cleaner
+    cleaners maid nanny babysitter sitter sitters walker walkers dogwalker groomer trainer
+    caregiver caregivers carer psw nurse nurses aide aides doctor paramedic paramedics
+    firefighter firefighters fireman firemen police officer officers courier couriers driver
+    drivers delivery man men woman women guy guys lady ladies person persons visitor visitors
+    guest guests stranger strangers neighbour neighbours neighbor neighbors friend friends
+    relative relatives son sons daughter daughters grandson granddaughter grandkids grandkid
+    grandchildren grandchild kid kids child children brother brothers sister sisters mom mum
+    mother dad father parents grandma grandpa grandmother grandfather aunt uncle cousin nephew
+    niece wife husband ex spouse partner boyfriend girlfriend priest pastor minister
+    missionaries missionary witnesses salesman salesperson salespeople landlord landlady
+    superintendent manager managers locksmith roofer roofers mover movers painter painters vet
+    veterinarian pharmacist reader readers taker volunteer volunteers apprentice tenant tenants
+    client clients customer customers plombier plombiers technicien technicienne livreur
+    livreurs voisin voisine voisins ami amie amis exterminateur electricien ouvrier ouvriers
+    infirmier infirmiere medecin facteur reparateur concierge gardien femme homme monsieur
+    madame inconnu inconnus visiteur visiteurs""".split())
+_STOP_NP = frozenset("""at then and or but so because while when if please now today tonight
+    tomorrow later is are was were for to through by before after until till with since et
+    ou puis à a avant après apres quand ce cette maintenant pour si dans""".split())
+_CONJ = frozenset("and then also plus et puis".split())
+_TOKEN = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)?|\d+|[.,;:!?()&]")
 
 
-# Where what is let in ends: 'let in the cat at 9', 'laisse entrer le chat ce soir'.
-_LET_ENDS = frozenset("""at before after when while on for by until till then now tonight
-    today tomorrow please if so because à a avant après apres quand ce cette maintenant
-    pour si""".split())
+def _door_tokens(text: str) -> list[tuple[str, bool]]:
+    """Each word lower-cased, with whether it is written capitalised as a
+    name (not the first word of a sentence, not 'I'): 'Mike', 'PSW'."""
+    out: list[tuple[str, bool]] = []
+    start = True
+    for m in _TOKEN.finditer(str(text or "").replace("-", " ")):
+        w = m.group()
+        if w in ".!?:;":
+            out.append((w, False))
+            start = True
+            continue
+        low = w.casefold().replace("’", "'")
+        if low[:2] in ("l'", "d'", "j'", "s'", "n'", "m'", "t'"):
+            low = low[2:]
+        if low.endswith("'s"):
+            low = low[:-2]
+        named = (not start and w[:1].isupper() and low != "i")
+        out.append((low, named))
+        start = False
+    return out
 
 
-def _plainly_no_one(words: list[str]) -> bool:
-    ws = [w.lower().strip("'’.,!?;:") for w in words]
-    ws = [w for w in ws if w]
-    for i, w in enumerate(ws):
-        if i and w in _LET_ENDS:
-            ws = ws[:i]
-            break
-    for i, w in enumerate(ws):           # l'air, d'air: the article goes
-        if w[:2] in ("l'", "d'", "l’", "d’"):
-            ws[i] = w[2:]
-    return bool(ws) and all(w in _NOT_A_PERSON or w in _ONLY_SAYS for w in ws) and any(
-        w in _NOT_A_PERSON for w in ws)
+def _a_person(np: list[tuple[str, bool]], strong: bool, french: bool = False) -> bool:
+    """Is the one let in (these words) a person? Unless plainly not, after a
+    'let' (strong) — and only when plainly one, after a 'show' or 'bring'."""
+    ws = [(w, n) for w, n in np if w not in ",()&"]
+    while len(ws) > 1 and ws[0][0] in _DETS:
+        ws = ws[1:]
+    while ws and (ws[-1][0] in _MOVE or ws[-1][0] in _FILLERS):
+        ws = ws[:-1]
+    if not ws:
+        return False
+    words = [w for w, _ in ws]
+    if any(w.isdigit() or w in _TIME_UNITS for w in words):
+        return False                                   # 'allow 3 days'
+    if words[0] in _THING_PRONOUNS:
+        return False                                   # 'let it sit'
+    if words[0] in _PERSON_PRONOUNS:
+        # 'let them in', 'let whoever knocks in'; never 'let me know'
+        return len(words) == 1 or words[0] in _LEADING_ANYONE
+    head = words[0] if french else words[-1]
+    if head in _NOT_A_PERSON:
+        return False                                   # 'the cat', 'le chien'
+    if any(w in _PERSON_WORDS for w in words) or any(n for _, n in ws):
+        return True                                    # 'the PSW', 'Mike', 'the realtor'
+    if any(w in _DOING for w in words):
+        return False                                   # 'the dough rise'
+    if all(w in _NOT_A_PERSON or w in _PLAIN_THINGS or w in _DETS for w in words):
+        return False                                   # 'some fresh air'
+    return strong
+
+
+def _parts(np: list[tuple[str, bool]]) -> list[list[tuple[str, bool]]]:
+    """'the cat and the plumber' is two who are let in."""
+    out, cur = [], []
+    for t in np:
+        if t[0] in _CONJ or t[0] == ",":
+            if cur:
+                out.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _is_way_in(toks, i: int, verb: str) -> bool:
+    """Is toks[i] a word that says IN (not 'in an hour', 'in the fridge')?"""
+    w = toks[i][0]
+    if w == "up":
+        return verb in _UP_VERBS
+    if w not in _PARTICLES:
+        return False
+    if w != "in":
+        return True
+    nxt = toks[i + 1][0] if i + 1 < len(toks) else ""
+    if not nxt or nxt in ".,;:!?()" or nxt in _AFTER_IN or nxt in _HOUSE:
+        return True
+    nxt2 = toks[i + 2][0] if i + 2 < len(toks) else ""
+    return nxt in _DETS and nxt2 in _HOUSE
+
+
+def _np_after(toks, j: int) -> list[tuple[str, bool]]:
+    """The words after position j, up to where the one let in ends."""
+    np = []
+    while j < len(toks) and toks[j][0] not in _STOP_NP and toks[j][0] not in ".;:!?(" \
+            and len(np) < 7:
+        np.append(toks[j])
+        j += 1
+    return np
+
+
+def _also_let_in(toks, j: int, strong: bool) -> bool:
+    """After 'let the cat in': ', and the plumber too', 'and then the plumber',
+    'now and the dog walker' — someone else let in with it."""
+    while j < len(toks):
+        while j < len(toks) and (toks[j][0] in _AFTER_IN - _CONJ or toks[j][0].isdigit()
+                                 or toks[j][0] in ("am", "pm", "h")):
+            j += 1
+        if j >= len(toks) or not (toks[j][0] in _CONJ or toks[j][0] == ","):
+            return False
+        while j < len(toks) and (toks[j][0] in _CONJ or toks[j][0] == ","):
+            j += 1
+        if j >= len(toks):
+            return False
+        w, named = toks[j]
+        if not (w in _DETS or w in _PERSON_PRONOUNS or named):
+            return False                               # 'and feed it', 'then lock the door'
+        np = []
+        while j < len(toks) and toks[j][0] not in _STOP_NP | _CONJ and toks[j][0] not in \
+                ".,;:!?(" and len(np) < 7:
+            np.append(toks[j])
+            j += 1
+        if _a_person(np, strong):
+            return True
+    return False
+
+
+def door_phrase(description: str) -> str | None:
+    """The words of a description that let a person into the home, or None
+    (R10, round 6)."""
+    toks = _door_tokens(description)
+    n = len(toks)
+
+    def said(a, b):
+        return " ".join(w for w, _ in toks[a:b])
+
+    for i, (w, _) in enumerate(toks):
+        strong = w in _DOOR_VERBS
+        weak = w in _WEAK_VERBS
+        ask_to = w in _ASK_TO
+        if strong or weak or ask_to:
+            # 'let in the plumber', 'buzz up the courier'
+            if strong and i + 1 < n and toks[i + 1][0] in ("in", "up", "inside"):
+                np = _np_after(toks, i + 2)
+                for part in _parts(np) or [[]]:
+                    if _a_person(part, True):
+                        return said(i, i + 2 + len(np))
+                if _also_let_in(toks, i + 2 + len(np), True):
+                    return said(i, n)
+                continue
+            # 'let the plumber in', 'have the plumber come in', 'tell the
+            # plumber to come in'
+            for k in range(i + 2, min(n, i + 9)):
+                if toks[k][0] in ".;:!?(":
+                    break
+                if not _is_way_in(toks, k, w):
+                    continue
+                np = toks[i + 1:k]
+                if ask_to:
+                    if len(np) < 2 or np[-1][0] not in _MOVE or np[-2][0] != "to":
+                        continue
+                    np = np[:-2]
+                if any(t[0] in ".;:!?" for t in np):
+                    break
+                for part in _parts(np):
+                    if _a_person(part, strong):
+                        return said(i, k + 1)
+                if _also_let_in(toks, k + 1, strong):
+                    return said(i, n)
+                break
+        # 'open (the door) for the plumber', 'hold / answer the door for …',
+        # 'leave the door unlocked for …', 'leave the key … for …', 'give the
+        # plumber access to the house', 'allow the inspector entry'
+        if w in ("open", "opens", "hold", "answer", "leave", "unlock"):
+            for k in range(i + 1, min(n, i + 8)):
+                if toks[k][0] in ".;:!?":
+                    break
+                if toks[k][0] in ("for", "to"):
+                    between = {x for x, _ in toks[i + 1:k]}
+                    if w in ("open", "opens", "unlock") or between & {"door", "doors", "gate",
+                                                                    "key", "keys", "garage"}:
+                        np = _np_after(toks, k + 1)
+                        if _a_person(np, True):
+                            return said(i, k + 1 + len(np))
+                    break
+        if w in ("give", "grant", "allow", "allows") and i + 1 < n:
+            for k in range(i + 2, min(n, i + 7)):
+                if toks[k][0] in ("access", "entry"):
+                    rest = {x for x, _ in toks[k + 1:k + 4]}
+                    if k + 1 >= n or toks[k + 1][0] in ".,;:!?" or rest & _HOUSE:
+                        if _a_person(toks[i + 1:k], True):
+                            return said(i, k + 1)
+                    break
+        if w in ("admit", "admits"):
+            np = _np_after(toks, i + 1)
+            if _a_person(np, False):
+                return said(i, i + 1 + len(np))
+        # French: 'laisse(z) entrer le plombier', 'laisse le voisin entrer',
+        # 'laissez-le entrer', 'fais entrer / monter le livreur', 'ouvre (la
+        # porte) au plombier', 'accueille le plombier à la porte'
+        if w.startswith("laiss") or w in ("fais", "fait", "faire", "faites", "fera", "ferai",
+                                           "faisons"):
+            if i + 1 < n and toks[i + 1][0] in ("entrer", "monter"):
+                np = _np_after(toks, i + 2)
+                if not np and i + 2 < n and toks[i + 2][0] == "dans":
+                    continue                           # 'faire entrer dans l'enveloppe'
+                if not np or _a_person(np, True, french=True):
+                    return said(i, i + 2 + len(np))
+                continue
+            for k in range(i + 2, min(n, i + 7)):
+                if toks[k][0] in ("entrer", "monter"):
+                    if _a_person(toks[i + 1:k], True, french=True):
+                        return said(i, k + 1)
+                    break
+        if w.startswith("ouvr") or w.startswith("accueill") or w.startswith("deverrouill") \
+                or w.startswith("déverrouill"):
+            for k in range(i + 1, min(n, i + 6)):
+                if toks[k][0] in ("à", "a", "au", "aux", "pour"):
+                    np = _np_after(toks, k + 1) if toks[k][0] != "pour" else \
+                        [t for t in toks[k + 1:k + 6] if t[0] not in ".,;:!?"]
+                    if _a_person(np, True, french=True):
+                        return said(i, k + 1 + len(np))
+                    break
+    return None
 
 
 def _lets_someone_in(description: str) -> bool:
-    """Does this description let anyone into the home? Yes, unless what is
-    let in is plainly not a person."""
-    text = str(description or "")
-    for rx in (_LET_IN, _LAISSER):
-        for m in rx.finditer(text):
-            d = m.groupdict()
-            raw = (d.get("who") or d.get("who2") or d.get("after") or "").split()
-            if not raw or not _plainly_no_one(raw):
-                return True
-    return False
+    """Does this description let a person into the home?"""
+    return door_phrase(description) is not None
 
 
 # A category about money: 'act' there needs a limit.
@@ -2570,17 +2833,31 @@ class Conscience:
 
     @staticmethod
     def _never(category: str, description: str = "") -> str | None:
-        """Why this can never be approved, whatever is set — or None."""
+        """Why this can never be approved, whatever is set — or None. Only
+        the CATEGORY decides (R10, round 6): a description is an engine's
+        words, and reading them for 'never' refused ordinary errands."""
         words = re.sub(r"[^a-z0-9]+", " ", (category or "").lower()).strip()
         for rx, why in _NEVER:
             if rx.search(words):
                 return why
+        return None
+
+    @staticmethod
+    def _ask_first(description: str) -> str | None:
+        """Why what a description names is the owner's to decide first, in
+        his words — or None (R10, round 6)."""
+        door = door_phrase(description or "")
+        if door:
+            return (f"Ask the owner first: this lets someone into the house ('{door}'). "
+                    f"JEFFEREY does not do that because an AI asked. Tell him who it is and "
+                    f"what was asked; he decides himself.")
         text = (description or "").lower()
-        for rx, why in _NEVER_IN_TEXT:
-            if rx.search(text):
-                return why
-        if _lets_someone_in(description or ""):
-            return "letting anyone into the house"
+        for rx, why in _ASK_IN_TEXT:
+            m = rx.search(text)
+            if m:
+                return (f"Ask the owner first: this means {why} ('{m.group().strip()}'). "
+                        f"JEFFEREY does not do that because an AI asked. Tell him plainly "
+                        f"what was asked; he decides himself.")
         return None
 
     @staticmethod
@@ -2736,11 +3013,14 @@ class Conscience:
         def no(reason: str, **kw) -> dict:
             return {"allowed": False, "reason": reason, **shown, **kw}
 
-        never = self._never(cat, desc)
+        never = self._never(cat)
         if never:
             return no(f"JEFFEREY never does this ({never}), whatever anyone has set. "
                       f"Only the owner can, himself. Tell him plainly what was asked "
                       f"— it may be a scam.")
+        first = self._ask_first(desc)
+        if first:
+            return no(first)
         if perm["level"] != "act":
             return no(f"'{cat}' is at '{perm['level']}': bring it to the owner as a "
                       f"suggestion instead. Only he can raise the level, himself.")

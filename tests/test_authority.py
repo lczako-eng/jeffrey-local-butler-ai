@@ -846,10 +846,13 @@ class TheAuthorityModel(AuthorityTest):
         for cat in ("transfers", "e-transfer", "wire", "gift cards", "crypto", "phone calls",
                     "intercom", "front door locks", "alarm"):
             self.assertIn("never", r[cat], cat)
+        # what a description names is never read for 'never' (R10, round 6):
+        # under an ordinary category it is the owner's to decide first
         for k in ("gift cards under groceries", "e-transfer under groceries",
                   "unlock under groceries"):
             self.assertFalse(r[k]["allowed"], k)
-            self.assertIn("never", r[k]["reason"], k)
+            self.assertIn("Ask the owner first", r[k]["reason"], k)
+            self.assertNotIn("scam", r[k]["reason"], k)
 
     def test_old_never_categories_set_to_act_are_still_denied(self):
         self.store.write_text(json.dumps({

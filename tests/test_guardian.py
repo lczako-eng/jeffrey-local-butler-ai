@@ -1194,33 +1194,42 @@ class ShoppingIsNotTheMembership(Temp):
     amount, met a matcher that took 'COSTCO WHSE' and 'COSTCO.CA' for the
     Costco Membership: three purchases became 'duplicate' membership bills
     and the dispute pack asked Costco for $274.50. Shopping where he holds a
-    membership is shopping; only the fee itself, billed again inside its
-    year, is a second bill."""
+    membership is shopping; only a charge near the fee itself, billed again
+    inside its year, is a second bill — and one that is not the fee exactly
+    is his to say (round 6: the amount and the name decide, never a word)."""
 
     SHOPPING = (("COSTCO WHSE #0545", 120.31, "2026-09-03"),
                 ("COSTCO WHSE #0545", 64.20, "2026-09-10"),
                 ("COSTCO.CA", 89.99, "2026-09-20"))
 
-    def test_three_costco_purchases_are_never_claimed_from_costco(self):
+    def test_purchases_far_from_the_fee_are_never_claimed_and_one_near_it_is_asked(self):
         for with_fee in (False, True):
             g = self.guard(name=f"c{with_fee}.json")
             g.expect_charge("Costco Membership", 65.00, "yearly")
             if with_fee:
                 self.assertEqual(g.check_charge("COSTCO MEMBERSHIP", 65.00,
                                                 "2026-08-01")["verdict"], "expected")
-            for name, amt, d in self.SHOPPING:
-                r = g.check_charge(name, amt, d)
-                self.assertNotIn(r["verdict"], ("duplicate", "amount_increased"), (name, amt, r))
-                self.assertEqual(r["recoverable"], 0.0, (name, amt, r))
+            res = [g.check_charge(name, amt, d) for name, amt, d in self.SHOPPING]
+            for r in (res[0], res[2]):
+                self.assertEqual((r["verdict"], r["recoverable"]), ("unexpected_merchant", 0.0), r)
                 self.assertIn("purchase", r["what_happened"])
+            near = res[1]
+            if with_fee:
+                self.assertEqual((near["verdict"], near["recoverable"]), ("duplicate", 64.20), near)
+                self.assertTrue(near["action"].startswith("Ask him first"), near)
+            else:
+                self.assertEqual(near["recoverable"], 0.0, near)
             pack = g.dispute_pack("Costco Membership")
-            self.assertEqual(pack["amount_in_dispute"], 0.0, pack)
-            self.assertEqual(pack["charges_in_dispute"], [])
-            whole = self.guard(name=f"s{with_fee}.json").review_statement(
+            self.assertEqual(pack["amount_in_dispute"], 64.20 if with_fee else 0.0, pack)
+            if with_fee:
+                self.assertIn("shopping", pack["how_to_use"])
+            w = self.guard(name=f"s{with_fee}.json")
+            w.expect_charge("Costco Membership", 65.00, "yearly")
+            whole = w.review_statement(
                 ([{"merchant": "COSTCO MEMBERSHIP", "amount": 65.00, "date": "2026-08-01"}]
                  if with_fee else []) +
                 [{"merchant": n, "amount": a, "date": d} for n, a, d in self.SHOPPING])
-            self.assertEqual(whole["recoverable_total"], 0.0, whole)
+            self.assertEqual(whole["recoverable_total"], 64.20 if with_fee else 0.0, whole)
 
     def test_the_fee_billed_twice_in_its_year_is_still_a_second_bill(self):
         g = self.guard()
@@ -1230,7 +1239,9 @@ class ShoppingIsNotTheMembership(Temp):
             g.check_charge(name, amt, d)
         r = g.check_charge("COSTCO MEMBERSHIP", 65.00, "2026-09-25")
         self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", 65.0), r)
-        self.assertEqual(g.dispute_pack("Costco Membership")["amount_in_dispute"], 65.0)
+        self.assertFalse(r["action"].startswith("Ask him first"), "the fee itself is plain")
+        # ...and the $64.20 near the fee is in the pack only as a question
+        self.assertEqual(g.dispute_pack("Costco Membership")["amount_in_dispute"], 129.20)
         # ...and a plain yearly plan keeps the I-38 rule: a second charge
         # inside the year is a second bill, whatever the amount
         g.expect_charge("Norton 360", 119.99, "yearly")
@@ -1239,17 +1250,17 @@ class ShoppingIsNotTheMembership(Temp):
                          "duplicate")
 
 
-class TheFeeIsWhatSaysSoOrWhatItWasBilledAs(Temp):
-    """R5, round 5: the round-4 fix took any charge within 85-120% of a
-    membership's fee for the fee, so Costco purchases of $66.10, $70.00 and
-    $58.20 were still three 'duplicates' ($194.30 claimed). And it took any
-    other amount for shopping, so a real price rise, a renewal named as such,
-    or a double bill at another amount was waved through, and a large
-    charge lost its 'make sure you recognize it'. A charge is the fee when
-    its own name says so, or when it is billed under the very name the fee
-    itself was billed under; everything else there is shopping."""
+class TheFeeIsTheAmountAtTheNamedPlace(Temp):
+    """R5, rounds 5 and 6: round 4 took any charge within 85-120% of a
+    membership's fee for the fee and waved everything else through; round 5
+    took any statement name with a fee word for the fee, whatever the amount
+    ('AMAZON PRIME NOW' $129, 'CAA SERVICE FEE' $150 claimed in full), and a
+    fee billed under a second name was 'as agreed'. Now a charge is the fee
+    when its name matches the registered merchant and its amount is within
+    20% of the fee or the fee with tax; a duplicate never claims more than
+    the fee; and near the fee but not on it, he is asked first."""
 
-    def test_purchases_near_the_fee_are_shopping(self):
+    def test_purchases_near_the_fee_are_asked_about_and_never_claimed_above_it(self):
         g = self.guard()
         g.expect_charge("Costco Membership", 65.00, "yearly")
         st = g.review_statement([
@@ -1257,32 +1268,36 @@ class TheFeeIsWhatSaysSoOrWhatItWasBilledAs(Temp):
             {"merchant": "COSTCO.CA", "amount": 66.10, "date": "2026-09-03"},
             {"merchant": "COSTCO", "amount": 70.00, "date": "2026-09-10"},
             {"merchant": "COSTCO.CA", "amount": 58.20, "date": "2026-09-20"}])
-        self.assertEqual(st["recoverable_total"], 0.0, st)
+        self.assertEqual(st["recoverable_total"], 188.20, st)
         for r in st["flagged"]:
-            self.assertEqual(r["verdict"], "unexpected_merchant", r)
+            self.assertEqual(r["verdict"], "duplicate", r)
+            self.assertLessEqual(r["recoverable"], 65.00, r)
+            self.assertTrue(r["action"].startswith("Ask him first"), r)
         alone = self.guard(name="alone.json")
         alone.expect_charge("Costco Membership", 65.00, "yearly")
         r = alone.check_charge("COSTCO.CA", 71.18, "2026-09-03")
-        self.assertEqual((r["verdict"], r["recoverable"]), ("unexpected_merchant", 0.0), r)
+        self.assertEqual((r["verdict"], r["recoverable"]), ("amount_increased", 6.18), r)
+        self.assertTrue(r["action"].startswith("Ask him first"), r)
 
-    def test_a_charge_that_says_it_is_the_membership_is_the_membership(self):
+    def test_a_fee_word_far_from_the_fee_is_pointed_out_and_never_claimed(self):
         g = self.guard()
         g.expect_charge("Costco Membership", 65.00, "yearly")
         g.check_charge("COSTCO MEMBERSHIP", 65.00, "2026-08-01")
         r = g.check_charge("COSTCO MEMBERSHIP RENEWAL", 199.99, "2026-09-03")
-        self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", 199.99), r)
+        self.assertEqual((r["verdict"], r["recoverable"]), ("unexpected_merchant", 0.0), r)
+        self.assertIn("not counted as the fee", r["what_happened"])
         up = self.guard(name="up.json")
         up.expect_charge("Costco Membership", 65.00, "yearly")
         up.check_charge("COSTCO MEMBERSHIP", 65.00, "2025-10-01")
         r = up.check_charge("COSTCO MEMBERSHIP", 130.00, "2026-10-01")
-        self.assertEqual((r["verdict"], r["recoverable"]), ("amount_increased", 65.0), r)
+        self.assertEqual((r["verdict"], r["recoverable"]), ("unexpected_merchant", 0.0), r)
         p = self.guard(name="p.json")
         p.expect_charge("Amazon Prime", 79.00, "yearly")
         p.check_charge("AMAZON PRIME", 79.00, "2025-10-01")
         r = p.check_charge("AMAZON PRIME", 99.00, "2026-10-01")
         self.assertEqual((r["verdict"], r["recoverable"]), ("amount_increased", 20.0), r)
 
-    def test_a_fee_billed_under_a_plain_name_still_shows_a_rise_or_a_second_bill(self):
+    def test_a_rise_and_a_second_bill_of_the_fee_under_any_name(self):
         g = self.guard()
         g.expect_charge("GoodLife Fitness membership", 54.99, "monthly")
         g.check_charge("GOODLIFE FITNESS", 54.99, "2026-08-01")
@@ -1293,12 +1308,17 @@ class TheFeeIsWhatSaysSoOrWhatItWasBilledAs(Temp):
         two.expect_charge("GoodLife Fitness membership", 54.99, "monthly")
         two.check_charge("GOODLIFE FITNESS", 54.99, "2026-09-01")
         r = two.check_charge("GOODLIFE FITNESS", 109.98, "2026-10-01")
-        self.assertEqual((r["verdict"], r["recoverable"]), ("amount_increased", 54.99), r)
+        self.assertEqual((r["verdict"], r["recoverable"]), ("unexpected_merchant", 0.0), r)
         caa = self.guard(name="caa.json")
         caa.expect_charge("CAA membership", 120.00, "yearly")
         caa.check_charge("CAA SOUTH CENTRAL ONT", 120.00, "2026-03-01")
-        r = caa.check_charge("CAA SOUTH CENTRAL ONT", 180.00, "2026-09-01")
-        self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", 180.0), r)
+        r = caa.check_charge("CAA MEMBERSHIP RENEWAL", 120.00, "2026-09-02")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", 120.0), r)
+        tax = self.guard(name="tax.json")
+        tax.expect_charge("CAA membership", 120.00, "yearly")
+        tax.check_charge("CAA SOUTH CENTRAL ONT", 120.00, "2026-03-01")
+        r = tax.check_charge("CAA ANNUAL FEE", 135.60, "2026-09-02")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", 120.0), r)
 
     def test_a_large_charge_at_the_place_of_a_membership_is_still_called_large(self):
         g = self.guard()

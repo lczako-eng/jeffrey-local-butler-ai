@@ -308,7 +308,9 @@ def authorize_action(category: str, description: str, amount: float | None = Non
     carries a single-use authorization_id, good for 30 minutes: act once,
     then cite it in log_action. A no is final: recommend instead; only the
     owner can raise the level, himself. Moving money, gift cards, crypto,
-    phone calls and the doors are never approved."""
+    phone calls and the doors are never approved as a category; a
+    description that lets someone into his home, or names moving money,
+    gift cards, crypto or a call as him, is 'ask the owner first'."""
     return conscience.authorize_action(category, description, amount, currency, recurring)
 
 
@@ -463,9 +465,13 @@ def fill_form(fields: list, owner_is: str = "") -> dict:
     exactly that secret. Read him each line of from_your_vault first. When
     he is selling or buying something himself (a bill of sale, a consignment
     or market form, a dealer's sale), say which side he is on: owner_is=
-    'seller' or 'buyer'. With nothing said, every seller's, buyer's, vendor's
-    or shop's box is left for him, and a shop's, dealer's or supplier's box
-    is never his."""
+    'seller' or 'buyer'. On a form with both sides a plain 'Phone' or
+    'Address' follows that side; with nothing said, every seller's, buyer's,
+    vendor's or shop's box, and a plain box on a two-sided form, is left for
+    him. A form with one side only beside a shop or a 'Your name' box is the
+    shop's, and a shop's, dealer's or supplier's box is never his. His
+    payment card goes only into a box that names a credit, debit or payment
+    card and nothing else; a plain 'Card number' comes back under needs_you."""
     return rep.fill_form([str(f) for f in fields], owner_is)
 
 
@@ -575,7 +581,9 @@ def check_charge(merchant: str, amount: float | str, date: str = "", ref: str = 
     possible_card_testing or possible_scam: tell them gently; the next step
     is the bank, on the number on the back of the card. amount_increased,
     duplicate, unauthorized_renewal, charged_after_cancel: say it plainly,
-    with the dollars at stake, and offer a dispute_pack."""
+    with the dollars at stake, and offer a dispute_pack — but when the
+    action says to ask him first (a charge near a membership's fee that may
+    be shopping there), ask him first."""
     return guard.check_charge(merchant, amount, date, ref=ref)
 
 
