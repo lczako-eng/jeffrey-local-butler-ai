@@ -370,9 +370,12 @@ class PriorityIn(BaseModel):
 @gate("priorities.write")
 def set_priority(p: PriorityIn) -> dict:
     """The user explicitly stated a priority (e.g. context='travel',
-    higher='direct flights', lower='saving money'). Store it with the given
-    confidence (0-1). Use record_correction instead when learning from an
-    override rather than an explicit statement."""
+    higher='direct flights', lower='saving money'). The context must name a
+    subject. You may claim at most 0.6 confidence; he confirms it higher
+    himself. Reversing something he stated himself is never applied, even
+    when he says he changed his mind: it becomes a question for him, and only
+    his own /confirm makes it so. Use record_correction instead when learning
+    from an override rather than an explicit statement."""
     return conscience.set_priority(p.context, p.higher, p.lower, p.confidence)
 
 

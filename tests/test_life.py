@@ -315,7 +315,12 @@ class PrivateFactsStayPrivate(LifeTest):
 
     def test_his_rules_apply_to_what_every_engine_reads_and_the_caretaker_gets_named_facts(self):
         # house#3 / privacy#6: 'Share my health only with me', yet who_am_i,
-        # get_conscience and the system prompt carried the diagnosis.
+        # get_conscience and the system prompt carried the diagnosis. A
+        # private kind of fact goes to a rented engine only when a question
+        # names it, and only through his caretaker key. His rules about who
+        # may hear what govern everyone else; they never blind his own
+        # caretaker (R2, round 6), so it still answers the question that
+        # names it — and his rule still holds for anyone he would tell.
         r = self.py("""
             import jefferey_mcp as m
             mcp_call(m, "remember_fact", {"fact": "Mum takes warfarin 5mg at 8am"})
@@ -326,14 +331,15 @@ class PrivateFactsStayPrivate(LifeTest):
                                      "allow": False, "instruction": "My health is never shared."})
             ruled = mcp_call(m, "explain_basis", {"topic": "Mum's medication"})
             who = mcp_call(m, "who_am_i")
-            out({"named": named, "bulk": bulk, "ruled": ruled, "who": who})
+            told = mcp_call(m, "check_disclosure", {"audience": "the neighbours", "tags": "health"})
+            out({"named": named, "bulk": bulk, "ruled": ruled, "who": who, "told": told})
         """, JEFFEREY_CLIENT="jefferey")
         self.assertEqual([f["fact"] for f in r["named"]["facts"]], ["Mum takes warfarin 5mg at 8am"])
         self.assertIn("health", r["named"]["facts"][0]["match_reason"])
         self.assertEqual([f["fact"] for f in r["bulk"]["facts"]], ["Prefers an aisle seat"])
-        self.assertEqual(r["ruled"]["facts"], [])
-        self.assertEqual(r["ruled"]["held_back"]["count"], 1)
+        self.assertEqual([f["fact"] for f in r["ruled"]["facts"]], ["Mum takes warfarin 5mg at 8am"])
         self.assertNotIn("warfarin", json.dumps(r["who"]))
+        self.assertFalse(r["told"]["allowed"])
 
     def test_the_system_prompt_carries_no_private_fact_and_no_store_path(self):
         r = self.py("""
@@ -1027,9 +1033,11 @@ class AfterTheFixes(LifeTest):
         self.assertEqual(len(held), 1)
         self.assertEqual(held[0]["category"], "appointments")
 
-    def test_a_forget_preview_does_not_read_out_what_his_rules_keep(self):
-        # I-11 (4): the caretaker on rented Claude saw 'Takes donepezil 10mg
-        # at night' word for word in the two-step preview
+    def test_a_forget_preview_shows_his_own_caretaker_what_would_go(self):
+        # I-11 (4) held a rule's subject back from the two-step preview. Only
+        # his caretaker key may forget at all, and his rules about who may
+        # hear what never blind his own agent (R2, round 6): it reads him
+        # exactly what would go, each row by its id.
         r = self.py("""
             import access
             import jefferey_mcp as m
@@ -1044,7 +1052,7 @@ class AfterTheFixes(LifeTest):
         """, JEFFEREY_CLIENT="jefferey")
         rows = r["prev"]["would_remove"]
         self.assertEqual(len(rows), 2)
-        self.assertNotIn("donepezil", json.dumps(r["prev"]))
+        self.assertIn("Takes donepezil 10mg at night", [x["what"] for x in rows])
         self.assertIn("Walks the dog at night", [x["what"] for x in rows])
         self.assertTrue(all(x["id"] for x in rows))
 
@@ -1508,7 +1516,12 @@ class HisRejectionAnywhereAndHisOwnStories(LifeTest):
         self.assertIsNot(r["b"].get("changed"), False, r["b"])
         self.assertEqual((r["row"]["higher"], r["row"]["lower"]), ("safety", "cost"))
 
-    def test_his_stories_and_facts_are_his_words_and_his_change_of_mind_is_his(self):
+    def test_his_stories_and_facts_are_his_words_and_his_change_of_mind_waits_for_him(self):
+        # Round 6 (R9) took back two of round 5's exceptions: a claim he
+        # reports from someone else ('My doctor says …') is his to confirm,
+        # never his confirmed words; and his change of mind, even in the
+        # first person, is a proposal his own /confirm makes so — an AI
+        # never turns his stated value round.
         r = self.py("""
             import jefferey_chat as jc, provenance
             d = jc.dispatch_tool
@@ -1536,11 +1549,11 @@ class HisRejectionAnywhereAndHisOwnStories(LifeTest):
         for m in r["mem"]:
             self.assertTrue(m["verbatim"], m)
             self.assertNotEqual(m.get("status"), "pending", m)
-        for f in r["facts"]:
-            self.assertNotEqual(f.get("status"), "pending", f)
-        self.assertNotEqual(r["ch"].get("changed"), False, r["ch"])
-        self.assertEqual((r["row"]["higher"], r["row"]["lower"]), ("cost", "safety"))
-        self.assertNotIn("proposed", r["row"])
+        self.assertEqual(r["facts"][0].get("status"), "pending", r["facts"][0])
+        self.assertNotEqual(r["facts"][1].get("status"), "pending", r["facts"][1])
+        self.assertIs(r["ch"].get("changed"), False, r["ch"])
+        self.assertEqual((r["row"]["higher"], r["row"]["lower"]), ("safety", "cost"))
+        self.assertEqual(r["row"]["proposed"]["higher"], "cost")
 
 
 # ===================================================== repair round 4 (R11)
@@ -1711,15 +1724,18 @@ class ANoForNobodyPlainIsANoForEveryone(LifeTest):
     'anyone', and every wording not on it named nobody: 'members of the
     public', 'the entire world', 'les gens', 'quiconque', 'tout le monde sauf
     moi'. A no for them let the family key read his diabetes on HTTP and over
-    Claude. A no whose audience names nobody plain now holds for everyone;
-    a no for someone plain ('the neighbours', 'my sister') still names only
-    them; and 'Le Monde' (a newspaper) is no longer 'anyone' for a yes."""
+    Claude. Each is an anyone-word, so the no holds for everyone; a no for
+    anyone else ('the neighbours', 'my sister', 'Le Monde' — a newspaper)
+    names only them (R2, round 6: round 5 made every audience it did not
+    recognise 'everyone', and blinded his own caretaker); and 'Le Monde' is
+    no longer 'anyone' for a yes. tests/test_corpus_disclosure.py holds
+    every audience the skeptics named."""
 
     NOBODY_PLAIN = ["members of the public", "the entire world", "anyone at all", "all people",
                     "every person", "everyone in the world", "the world at large",
                     "anyone who asks", "les gens", "quiconque", "le monde entier",
-                    "tout le monde sauf moi", "Le Monde"]
-    PLAIN = ["the neighbours", "my sister", "the bank", "Mrs. Patel"]
+                    "tout le monde sauf moi"]
+    PLAIN = ["the neighbours", "my sister", "the bank", "Mrs. Patel", "Le Monde"]
 
     def test_a_no_for_nobody_plain_holds_his_health_back_and_a_plain_no_does_not_spread(self):
         self.py("""
@@ -1753,7 +1769,7 @@ class ANoForNobodyPlainIsANoForEveryone(LifeTest):
         for a in self.PLAIN:
             for where, texts in r["seen"][a].items():
                 self.assertIn("Diagnosed with type 2 diabetes in June.", texts, (a, where))
-            self.assertIsNone(r["said"][a], a)
+            self.assertNotEqual(r["said"][a], "everyone", a)
 
     def test_a_yes_for_le_monde_opens_nothing_to_anyone_else(self):
         r = self.py("""

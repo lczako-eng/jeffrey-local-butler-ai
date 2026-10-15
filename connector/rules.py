@@ -48,6 +48,13 @@ KINDS = ("disclosure", "reaction", "representation")
 # 'karen' a rule names, and his ex-wife Karen is 'family' too. A rule that
 # says NO matches every way the audience can be written; a rule that says
 # YES must match it exactly.
+#
+# Who a NO is for (R2, round 6): exactly its audience — except that an
+# explicit anyone-word ('the public', 'nobody but my doctor', 'les gens';
+# grounding.is_anyone) makes it a no for everyone. And no rule that says NO
+# ever applies to the owner's own keys — his console and his caretaker key
+# 'jefferey' (provenance.reader gives them no audience at all): his own agent
+# always sees his life; his rules govern everyone else.
 SELF = "me"
 ANYONE = "anyone"
 
@@ -66,18 +73,12 @@ def _aud(r: dict) -> str:
     return grounding.norm_audience(r.get("audience", "")) or SELF
 
 
-def _plain(r: dict, data: dict) -> bool:
-    """Is it plain who this rule is for (grounding.names_someone)?"""
-    return grounding.names_someone(r.get("audience", ""), data.get("people") or [],
-                                   (data.get("selfcloud_grants") or {}).keys())
-
-
-def _no_aud(r: dict, data: dict) -> str:
-    """Who a rule that says NO is for. When its audience names nobody it is
-    plain who ('members of the public', 'les gens', 'quiconque', a name not
-    in his life story), it is a no for everyone: deny by default (R2)."""
-    a = _aud(r)
-    return a if a == ANYONE or _plain(r, data) else ANYONE
+def _no_aud(r: dict, data: dict | None = None) -> str:
+    """Who a rule that says NO is for: its own audience, or everyone when it
+    says so with an anyone-word ('members of the public', 'the public or the
+    press', 'nobody but my doctor', 'les gens'). 'Bob', 'my GP', 'Google' and
+    'Le Monde' are each only themselves (R2, round 6)."""
+    return ANYONE if grounding.is_anyone(r.get("audience", "")) else _aud(r)
 
 
 def _says_no_to(r: dict, names, people) -> bool:
@@ -208,16 +209,18 @@ class ConscienceRules:
         return self._as_read(rule)
 
     def _as_read(self, rule: dict) -> dict:
-        """The rule, and — for a no whose audience names nobody plain — that
-        it holds for everyone, said so he knows."""
-        if (rule.get("kind") == "disclosure" and not rule.get("allow")
-                and _aud(rule) != ANYONE and not _plain(rule, self.c.data)):
+        """The rule, and — for a no — whom it holds for, said so he knows."""
+        if rule.get("kind") != "disclosure" or rule.get("allow"):
+            return rule
+        if _no_aud(rule) == ANYONE:
             return {**rule, "holds_for": "everyone",
-                    "note": (f"JEFFEREY does not know who '{rule.get('audience')}' is, so this "
-                             "no holds for everyone. To make it a no for one person or "
-                             "group only, name them: someone in his life story, 'the "
-                             "family', 'my doctor', 'the neighbours'.")}
-        return rule
+                    "note": (f"'{rule.get('audience')}' means everyone, so this no holds for "
+                             "everyone except your own JEFFEREY, which always sees your life so "
+                             "it can look after you. To let someone hear it after all, add a "
+                             "yes that names them.")}
+        return {**rule, "holds_for": _aud(rule),
+                "note": (f"This no is only for '{rule.get('audience')}'. Your own JEFFEREY "
+                         "still sees it; nobody else is kept from it by this rule.")}
 
     def remove_rule(self, rule_id_or_text: str = "", confirm: str = "") -> dict:
         """Delete a rule by its id, or by whole words of it, an exact tag or

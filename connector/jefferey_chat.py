@@ -175,9 +175,9 @@ TOOLS = [
             "The user explicitly stated a priority (e.g. context='travel', "
             "higher='direct flights', lower='saving money'). The context must "
             "name a subject. You may claim at most 0.6 confidence; he confirms "
-            "it higher himself. Reversing something he stated himself only "
-            "happens when he says here, in his own words, that he changed his "
-            "mind; otherwise it becomes a question for him. "
+            "it higher himself. Reversing something he stated himself is never "
+            "applied, even when he says he changed his mind: it becomes a "
+            "question for him, and only his own /confirm makes it so. "
             "Use record_correction instead when learning from an override."
         ),
         "input_schema": {

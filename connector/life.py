@@ -365,7 +365,7 @@ class Life:
         else:                                        # 'legacy' and anything unknown
             levels = {"legacy"} if self._legacy_open_to(client, "legacy") else set()
         aud: set = set()
-        if not rd["owner"]:
+        if not rd["owner"] and not rd.get("own_key"):    # his rules govern other keys
             broad, _ = grounding.audience_aliases(client, self.c.data.get("people") or [])
             aud = set(rd["audiences"]) | set(broad)
             if ceiling == "family":

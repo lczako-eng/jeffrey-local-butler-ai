@@ -553,17 +553,11 @@ _ANYONE_ALL = (_ANYONE | frozenset(_ANY_DETERMINER.sub("", a) for a in _ANYONE)
                             "the whole world", "the general public", "le public",
                             "le grand public", "grand public"})) - {"monde", "le monde"}
 # Not 'le monde' or 'monde': that is also a newspaper, or a person's name, and
-# a yes for it must not open a subject to everyone (a no for it still holds
-# for everyone: it names nobody plain — see names_someone).
+# a yes for it must not open a subject to everyone.
 
 
-# The kinds of people and groups a rule can mean. A rule that says NO to an
-# audience naming none of these — nor anyone in his life story, nor one of
-# his keys, nor an address, nor 'Mrs. Patel' — is a no for everyone (R2,
-# round 5: 'members of the public', 'the entire world', 'les gens',
-# 'quiconque' each named nobody, so the family key read his diabetes; a
-# list of ways to say 'anyone' can never be complete, so when it is not
-# plain who a no is for, it is for everyone — silence is a no).
+# The kinds of people and groups someone can be ('My sister: …' is his
+# sister speaking — provenance reads this).
 SOMEONE_WORDS = FAMILY_WORDS | _stems("""
     ex exwife exhusband fiance fiancee girlfriend boyfriend widow widower inlaws
     stepchild stepson stepdaughter kid children grandkid grandchildren relative relatives
@@ -575,7 +569,7 @@ SOMEONE_WORDS = FAMILY_WORDS | _stems("""
     attorney priest pastor minister rabbi imam church parish congregation choir club
     colleague coworker boss employer employee manager government police officer court
     judge school teacher press newspaper reporter journalist media plumber
-    electrician contractor mechanic visitor guest buyer seller
+    electrician contractor mechanic visitor guest buyer seller salesman saleswoman
     voisin voisine voisins voisines ami amie amis amies médecin medecin docteur
     infirmier infirmière infirmiere pharmacien dentiste banque banquier avocat
     notaire comptable conseiller assureur propriétaire proprietaire locataire sœur
@@ -584,43 +578,82 @@ SOMEONE_WORDS = FAMILY_WORDS | _stems("""
     enfant enfants famille prêtre pretre pasteur église eglise patron collègue
     collegue gouvernement école ecole journaliste
     """)
-# Words that make an audience everyone, whatever else it says ('anyone at
-# all', 'every person', 'tout le monde sauf moi').
-_QUANTIFIERS = frozenset("""any anyone anybody anything all every everyone everybody
-    whoever whomever whatever quiconque tout tous toute toutes chacun chacune chaque
-    personne n'importe nimporte""".split())
 
 
-def names_someone(audience, people=(), keys=()) -> bool:
-    """Is it plain who this audience is: the owner, 'anyone', a person in his
-    life story or their relationship, one of his keys, an AI's maker, an
-    e-mail address, a title and a name ('Mrs. Patel'), or a kind of person
-    or group ('my doctor', 'the neighbours', 'the bank')? A phrase that
-    names nobody of these, or that says 'any', 'all' or 'every' of someone,
-    is not plain."""
-    n = norm_audience(audience)
-    if not n:
+# --------------------------------------------------- who a 'no' is for (R2)
+# A rule that says NO names exactly its audience — every way that audience is
+# written ('Karen Czako' is also 'Karen' and 'my ex-wife'), and no one else —
+# except that an explicit anyone-word means every audience other than the
+# owner's own keys: 'anyone', 'everyone', 'the public', 'members of the
+# public', 'the world', 'nobody', 'people', 'les gens', 'tout le monde',
+# 'quiconque', 'n'importe qui' … with or without its first little word, alone
+# or beside other names ('the public or the press', 'nobody but my doctor',
+# 'le public et la banque'). A name that merely holds such a word is a name:
+# 'Le Monde' is a newspaper, 'Mr. Nobody' a man. (Round 4 kept a list of
+# ways to say anyone; round 5 made every 'no' it did not recognise a no for
+# everyone, and blinded his own caretaker; both are gone.)
+_ANYONE_PHRASES = frozenset("""
+    anyone|anybody|any one|everyone|everybody|every one|all|all people|all others|
+    all other people|others|other people|everyone else|anyone else|anybody else|
+    everybody else|nobody else|no one else|noone else|no-one else|people|persons|folks|
+    strangers|stranger|outsiders|outsider|public|general public|public at large|
+    members of the public|member of the public|world|whole world|entire world|
+    world at large|wide world|whole wide world|internet|social media|society|
+    tout le monde|monde entier|les autres|autres|gens|n'importe qui|nimporte qui|
+    quiconque|tous|toutes|chacun|chacune|personne|personne d'autre|aucun|aucune|nul|
+    grand public|reseaux sociaux|nobody|no one|no-one|noone|none|whoever|whomever
+    """.replace("\n", " ").split("|")) - {""}
+_ANYONE_PHRASES = frozenset(" ".join(p.split()) for p in _ANYONE_PHRASES)
+# A part of an audience that STARTS with one of these is everyone, whatever
+# follows ('anyone who asks', 'everyone in the world', 'no-one at all').
+_ANYONE_HEADS = frozenset("""anyone anybody everyone everybody nobody noone no-one whoever
+    whomever quiconque chacun chacune""".split())
+# 'any', 'all', 'every' … of a person in general ('every person', 'any
+# stranger', 'toute personne'); 'all the family' is still the family.
+_QUANTIFIERS = frozenset("any all every each no tout toute tous toutes aucun aucune "
+                         "n'importe nimporte".split())
+_GENERIC_PERSON = frozenset("""person persons people one body folks human humans individual
+    individuals stranger strangers outsider outsiders citizen citizens personne personnes
+    gens monde qui""".split())
+_DETERMINERS = frozenset("the a an my our his her their le la les l' un une des du de "
+                         "d'".split())
+_PART_BREAK = re.compile(r"\s*(?:[,;/&+|]|\b(?:and|or|but|except(?: for)?|other than|apart "
+                         r"from|aside from|besides|nor|et|ou|mais|sauf|hormis|excepte|a part"
+                         r"|ni)\b)\s*")
+
+
+def _plain_words(text: str) -> str:
+    n = normalise(text)
+    n = "".join(c for c in unicodedata.normalize("NFKD", n) if not unicodedata.combining(c))
+    return re.sub(r"[^\w'\- ,;/&+|]", " ", n)
+
+
+def is_anyone(audience) -> bool:
+    """Does this audience, as a rule that says NO names it, mean everyone
+    (other than the owner's own keys)? Only an explicit anyone-word does
+    ('the public or the press', 'nobody but my doctor', 'les gens'); 'Le
+    Monde', 'Mr. Nobody', 'my GP' and 'Bob' each name only themselves."""
+    raw = _plain_words(audience)
+    if not raw.strip():
         return False
-    if n in (SELF, "anyone"):
+    if norm_audience(audience) == "anyone":
         return True
-    raw = normalise(audience)
-    ws = words(raw)
-    if any(w in _QUANTIFIERS for w in ws) or "n'importe" in raw:
-        return False
-    if _emails_in(raw):
-        return True
-    if n in {normalise(k) for k in keys or ()}:
-        return True
-    if n in {"ai", "an ai", "any ai", "engines", "engine", "ais", "anthropic", "claude",
-             "openai", "chatgpt", "gpt", "legacy", "family"}:
-        return True
-    if len(ws) >= 2 and ws[0] in _TITLES:
-        return True                                   # Mrs. Patel, Dr. Wu
-    if {stem(w) for w in ws} & SOMEONE_WORDS:
-        return True
-    names = rule_names(audience, people)
-    return any(norm_audience(p.get("name", "")) in names
-               for p in people or () if isinstance(p, dict) and p.get("name"))
+    for part in _PART_BREAK.split(raw):
+        ws = [w for w in part.split() if w]
+        while ws and (ws[0] in _DETERMINERS or ws[0].rstrip("'") in ("l", "d")):
+            ws = ws[1:]
+        if not ws:
+            continue
+        if ws[0] in _TITLES:
+            continue                                  # Mr. Nobody, Mrs. World
+        phrase = " ".join(ws)
+        if phrase in _ANYONE_PHRASES or ws[0] in _ANYONE_HEADS:
+            return True
+        if len(ws) >= 2 and (ws[0], ws[1]) in {("no", "one"), ("any", "one"), ("every", "one")}:
+            return True
+        if ws[0] in _QUANTIFIERS and len(ws) >= 2 and ws[1] in _GENERIC_PERSON:
+            return True
+    return False
 
 
 def norm_audience(s) -> str:

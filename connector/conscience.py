@@ -2163,8 +2163,9 @@ class Conscience:
                 + f"{entry['id']} engines himself.")
         if entry["status"] == "pending":
             notes.append("It is marked 'not yet confirmed by him', because an AI wrote "
-                         "it down in its own words; he confirms it with /pending in "
-                         "'Talk to JEFFEREY on this Mac'.")
+                         "it down and it is not plainly his own words (an AI's wording, or "
+                         "something he said someone else claims); he confirms it with "
+                         "/pending in 'Talk to JEFFEREY on this Mac'.")
         if notes:
             out["note"] = " ".join(notes)
         return out
@@ -2343,7 +2344,7 @@ class Conscience:
         c = max(0.05, min(0.99, 0.6 if c is None else c))
         if engine:
             c = min(c, ENGINE_CONFIDENCE_CAP)
-        src = provenance.source(values=(higher, lower))
+        src = provenance.source(values=(higher, lower), context=context)
         status = provenance.status_for(src)
         p = self._find_priority(context, higher, lower)
         extra: dict = {}
@@ -2380,14 +2381,14 @@ class Conscience:
             legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else {}
             locked = (bool(p.get("stated")) and not provenance.pending(p)) or (
                 (_real_number(legacy.get("confidence")) or 0) >= 0.8)
-            # Reversing what he stated is his to confirm: even when the AI's
-            # words look like his own, they may be what he quoted and
-            # rejected (R9). His own hands change it at once — and so does
-            # his own change of mind, said in the first person at his own
-            # terminal in the very message that ranks it ('I changed my mind.
-            # For the car, cost matters more than safety now'; R9, round 5).
-            if locked and engine and not (status == "confirmed"
-                                          and provenance.changed_his_mind(higher, lower)):
+            # An AI never turns round or overrides a value he stated, or one
+            # that is locked — whatever he typed: a question, 'I decided', 'I
+            # changed my mind', words in quotation marks (R9, round 6; round 5
+            # let his first-person change of mind through, and a question
+            # with 'decided' in it, or a change of mind about the car,
+            # turned round Mom's care at once). It is a proposal; only his own
+            # /confirm at his keyboard changes it.
+            if locked and engine:
                 p["proposed"] = {"higher": higher, "lower": lower, "confidence": c,
                                  "source": src, "at": _now()}
                 self._log_change("reversal_asked", context, was, now, src, applied=False)
@@ -2395,14 +2396,14 @@ class Conscience:
                      f"{lower}. You had said the opposite, so nothing was changed.")
                 self._note("priority_question",
                            q + " If it is right, type /pending in 'Talk to JEFFEREY on this "
-                               "Mac' and confirm it.")
+                               "Mac' to see it, and /confirm to make it so.")
                 self._save()
                 return {**self._prio_view(p), "changed": False,
                         "question_for_owner": q,
-                        "note": ("He stated the opposite himself, so it was not reversed. "
-                                 "Ask him plainly whether it has changed. Only his own yes "
-                                 "(/pending in 'Talk to JEFFEREY on this Mac', or saying so "
-                                 "himself there) changes it.")}
+                        "note": ("He stated the opposite himself, so it was not reversed — "
+                                 "even if he has just said it changed. Ask him plainly. Only "
+                                 "his own /confirm, typed at his keyboard in 'Talk to JEFFEREY "
+                                 "on this Mac', changes it.")}
             self._log_change("reversal", context, was, now, src, applied=True,
                              confidence_was=p.get("confidence"))
             for k in ("proposed", "question", "confirmed_by_owner"):

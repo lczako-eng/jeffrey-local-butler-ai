@@ -218,8 +218,10 @@ def set_priority(context: str, higher: str, lower: str, confidence: float = 0.6)
     higher='direct flights', lower='saving money'). The context must name a
     subject ('general' or 'everything' is the owner's own to set). You may
     claim at most 0.6 confidence; he confirms it higher himself. Reversing
-    something he stated himself is not applied: it becomes a question for
-    him. Use record_correction instead when learning from an override."""
+    something he stated himself is never applied, even when he says he
+    changed his mind: it becomes a question for him, and only his own
+    /confirm makes it so. Use record_correction instead when learning from
+    an override."""
     return conscience.set_priority(context, higher, lower, confidence)
 
 

@@ -1090,10 +1090,13 @@ class AMarkNeverShieldsWhatFollowsIt(EgressTest):
         for v in self.VALUES:
             self.assertNotIn(v, log)
 
-    def test_what_jefferey_hid_itself_comes_back_in_clean(self):
-        # JEFFEREY's own hiding runs until nothing more is found, so its own
-        # answer handed back by an engine is not refused, and a phone number
-        # or a reference after a hidden code is still not a code (I-07, I-15)
+    def test_what_jefferey_hid_itself_reads_clean_and_is_never_kept_again(self):
+        # JEFFEREY's own answer reads clean when scanned again, and a phone
+        # number or a reference after a hidden code is still not a code
+        # (I-07, I-15). Handed back by an engine, it is not kept: it already
+        # has something hidden in it (R1, round 6 — the structural rule;
+        # rounds 4 and 5 kept it, and each way of reading what followed a
+        # mark let another secret in).
         r = self.py("""
             import egress, jefferey_chat as jc
             notes = ["Garage code 4821, gate 2580", "Le code de l'alarme est 4821, appeler le "
@@ -1104,7 +1107,8 @@ class AMarkNeverShieldsWhatFollowsIt(EgressTest):
                           for x in masked]})
         """, JEFFEREY_CLIENT="jefferey")
         self.assertEqual(r["again"], [None] * 4)
-        self.assertEqual(r["kept"], [None] * 4)
+        self.assertEqual(r["kept"], [True] * 4)
+        self.assertNotIn("[hidden", self.store_text())
         joined = " ".join(r["masked"])
         for v in ("4821", "2580", "1234", "4321"):
             self.assertNotIn(v, joined)
@@ -1184,9 +1188,11 @@ class APhoneOrReferenceIsSteppedOver(EgressTest):
         for v in ("1 800 555 0199", "dossier 8765", "call *98 then"):
             self.assertIn(v, sent)
 
-    def test_jefferey_s_own_mark_does_not_swallow_a_year_or_a_house_number(self):
+    def test_a_year_or_a_birthday_after_a_code_is_not_the_code(self):
         # Round 4 read the mark as not there, so the next number was 'the
-        # code': these were refused, and on release the year was hidden.
+        # code', and on release the year was hidden. A note an engine hands
+        # back with JEFFEREY's own mark in it is now refused for what it is
+        # (R1, round 6: it already has something hidden in it).
         M = "[hidden: looks like a PIN or a door, alarm or lock code]"
         notes = [f"Alarm code {M}, the house was built in 1987",
                  f"Gate code {M} and the gate is at 1550 Elm Road",
@@ -1196,28 +1202,34 @@ class APhoneOrReferenceIsSteppedOver(EgressTest):
             import jefferey_mcp as m
             out([mcp_call(m, "remember_fact", {"fact": n}).get("refused") for n in %r])
         """ % notes, JEFFEREY_CLIENT="jefferey")
-        self.assertEqual(r, [None] * 4, r)
+        self.assertEqual(r, [True] * 4, r)
         sys.path.insert(0, str(CONNECTOR))
         import egress
         kept = {
-            "My email password is Hunter22! and my daughter Anna lives in Ottawa with her "
-            "two kids": "and my daughter Anna lives in Ottawa with her two kids",
             "My alarm code is 4821 and my birthday is March 3 1950": "March 3 1950",
             "My PIN [hidden] and I was born in 1948": "born in 1948",
-            "door code [hidden] — the house number is 4821": "the house number is 4821",
-            "Wifi password: maple-tree-42 (the router is in the basement next to the furnace)":
-                "(the router is in the basement next to the furnace)",
-            "Netflix password Sunflower77 and Disney plus is the same":
-                "and Disney plus is the same",
+            "Alarm code 4821, the house was built in 1987": "the house was built in 1987",
+            "Garage code 4821 - we moved in 2019": "we moved in 2019",
+            "Gate code 4821 and the gate is at 1550 Elm Road": "1550 Elm Road",
         }
         for text, words in kept.items():
             masked, _ = egress.mask_text(text)
             self.assertIn(words, masked, text)
+            self.assertNotIn("4821", masked, text)
             self.assertIsNone(egress.looks_secret(masked), masked)
-        for text in ("My email password is Hunter22! and my daughter Anna lives in Ottawa",
-                     "Wifi password: maple-tree-42 (the router is in the basement)"):
-            self.assertNotIn("Hunter22", egress.mask_text(text)[0])
-            self.assertNotIn("maple-tree-42", egress.mask_text(text)[0])
+        # A password hides the rest of its clause: a passphrase's tail never
+        # leaks (R1, round 6), and the next sentence still goes.
+        for text, gone, stays in (
+                ("My email password is Hunter22! and my daughter Anna lives in Ottawa. She "
+                 "visits on Sundays.", "Hunter22", "She visits on Sundays."),
+                ("Wifi password: maple-tree-42 (the router is in the basement)\nThe printer is "
+                 "upstairs.", "maple-tree-42", "The printer is upstairs."),
+                ("Netflix password Sunflower77 and Disney plus is the same; Anna knows it.",
+                 "Sunflower77", "Anna knows it.")):
+            masked = egress.mask_text(text)[0]
+            self.assertNotIn(gone, masked)
+            self.assertIn(stays, masked)
+            self.assertIsNone(egress.looks_secret(masked), masked)
 
 
 if __name__ == "__main__":

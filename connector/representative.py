@@ -2941,9 +2941,10 @@ class Representative:
 
         # A message that carries a card number, a SIN, a code or a password is
         # itself a warning sign (I-14): it is how account takeovers and fake
-        # "verify your card" messages work. It is still read and judged.
-        quoted = sorted({w for _, _, w in egress.find_secrets(text)},
-                        key=egress._ORDER.index)
+        # "verify your card" messages work. It is still read and judged. A
+        # hidden-mark in it ('[hidden: looks like a PIN …]') counts the same:
+        # a secret was there (R1, round 6).
+        quoted = egress.secret_signals(text)
         if quoted:
             # a password, PIN, code or card number is the attack itself; an
             # account or health-card number in a real bank's or clinic's
