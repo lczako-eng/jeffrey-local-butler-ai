@@ -377,8 +377,8 @@ def _kept_from_reader(c, section: str, item: dict) -> str | None:
     try:
         import provenance
         rd = provenance.reader()
-        if rd.get("owner"):
-            return None
+        if not rd.get("audiences"):
+            return None                  # the owner himself, at his keyboard
         text = _what(section, item)
         cat = str(item.get("category") or "")
         if section in ("facts", "memories", "people", "media") and item.get(

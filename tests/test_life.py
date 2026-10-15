@@ -516,12 +516,15 @@ class WhoSaidIt(LifeTest):
             out({"mems": [(m["text"], m["verbatim"], m["status"], m["source"]["stated_by"]) for m in mems],
                  "screen": buf.getvalue(), "story": trace_story})
         """, pre=FAKE_LOCAL)
+        # round 7 (D2): even word for word what he typed, an AI's note is noted
+        # by the AI until he confirms it himself
         self.assertEqual(r["mems"], [
             ["The user served in Kabul in 2011 and recalls dusty convoys.", False, "pending", "engine"],
-            ["Mike drove the convoy, and the dust got into everything.", True, "confirmed", "owner_words"]])
-        self.assertIn("a summary, not your exact words", r["screen"])
+            ["Mike drove the convoy, and the dust got into everything.", False, "pending", "engine"]])
+        self.assertIn("noted by the AI, not yet confirmed by you", r["screen"])
         self.assertNotIn("kept his words", r["story"])
-        self.assertIn("not his exact words", r["story"])
+        self.assertNotIn("kept your words", r["story"])
+        self.assertIn("noted by the AI, not yet confirmed by you", r["story"])
 
     def test_engine_values_are_capped_unconfirmed_and_never_about_everything(self):
         # learning#2: an injected set_priority('general', 'helping Tyler' >
@@ -1141,6 +1144,8 @@ class AfterTheFixes(LifeTest):
             d = jc.dispatch_tool
             provenance.owner_typed("For Mom's care, safety matters more than cost")
             a = d("set_priority", {"context": "mom's care", "higher": "safety", "lower": "cost"})
+            jc.conscience.refresh()
+            jc.owner_life("/confirm " + a["id"], answer=yes, tty=True)   # his own yes (D2)
             provenance.owner_typed("what's the weather tomorrow?")
             b = d("set_priority", {"context": "mom's care", "higher": "cost", "lower": "safety"})
             c = d("set_priority", {"context": "groceries", "higher": "cost", "lower": "safety"})
@@ -1154,13 +1159,15 @@ class AfterTheFixes(LifeTest):
             out({"a": a, "b": b, "c": c, "row": row, "m": [m1, m2, m3],
                  "groceries": [p for p in store()["priorities"] if p["context"] == "groceries"][0]})
         """)
-        self.assertEqual(r["a"].get("unconfirmed"), None, "his own order is his words")
+        # round 7 (D2): what an AI writes is noted by the AI until he confirms
+        # it himself; once he has, no AI turns it round
+        self.assertTrue(r["a"].get("unconfirmed"), "an AI's note waits for his yes")
         self.assertFalse(r["b"]["changed"])
         self.assertEqual((r["row"]["higher"], r["row"]["lower"]), ("safety", "cost"))
         self.assertEqual(r["row"]["proposed"]["higher"], "cost")
         self.assertEqual(r["groceries"]["status"], "pending")
         self.assertEqual(r["groceries"]["source"]["stated_by"], "engine")
-        self.assertEqual([m["verbatim"] for m in r["m"]], [False, False, True])
+        self.assertEqual([m["verbatim"] for m in r["m"]], [False, False, False])
 
     def test_hidden_instructions_and_catch_all_values(self):
         # I-25 (4): these were triaged routine with no AI flag; (5) an engine
@@ -1414,6 +1421,8 @@ class WhatHeQuotesIsNotWhatHeSays(LifeTest):
             d = jc.dispatch_tool
             provenance.owner_typed("For Mom's care, safety matters more than cost.")
             a = d("set_priority", {"context": "mom's care", "higher": "safety", "lower": "cost"})
+            jc.conscience.refresh()
+            jc.owner_life("/confirm " + a["id"], answer=yes, tty=True)   # his own yes (D2)
             provenance.owner_typed("My sister says cost matters more than safety... Ridiculous.")
             b = d("set_priority", {"context": "mom's care", "higher": "cost", "lower": "safety"})
             provenance.owner_typed("My sister says for groceries cost matters more than safety. "
@@ -1427,7 +1436,9 @@ class WhatHeQuotesIsNotWhatHeSays(LifeTest):
             rows = {p["context"]: p for p in store()["priorities"]}
             out({"a": a, "b": b, "g": g, "q": q, "n": n, "rows": rows})
         """)
-        self.assertEqual(r["a"].get("unconfirmed"), None, "his own sentence is his words")
+        # round 7 (D2): his sentence makes nothing an AI writes his words; his
+        # own /confirm does
+        self.assertTrue(r["a"].get("unconfirmed"), "an AI's note waits for his yes")
         self.assertIs(r["b"].get("changed"), False, r["b"])
         care = r["rows"]["mom's care"]
         self.assertEqual((care["higher"], care["lower"]), ("safety", "cost"))
@@ -1443,7 +1454,9 @@ class WhatHeQuotesIsNotWhatHeSays(LifeTest):
             import jefferey_chat as jc, provenance
             d = jc.dispatch_tool
             provenance.owner_typed("For Mom's care, safety matters more than cost.")
-            d("set_priority", {"context": "mom's care", "higher": "safety", "lower": "cost"})
+            a = d("set_priority", {"context": "mom's care", "higher": "safety", "lower": "cost"})
+            jc.conscience.refresh()
+            jc.owner_life("/confirm " + a["id"], answer=yes, tty=True)   # his own yes (D2)
             provenance.owner_typed("Things changed: for Mom's care cost matters more than "
                                    "safety now.")
             b = d("set_priority", {"context": "mom's care", "higher": "cost", "lower": "safety"})
@@ -1482,24 +1495,23 @@ class HisRejectionAnywhereAndHisOwnStories(LifeTest):
            "For the car: safety matters more than cost", "I think safety matters more than cost"]
 
     def test_a_ranking_with_a_rejection_or_someone_elses_voice_is_never_his(self):
+        # Round 7 (D2): no reading of what he typed makes an AI's value his —
+        # not the rejected ones, and not his own plain ones either (HIS): every
+        # one is noted by the AI until he confirms it himself
         r = self.py("""
-            import provenance
+            import jefferey_chat as jc, provenance
             res = {}
-            for ph in %r:
-                provenance.reset(); provenance.owner_typed(ph)
-                res[ph] = provenance.ranked_by_owner("cost", "safety")
-            mine = {}
-            for ph in %r:
-                provenance.reset(); provenance.owner_typed(ph)
+            for i, ph in enumerate(%r + %r):
+                provenance.owner_typed(ph)
                 fr = "coût" in ph
-                mine[ph] = provenance.ranked_by_owner("sécurité" if fr else "safety",
-                                                      "coût" if fr else "cost")
-            out({"res": res, "mine": mine})
+                x = jc.dispatch_tool("set_priority", {"context": f"case {i}",
+                                                      "higher": "coût" if fr else "cost",
+                                                      "lower": "sécurité" if fr else "safety"})
+                res[ph] = x.get("unconfirmed")
+            out(res)
         """ % (self.NOT_HIS, self.HIS))
-        for ph, his in r["res"].items():
-            self.assertFalse(his, ph)
-        for ph, his in r["mine"].items():
-            self.assertTrue(his, ph)
+        for ph, unconfirmed in r.items():
+            self.assertTrue(unconfirmed, ph)
 
     def test_an_ai_can_still_correct_a_ranking_he_rejected(self):
         r = self.py("""
@@ -1521,7 +1533,9 @@ class HisRejectionAnywhereAndHisOwnStories(LifeTest):
         # reports from someone else ('My doctor says …') is his to confirm,
         # never his confirmed words; and his change of mind, even in the
         # first person, is a proposal his own /confirm makes so — an AI
-        # never turns his stated value round.
+        # never turns his stated value round. Round 7 (D2): what an AI keeps
+        # of his stories and facts is noted by the AI until he confirms it;
+        # /confirm makes it his words.
         r = self.py("""
             import jefferey_chat as jc, provenance
             d = jc.dispatch_tool
@@ -1539,18 +1553,27 @@ class HisRejectionAnywhereAndHisOwnStories(LifeTest):
                 provenance.owner_typed(typed)
                 facts.append(d("remember_fact", {"fact": fact}))
             provenance.owner_typed("For the car, safety matters more than cost.")
-            d("set_priority", {"context": "the car", "higher": "safety", "lower": "cost"})
+            a = d("set_priority", {"context": "the car", "higher": "safety", "lower": "cost"})
+            jc.conscience.refresh()
+            jc.owner_life("/confirm " + " ".join([m["id"] for m in mem] + [facts[1]["id"],
+                                                  a["id"]]), answer=yes, tty=True)
             provenance.owner_typed("I changed my mind. For the car, cost matters more than "
                                    "safety now, money is tight.")
             ch = d("set_priority", {"context": "the car", "higher": "cost", "lower": "safety"})
             row = [p for p in store()["priorities"] if p["context"] == "the car"][0]
-            out({"mem": mem, "facts": facts, "ch": ch, "row": row})
+            st = store()
+            out({"mem": mem, "facts": facts, "ch": ch, "row": row, "after": st["memories"],
+                 "facts_after": st["facts"]})
         """)
         for m in r["mem"]:
+            self.assertFalse(m["verbatim"], m)
+            self.assertEqual(m.get("status"), "pending", m)
+        for m in r["after"]:
             self.assertTrue(m["verbatim"], m)
-            self.assertNotEqual(m.get("status"), "pending", m)
+            self.assertEqual(m.get("status"), "confirmed", m)
         self.assertEqual(r["facts"][0].get("status"), "pending", r["facts"][0])
-        self.assertNotEqual(r["facts"][1].get("status"), "pending", r["facts"][1])
+        self.assertEqual(r["facts"][1].get("status"), "pending", r["facts"][1])
+        self.assertEqual([f["status"] for f in r["facts_after"]], ["pending", "confirmed"])
         self.assertIs(r["ch"].get("changed"), False, r["ch"])
         self.assertEqual((r["row"]["higher"], r["row"]["lower"]), ("safety", "cost"))
         self.assertEqual(r["row"]["proposed"]["higher"], "cost")

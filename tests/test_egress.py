@@ -938,9 +938,19 @@ class AfterTheFixes(EgressTest):
                  "Hydro account 123456789 is in my name", "He gave me his Legion pin 1985"]
         r = self.py("""
             import jefferey_chat as jc
-            out([jc.dispatch_tool("remember_fact", {"fact": n}).get("fact") for n in %r])
+            out([jc.dispatch_tool("remember_fact", {"fact": n}) for n in %r])
         """ % notes, JEFFEREY_CLIENT="jefferey")
-        self.assertEqual(r, notes)
+        self.assertEqual([x.get("refused") for x in r], [None] * len(notes), r)
+        kept = [f["fact"] for f in json.loads(self.store.read_text())["facts"]]
+        self.assertEqual(kept, notes)
+        # round 7, D3: on the way out, a note that names a code (a combination,
+        # a password, a door code, a keypad) has every number in it hidden
+        for n, x in zip(notes, r):
+            if any(w in n.lower() for w in ("combination", "password", "code", "keypad")):
+                self.assertNotEqual(x["fact"], n, n)
+                self.assertIn("[hidden: a number in a note that mentions a code]", x["fact"], n)
+            else:
+                self.assertEqual(x["fact"], n)
 
     def test_secrets_written_the_way_people_say_them_are_caught(self):
         said = ["The code for the front door is 4821", "The code to the garage is 4821",
@@ -1183,10 +1193,12 @@ class APhoneOrReferenceIsSteppedOver(EgressTest):
         sent = json.dumps(r, ensure_ascii=False)
         for v in self.PINS:
             self.assertNotIn(v, sent)
-        # what the PIN is not stays readable: the phone and the file numbers
-        # (the alarm and bank notes are private, so they are not in a list)
-        for v in ("1 800 555 0199", "dossier 8765", "call *98 then"):
+        # what the PIN is not stays readable: the phone numbers and the words
+        # (the alarm and bank notes are private, so they are not in a list).
+        # Round 7, D3: a file number in a note that names a PIN is hidden too.
+        for v in ("1 800 555 0199", "Votre NIP, dossier", "call *98 then"):
             self.assertIn(v, sent)
+        self.assertNotIn("8765", sent)
 
     def test_a_year_or_a_birthday_after_a_code_is_not_the_code(self):
         # Round 4 read the mark as not there, so the next number was 'the

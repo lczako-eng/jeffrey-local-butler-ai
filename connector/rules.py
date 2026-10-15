@@ -49,12 +49,21 @@ KINDS = ("disclosure", "reaction", "representation")
 # says NO matches every way the audience can be written; a rule that says
 # YES must match it exactly.
 #
-# Who a NO is for (R2, round 6): exactly its audience — except that an
-# explicit anyone-word ('the public', 'nobody but my doctor', 'les gens';
-# grounding.is_anyone) makes it a no for everyone. And no rule that says NO
-# ever applies to the owner's own keys — his console and his caretaker key
-# 'jefferey' (provenance.reader gives them no audience at all): his own agent
-# always sees his life; his rules govern everyone else.
+# Who a NO is for (R2, round 6; D1, round 7): exactly its audience — except
+# that
+#   * an explicit anyone-word ('the public', 'nobody but my doctor', 'les
+#     gens', 'not a soul'; grounding.is_anyone) makes it a no for everyone
+#     but his own JEFFEREY;
+#   * a no that names an AI, an engine or the company behind one ('ChatGPT',
+#     'any AI', "l'IA", 'Google', 'the cloud'; grounding.names_ai) holds for
+#     EVERY key that reaches an engine — his own caretaker key 'jefferey'
+#     too. Only the owner himself, at his own keyboard, is not an AI;
+#   * a no that names his family or the people who read through the family
+#     key ('ma famille', 'my kids', 'the grandchildren', 'my daughter';
+#     grounding.names_family) holds for the family key.
+# A no that names people never applies to his caretaker key: his own agent
+# always sees his life so it can look after him; his rules about people
+# govern everyone else.
 SELF = "me"
 ANYONE = "anyone"
 
@@ -73,22 +82,47 @@ def _aud(r: dict) -> str:
     return grounding.norm_audience(r.get("audience", "")) or SELF
 
 
+def _written(r: dict) -> str:
+    """The audience as he wrote it, capitals and all ('Le Monde' is the
+    newspaper, 'le monde' is everyone). Rules kept before round 7 have only
+    the lower-case form."""
+    return str(r.get("audience_written") or r.get("audience") or "")
+
+
 def _no_aud(r: dict, data: dict | None = None) -> str:
     """Who a rule that says NO is for: its own audience, or everyone when it
     says so with an anyone-word ('members of the public', 'the public or the
-    press', 'nobody but my doctor', 'les gens'). 'Bob', 'my GP', 'Google' and
-    'Le Monde' are each only themselves (R2, round 6)."""
-    return ANYONE if grounding.is_anyone(r.get("audience", "")) else _aud(r)
+    press', 'nobody but my doctor', 'les gens', 'le monde'). 'Bob', 'my GP'
+    and 'Le Monde' are each only themselves (R2, round 6)."""
+    return ANYONE if grounding.is_anyone(_written(r)) else _aud(r)
+
+
+def names_ai(r: dict) -> bool:
+    """Does this rule name an AI, an engine or the company behind one (D1)?"""
+    return grounding.names_ai(_written(r))
 
 
 def _says_no_to(r: dict, names, people) -> bool:
     """Does this NO rule reach an audience known by these names? Its own
     audience, each word of it, or the recorded person it names (verify I-24:
-    a no for 'Karen Czako' let 'Karen' and 'my ex-wife' through)."""
+    a no for 'Karen Czako' let 'Karen' and 'my ex-wife' through) — and, for
+    a no that names his family or his children ('ma famille', 'my kids'),
+    the family (D1)."""
     a = _aud(r)
     if a in names:
         return True
+    if "family" in names and grounding.names_family(_written(r)):
+        return True
     return bool(grounding.rule_names(r.get("audience", ""), people) & set(names))
+
+
+def _ai_no(data: dict, hit) -> dict | None:
+    """The first rule that says NO to an AI about whatever `hit` reaches."""
+    for r in data.get("rules") or []:
+        if isinstance(r, dict) and r.get("kind") == "disclosure" and not r.get("allow") \
+                and names_ai(r) and hit(r):
+            return r
+    return None
 
 
 def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, list]:
@@ -117,9 +151,11 @@ def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, l
 
 
 # The far end of a connection — the engine's maker — is one reader; the key
-# holder (the family, the executor, a named key) is another.
+# holder (the family, the executor, a named key) is another. Every key that
+# reaches an engine carries grounding.AI_READER in its audiences (D1): then
+# every no that names an AI holds for it.
 VENDOR_NAMES = frozenset({"ai", "an ai", "any ai", "engines", "engine", "ais", "anthropic",
-                          "claude", "openai", "chatgpt", "gpt"})
+                          "claude", "openai", "chatgpt", "gpt", grounding.AI_READER})
 
 
 def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
@@ -132,14 +168,20 @@ def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
     Everyone who will read it is asked on their own, and a no for any of them
     holds it back (verify I-10: a yes for 'claude' let the family key read
     his diabetes over Claude despite 'never share my health with anyone',
-    while the same key over ChatGPT was refused)."""
+    while the same key over ChatGPT was refused). An engine is always one of
+    the readers (D1): a no that names any AI holds for every key that
+    reaches one, his caretaker key too, whatever yes there is."""
     aud = frozenset(grounding.norm_audience(a) for a in audiences or () if a)
     if not aud:
         return None
     hit = lambda r: grounding.tag_hits(r.get("tags") or [], text, tags)  # noqa: E731
-    parties = [p for p in (aud - VENDOR_NAMES, aud & VENDOR_NAMES) if p]
-    for party in parties:
-        ok, rule, _ = verdict(data, party, party, hit)
+    if aud & VENDOR_NAMES:
+        rule = _ai_no(data, hit)
+        if rule:
+            return rule
+    people = aud - VENDOR_NAMES
+    if people:
+        ok, rule, _ = verdict(data, people, people, hit)
         if ok is False:
             return rule
     return None
@@ -195,15 +237,18 @@ class ConscienceRules:
         kind = kind.strip().lower()
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {KINDS}")
+        written = " ".join(str(audience or "").split())
         rule = {
             "id": f"r{int(time.time() * 1000) % 10_000_000}",
             "kind": kind,
             "tags": _tags(tags),
-            "audience": audience.strip().lower() or SELF,
+            "audience": written.lower() or SELF,
             "allow": bool(allow),
             "instruction": instruction.strip(),
             "added": _now(),
         }
+        if written and written != written.lower():
+            rule["audience_written"] = written       # 'Le Monde', not 'le monde' (D1)
         self.c.data["rules"].append(rule)
         self.c._save()
         return self._as_read(rule)
@@ -212,15 +257,28 @@ class ConscienceRules:
         """The rule, and — for a no — whom it holds for, said so he knows."""
         if rule.get("kind") != "disclosure" or rule.get("allow"):
             return rule
-        if _no_aud(rule) == ANYONE:
+        said = _written(rule)
+        everyone, ai = _no_aud(rule) == ANYONE, names_ai(rule)
+        if ai:
+            return {**rule, "holds_for": "everyone and every AI" if everyone else "every AI",
+                    "note": (f"'{said}' names an AI, so this no holds for every AI that reads "
+                             "your memories — Claude, ChatGPT, a model on this Mac, and your "
+                             "own JEFFEREY too"
+                             + (", and for every person as well" if everyone else "")
+                             + ". Only you, reading at your own keyboard, still see it.")}
+        if everyone:
             return {**rule, "holds_for": "everyone",
-                    "note": (f"'{rule.get('audience')}' means everyone, so this no holds for "
+                    "note": (f"'{said}' means everyone, so this no holds for "
                              "everyone except your own JEFFEREY, which always sees your life so "
-                             "it can look after you. To let someone hear it after all, add a "
-                             "yes that names them.")}
+                             "it can look after you. To keep it from your JEFFEREY too, add a "
+                             "no for 'any AI'. To let someone hear it after all, add a yes "
+                             "that names them.")}
+        family = grounding.names_family(said)
         return {**rule, "holds_for": _aud(rule),
-                "note": (f"This no is only for '{rule.get('audience')}'. Your own JEFFEREY "
-                         "still sees it; nobody else is kept from it by this rule.")}
+                "note": (f"This no is only for '{said}'"
+                         + (", and so for your family's key too" if family else "")
+                         + ". Your own JEFFEREY still sees it; nobody else is kept from it "
+                           "by this rule.")}
 
     def remove_rule(self, rule_id_or_text: str = "", confirm: str = "") -> dict:
         """Delete a rule by its id, or by whole words of it, an exact tag or
@@ -262,6 +320,15 @@ class ConscienceRules:
         def on_topic(r):
             return grounding.tag_hits(r.get("tags") or [], text, want)
 
+        if grounding.names_ai(audience):
+            # a no that names any AI holds for every AI (D1)
+            no = _ai_no(self.c.data, on_topic)
+            if no:
+                out = {"allowed": False, "audience": aud, "tags": sorted(want),
+                       "reason": "the owner forbade it", "rule": no.get("instruction", "")}
+                if not _caller_holds_private():
+                    out.pop("rule", None)
+                return out
         ok, rule, limited = verdict(self.c.data, broad, strict, on_topic)
         if ok is None:
             return {"allowed": False, "audience": aud, "tags": sorted(want),
@@ -328,11 +395,15 @@ class ConscienceRules:
         broad, strict = grounding.audience_aliases(audience, self.c.data.get("people") or [])
         broad = {grounding.norm_audience(a) for a in broad}
         strict = {grounding.norm_audience(a) for a in strict}
+        ai = grounding.names_ai(audience)
         out = []
         for r in self.rules("disclosure"):
             if r.get("allow") or not r.get("tags"):
                 continue
-            if _no_aud(r, self.c.data) != ANYONE and _aud(r) in broad:
+            if ai and names_ai(r):
+                out += r["tags"]
+            elif _no_aud(r, self.c.data) != ANYONE and (
+                    _aud(r) in broad or "family" in broad and grounding.names_family(_written(r))):
                 out += r["tags"]
             elif _no_aud(r, self.c.data) == ANYONE:
                 # a yes for exactly this audience opens it again

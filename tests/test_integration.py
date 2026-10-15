@@ -361,9 +361,10 @@ class TheAlbum(Child):
         self.assertIn("Kabul", k["note"])
         self.assertEqual(r["status_after_kabul"], "untold")
         self.assertEqual(r["told"]["pinned_to_photos"], 4)
-        # an engine wrote it, so it is not word for word his
+        # an engine wrote it, so it is noted by the AI until he confirms it
+        # (round 7, D2: it no longer calls it a summary — it may be word for word)
         self.assertFalse(r["told"]["memory"]["verbatim"])
-        self.assertIn("summary in the AI's words", r["told"]["note"])
+        self.assertIn("noted by the AI and not yet confirmed by him", r["told"]["note"])
         self.assertNotIn("Kept in their words", r["told"]["note"])
 
     def test_an_old_memorys_fingerprints_go_out_as_a_count(self):

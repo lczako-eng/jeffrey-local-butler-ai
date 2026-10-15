@@ -31,8 +31,10 @@ Design rules — these are the sensitive ones, so they are strict:
   executor key never sees what one of his disclosure rules keeps from it,
   nor his private notes about anyone; it is told how many things were held
   back, never what.
-- **Who said it is kept (I-25).** A moment records where it came from, and
-  is marked verbatim only when it is word for word what he typed.
+- **Who said it is kept (I-25).** A moment records where it came from. What
+  an AI keeps is noted by the AI, not yet confirmed — never his own words by
+  itself (D2, round 7): it is his words once he confirms it with his own
+  hands (/confirm), or when he keeps it himself.
 - **Two people can share a name (I-27).** A second Laszlo is a second
   person, never an overwrite of the first; notes are added to, never
   replaced.
@@ -215,9 +217,9 @@ class Life:
                 f"wants it '{asked}', he types /share {entry.get('id')} {asked} himself in "
                 f"'Talk to JEFFEREY on this Mac'.")
         if "verbatim" in entry and not entry["verbatim"]:
-            notes.append("It was kept as written here, which is not word for word what he "
-                         "said: tell him plainly it is a summary, not his own words, and "
-                         "that he can confirm it with /pending.")
+            notes.append("It is noted by the AI, not yet confirmed by him: an AI never "
+                         "makes something his own words. Tell him plainly, and that he can "
+                         "confirm it himself with /confirm in 'Talk to JEFFEREY on this Mac'.")
         if notes:
             out["note"] = " ".join(notes)
         return out
@@ -235,8 +237,8 @@ class Life:
         pictures this story was told about. References, never copies.
 
         Written by an AI, it is stored private whatever visibility was asked
-        (I-26), and marked verbatim only when it is word for word what the
-        owner typed at his terminal this session (I-25)."""
+        (I-26), and noted by the AI, not yet confirmed — never his words until
+        he confirms it with his own hands (D2, round 7)."""
         asked = str(visibility or "private").strip().lower()
         if asked not in VISIBILITY:
             raise ValueError(f"visibility must be one of {VISIBILITY}")
@@ -250,8 +252,8 @@ class Life:
             "people": [p.strip() for p in str(people or "").split(",") if p.strip()],
             "tags": [t.strip().lower() for t in str(tags or "").split(",") if t.strip()],
             "visibility": vis, "added": _now(), "source": src,
-            # his own words: typed by him here, or through his own tools on
-            # this Mac with no AI in between
+            # his own words only from his own hands, or his own tools on this
+            # Mac with no AI in between — never because an AI says so (D2)
             "verbatim": src["stated_by"] != provenance.ENGINE,
             "status": provenance.status_for(src),
         }
@@ -364,10 +366,12 @@ class Life:
             levels = {"family"} | ({"legacy"} if self._legacy_open_to(client, "family") else set())
         else:                                        # 'legacy' and anything unknown
             levels = {"legacy"} if self._legacy_open_to(client, "legacy") else set()
-        aud: set = set()
-        if not rd["owner"] and not rd.get("own_key"):    # his rules govern other keys
+        # a no for any AI holds for every engine reader (D1); his rules about
+        # people govern every key but his own
+        aud: set = set(rd["audiences"])
+        if rd.get("people_rules"):
             broad, _ = grounding.audience_aliases(client, self.c.data.get("people") or [])
-            aud = set(rd["audiences"]) | set(broad)
+            aud |= set(broad)
             if ceiling == "family":
                 aud.add("family")
             if ceiling == "legacy":
@@ -405,7 +409,7 @@ class Life:
         if provenance.pending(m):
             o["unconfirmed"] = True
         if "verbatim" in m and not m["verbatim"]:
-            o["told_by"] = "an AI's words, not his own"
+            o["told_by"] = provenance.NOTED_BY_AI
         return o
 
     def _pictures(self, v: dict) -> tuple[list[dict], int, bool]:

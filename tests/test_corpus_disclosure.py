@@ -1,5 +1,6 @@
 """
-Frozen corpus — who a 'no' is for (R2), repair round 6.
+Frozen corpus — who a 'no' is for (R2), repair round 6, and the round-7
+decisions (D1).
 
 Round 4 grew a list of ways to say 'anyone'; round 5 made every 'no' whose
 audience it did not recognise a no for everyone — and that blinded his own
@@ -20,12 +21,37 @@ The structural rules it holds his rules to:
     audience other than his own keys. A name that merely contains such a
     word ('Le Monde', 'Mr. Nobody') is a name.
 
+Round 7 (D1) — rules that name an AI bind every engine key:
+
+  * A 'no' whose audience names an AI, an engine or the company behind one
+    (AI, any AI, artificial intelligence, a chatbot, the assistant, ChatGPT,
+    GPT, OpenAI, Claude, Anthropic, Gemini, Google, Bard, Copilot,
+    Microsoft, Llama, Meta, Hermes, the cloud, IA, l'IA …) holds for EVERY
+    key that reaches an engine — his own caretaker key 'jefferey' too. Only
+    the owner himself, at his own keyboard, still sees it. Round 6 let his
+    caretaker read what he had said no AI may hear (the convergence
+    skeptics' HIGH regression), and kept a 'no for Gemini' or 'Google' from
+    nobody but a key of that name: both are AIs, so both now hold for every
+    engine key.
+  * A 'no' that names people ('anyone', 'the public', 'Bob') still never
+    binds his caretaker: his own agent sees his life so it can look after
+    him. To keep something from it too, he says no to 'any AI'.
+  * A 'no' for his family or for the people who read through the family key
+    (my family, ma famille, la famille, my kids, my children, mes enfants,
+    the grandchildren, my relatives, my daughter, my son, ma fille, mon
+    fils) holds for the family key.
+  * Lower-case 'le monde' is everyone; 'Le Monde', with its capital M, is the
+    newspaper.
+
 Outcomes, for a 'no' about his health with this audience:
   EVERYONE  the family key no longer reads his diabetes; set_rule says it
             holds for everyone
   EXACT     the family key still reads it (the no is for someone else)
   FAMILY    the family key no longer reads it (the no names the family)
-In every case his caretaker key 'jefferey' still reads it.
+  AI        neither the family key nor his caretaker key reads it; set_rule
+            says it holds for every AI
+  AI_ALL    both: an anyone-word and an AI ('the public and ChatGPT')
+His caretaker key 'jefferey' still reads it, except for AI and AI_ALL.
 """
 
 from __future__ import annotations
@@ -35,7 +61,8 @@ import unittest
 
 from test_life import LifeTest, TA, TF
 
-EVERYONE, EXACT, FAMILY = "everyone", "exact", "family"
+EVERYONE, EXACT, FAMILY, AI, AI_ALL = "everyone", "exact", "family", "ai", "ai+everyone"
+HOLDS_FOR = {EVERYONE: "everyone", AI: "every AI", AI_ALL: "everyone and every AI"}
 
 AUDIENCES: list[tuple[str, str]] = [
     # round 4, verify-b/c: the ways of saying 'anyone' (ANoForThePublicIsANoForEveryone)
@@ -70,14 +97,54 @@ AUDIENCES: list[tuple[str, str]] = [
     ("Le Monde", EXACT), ("Monde", EXACT), ("Mr. Nobody", EXACT), ("Mrs. World", EXACT),
     ("Joe Public", EXACT), ("Facebook", EXACT),
     # round 5 verify-c: plain audiences that round 5 made 'everyone'
+    # (round 7, D1: 'Gemini' and 'Google' name an AI, so a no for them holds
+    # for every engine key, his own too — round 6 held them only from a key
+    # of that name)
     ("Bob", EXACT), ("my GP", EXACT), ("my cardiologist", EXACT), ("my oncologist", EXACT),
-    ("Gemini", EXACT), ("Google", EXACT), ("the VA", EXACT), ("the CRA", EXACT),
+    ("Gemini", AI), ("Google", AI), ("the VA", EXACT), ("the CRA", EXACT),
     ("Revenue Canada", EXACT), ("the mailman", EXACT), ("my hairdresser", EXACT),
     ("Karen", EXACT), ("Bob Smith", EXACT), ("my brother Mike", EXACT),
     # round 5 ANoForNobodyPlainIsANoForEveryone: plain ones stay plain
     ("the neighbours", EXACT), ("my sister", EXACT), ("the bank", EXACT), ("Mrs. Patel", EXACT),
     # a no that names the family is a no for the family key
     ("family", FAMILY), ("the family", FAMILY), ("my family", FAMILY),
+    # ---------------------------------------------------------- round 7 (D1)
+    # convergence skeptic vb R2 [HIGH]: a no that names the engine no longer
+    # held for his own key (sk7/r2.py, r2c.py); vc R2: the same for 'AI
+    # engines' (sk6/s_r2b.py)
+    ("ChatGPT", AI), ("OpenAI", AI), ("any AI", AI), ("AI", AI), ("claude", AI),
+    ("Claude", AI), ("the AI", AI), ("anthropic", AI), ("Anthropic", AI), ("AI engines", AI),
+    # vb R2 remaining: not taken as a no to the AI on any snapshot
+    ("chatbots", AI), ("l'IA", AI), ("robots", AI), ("artificial intelligence", AI),
+    # the rest of the decision's list, with and without little words
+    ("a chatbot", AI), ("the assistant", AI), ("GPT", AI), ("Bard", AI), ("Copilot", AI),
+    ("Microsoft", AI), ("Llama", AI), ("Meta", AI), ("Hermes", AI), ("the cloud", AI),
+    ("IA", AI), ("l'intelligence artificielle", AI), ("any chatbot", AI),
+    ("the public and ChatGPT", AI_ALL), ("anyone, AI included", AI_ALL),
+    # vb R2 [MEDIUM] regression: lower-case 'le monde' named only itself
+    ("le monde", EVERYONE), ("Le monde", EVERYONE),
+    # vb R2 [MEDIUM, against r5]: holds_for was the literal text and the
+    # family key read his diabetes
+    ("absolutely anyone", EVERYONE), ("literally anyone", EVERYONE), ("a soul", EVERYONE),
+    ("not a soul", EVERYONE), ("qui que ce soit", EVERYONE), ("les étrangers", EVERYONE),
+    ("the general population", EVERYONE), ("tout un chacun", EVERYONE),
+    ("n'importe lequel", EVERYONE), ("the masses", EVERYONE), ("outside people", EVERYONE),
+    ("les gens du village", EVERYONE),
+    # vb R2 remaining: a no for the family in French, or for the people who
+    # use the family key, never reached it
+    ("ma famille", FAMILY), ("la famille", FAMILY), ("my kids", FAMILY), ("the kids", FAMILY),
+    ("my children", FAMILY), ("the grandchildren", FAMILY), ("my grandkids", FAMILY),
+    ("my relatives", FAMILY), ("relatives", FAMILY), ("mes enfants", FAMILY),
+    ("my daughter", FAMILY), ("my son", FAMILY), ("ma fille", FAMILY), ("mon fils", FAMILY),
+    ("grandchildren", FAMILY),
+    # ...and 'his son's teacher' is the teacher
+    ("my son's teacher", EXACT),
+    # convergence vb/vc R2 evidence: fixed in round 6, kept fixed
+    ("any person", EVERYONE), ("noone", EVERYONE), ("personne d'autre", EVERYONE),
+    ("everyone on Facebook", EVERYONE), ("all and sundry", EVERYONE),
+    ("anyone but Anna", EVERYONE), ("the press and anyone else", EVERYONE),
+    ("whoever asks", EVERYONE), ("Nobody.", EVERYONE), ("toute personne", EVERYONE),
+    ("my lawyer", EXACT), ("Joe Everyone", EXACT), ("Dr Wu", EXACT),
 ]
 
 LOOP = """
@@ -123,14 +190,18 @@ class WhoANoIsFor(LifeTest):
             f, o = fam[a], own[a]
             why = []
             for where in ("http", "mcp"):
-                if DIABETES not in o[where]:
-                    why.append(f"his own key ({where}) no longer reads it")
+                own_held = DIABETES not in o[where]
+                if own_held != (want in (AI, AI_ALL)):
+                    why.append(f"his own key ({where}) {'held' if own_held else 'reads it'}")
                 if "The orb made her laugh." not in f[where]:
                     why.append(f"the family key ({where}) lost an unrelated moment")
+                if "The orb made her laugh." not in o[where]:
+                    why.append(f"his own key ({where}) lost an unrelated moment")
                 held = DIABETES not in f[where]
-                if held != (want in (EVERYONE, FAMILY)):
+                if held != (want != EXACT):
                     why.append(f"family key ({where}) {'held' if held else 'reads it'}")
-            if (f["said"] == "everyone") != (want == EVERYONE):
+            if f["said"] != HOLDS_FOR.get(want, f["said"]) or (
+                    want not in HOLDS_FOR and f["said"] in HOLDS_FOR.values()):
                 why.append(f"set_rule said holds_for={f['said']!r}")
             if why:
                 bad.append((a, want, why))
@@ -176,17 +247,110 @@ class WhoANoIsFor(LifeTest):
         self.assertEqual(r, {"a neighbour": True, "my daughter": True, "family": True,
                              "claude": True, "Bob": False})
 
-    def test_a_no_for_any_ai_is_for_other_keys_not_his_own(self):
-        # his own agent always sees his life; a no for the engine's maker
-        # still holds for the family key that reads through it
+    def test_a_no_for_any_ai_holds_for_his_own_key_too(self):
+        # round 7, D1 (convergence vb/vc R2, HIGH): round 6 kept his no for
+        # an AI from every key but the AI he named — his caretaker. Now it
+        # holds for every key that reaches an engine; only he, at his own
+        # keyboard, still sees it.
         self.py(SETUP)
-        auds = ["claude", "any AI", "anthropic"]
+        auds = ["claude", "any AI", "anthropic", "ChatGPT", "OpenAI", "AI", "the AI"]
         fam = self.py(LOOP % (auds, "TF"), JEFFEREY_CLIENT="family")
         own = self.py(LOOP % (auds, "TA"), JEFFEREY_CLIENT="jefferey")
         for a in auds:
-            self.assertIn(DIABETES, own[a]["mcp"], a)
-            self.assertIn(DIABETES, own[a]["http"], a)
-            self.assertNotIn(DIABETES, fam[a]["mcp"], a)
+            for where in ("mcp", "http"):
+                self.assertNotIn(DIABETES, own[a][where], (a, where))
+                self.assertNotIn(DIABETES, fam[a][where], (a, where))
+                self.assertIn("The orb made her laugh.", own[a][where], (a, where))
+            self.assertEqual(own[a]["said"], "every AI", a)
+
+    def test_a_no_for_any_ai_holds_on_the_terminal_and_for_a_model_in_the_house(self):
+        # D1: every key that reaches an engine — the terminal's caretaker on a
+        # rented engine and on a model on this Mac — and every tool that
+        # reads his facts; the owner at his own keyboard still sees it all
+        r = self.py("""
+            import access, jefferey_chat as jc
+            with access.owner_console():
+                jc.conscience.remember_fact("I have type 2 diabetes", "health")
+                jc.conscience.remember_fact("Anna calls on Sundays")
+                jc.rules.set_rule("disclosure", "health", "Never tell any AI about my health",
+                                  audience="any AI", allow=False)
+            rented = {"basis": jc.dispatch_tool("explain_basis", {"topic": "my diabetes"}),
+                      "facts": jc.conscience.snapshot(30, 0, 15)}
+            jc.egress.bind("chat", engine=jc.local_engine_label("hermes3",
+                                                                "http://127.0.0.1:9/v1"))
+            house = {"basis": jc.dispatch_tool("explain_basis", {"topic": "my diabetes"}),
+                     "facts": jc.conscience.snapshot(30, 0, 15),
+                     "in_house": jc.egress.in_the_house()}
+            with access.owner_console():
+                mine = jc.conscience.owner_view()
+            out({"rented": rented, "house": house,
+                 "mine": [f["fact"] for f in mine["facts"]]})
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertTrue(r["house"]["in_house"])
+        for where in ("rented", "house"):
+            sent = json.dumps(r[where])
+            self.assertNotIn("diabetes", sent.replace("my diabetes", ""), where)
+            self.assertIn("Anna calls on Sundays", json.dumps(r[where]["facts"]), where)
+        self.assertIn("I have type 2 diabetes", r["mine"])
+
+    def test_check_disclosure_reads_the_family_and_the_ai_the_same_way(self):
+        # vb R2 remaining: with a yes for anyone plus a no for 'ma famille',
+        # 'la famille' or 'my grandchildren', check_disclosure('family') was
+        # True; and a no for any AI must hold when asked about any AI
+        r = self.py("""
+            import access, jefferey_chat as jc
+            res = {}
+            for no in ("ma famille", "la famille", "my grandchildren", "mes enfants",
+                       "any AI", "ChatGPT"):
+                with access.owner_console():
+                    jc.conscience.save_fresh(lambda d: d.__setitem__("rules", []))
+                    jc.conscience.refresh()
+                    jc.rules.set_rule("disclosure", "health", "Anyone may know",
+                                      audience="anyone", allow=True)
+                    jc.rules.set_rule("disclosure", "health", "But not " + no,
+                                      audience=no, allow=False)
+                res[no] = {a: jc.rules.check_disclosure(a, "health")["allowed"]
+                           for a in ("family", "claude", "chatgpt", "a neighbour")}
+            out(res)
+        """)
+        for no in ("ma famille", "la famille", "my grandchildren", "mes enfants"):
+            self.assertEqual(r[no], {"family": False, "claude": True, "chatgpt": True,
+                                     "a neighbour": True}, no)
+        for no in ("any AI", "ChatGPT"):
+            self.assertEqual(r[no], {"family": True, "claude": False, "chatgpt": False,
+                                     "a neighbour": True}, no)
+
+    def test_le_monde_is_the_newspaper_only_with_its_capital(self):
+        # D1: lower-case 'le monde' is everyone, 'Le Monde' the newspaper —
+        # however he types it into whichever surface
+        r = self.py("""
+            import access, jefferey_chat as jc
+            res = {}
+            for a in ("le monde", "Le Monde", "LE MONDE", "tout le monde"):
+                with access.owner_console():
+                    res[a] = jc.rules.set_rule("disclosure", "health", "Never tell " + a,
+                                               audience=a, allow=False)["holds_for"]
+            out(res)
+        """)
+        self.assertEqual(r, {"le monde": "everyone", "Le Monde": "le monde",
+                             "LE MONDE": "everyone", "tout le monde": "everyone"})
+
+    def test_a_yes_that_names_someone_opens_nothing_to_anyone_else(self):
+        # convergence vb R2 evidence: on the yes side nothing opened wrongly
+        r = self.py("""
+            import access, jefferey_chat as jc
+            res = {}
+            for a in ("anyone except Karen", "the public library", "Le Monde", "nobody",
+                      "le monde"):
+                with access.owner_console():
+                    jc.conscience.save_fresh(lambda d: d.__setitem__("rules", []))
+                    jc.conscience.refresh()
+                    jc.rules.set_rule("disclosure", "recipes", "Yes for " + a, audience=a,
+                                      allow=True)
+                res[a] = jc.rules.check_disclosure("my sister", "recipes")["allowed"]
+            out(res)
+        """)
+        self.assertEqual(set(r.values()), {False}, r)
 
     def test_a_yes_for_le_monde_opens_nothing_to_anyone_else(self):
         r = self.py("""

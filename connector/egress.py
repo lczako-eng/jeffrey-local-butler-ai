@@ -117,7 +117,8 @@ FINGERPRINT_ARGS: dict[str, tuple[str, ...]] = {
 # and any question it raises for him.
 _PRIORITY = frozenset({"id", "context", "higher", "lower", "confidence", "evidence",
                        "updated", "for", "against", "stated", "locked", "unconfirmed",
-                       "question_for_owner", "proposed_change", "held_since_before"})
+                       "question_for_owner", "proposed_change", "held_since_before",
+                       "noted_by"})
 
 RELEASE: dict[str, frozenset[str]] = {
     # identity
@@ -149,7 +150,7 @@ RELEASE: dict[str, frozenset[str]] = {
     "check_draft": frozenset({"ok", "audience", "problems", "advice"}),
     # facts, profile, rules, the daily brief
     "remember_fact": frozenset({"id", "fact", "category", "added", "visibility",
-                                "sensitivity", "status"}),
+                                "sensitivity", "status", "noted_by"}),
     "forget": FORGET | {"removed_facts"},
     "get_profile": frozenset({ANY}),
     # a change to who the owner is comes back as a question first (I-30)
@@ -370,8 +371,12 @@ BANK = "a bank account number"
 HEALTH = "a health card number"
 LICENCE = "a driver's licence number"
 PASSPORT = "a passport number"
+# Not a kind of secret: any number in a note that mentions a password, a PIN
+# or a code, hidden on the way out in case it is the code (D3, round 7).
+NOTE_NUMBER = "a number in a note that mentions a code"
 # Most serious first: what looks_secret() names when several are present.
-_ORDER = (APIKEY, PASSWORD, CODE, SSN, CARD, SIN, BANK, HEALTH, LICENCE, PASSPORT)
+_ORDER = (APIKEY, PASSWORD, CODE, SSN, CARD, SIN, BANK, HEALTH, LICENCE, PASSPORT,
+          NOTE_NUMBER)
 
 # ---- normalising: one spelling for what can be written many ways
 _FOLD = {**dict.fromkeys(map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
@@ -380,7 +385,15 @@ _FOLD = {**dict.fromkeys(map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
          # letters NFKD does not take apart ('hasło' is Polish for password)
          ord("ł"): "l", ord("Ł"): "L", ord("đ"): "d", ord("Đ"): "D", ord("ø"): "o",
          ord("Ø"): "O", ord("ß"): "ss", ord("æ"): "ae", ord("Æ"): "AE", ord("œ"): "oe",
-         ord("Œ"): "OE", ord("ı"): "i"}
+         ord("Œ"): "OE", ord("ı"): "i",
+         # Cyrillic and Greek letters that look like Latin ones ('Bank РIN 4821'
+         # with a Cyrillic Р): read as the letter they look like (D3, round 7)
+         **{ord(a): b for a, b in zip(
+             "АВЕКМНОРСТХУІЈЅаеорсухіјѕԁһӏԛԝ",
+             "ABEKMHOPCTXYIJSaeopcyxijsdhlqw")},
+         **{ord(a): b for a, b in zip(
+             "ΑΒΕΖΗΙΚΜΝΟΡΤΥΧαβεικνορτυχ",
+             "ABEZHIKMNOPTYXabeikvoptux")}}
 
 
 def _fold_char(ch: str) -> str:
@@ -420,13 +433,13 @@ def _rx(*alts: str) -> str:
 _S = r"[\s\-]+"       # between the words of one phrase
 # Passwords: the value may be a word ("the password is couch").
 _PW_WORDS = _rx(
-    r"pass(?:word|wd|code|phrase)s?", r"pwd", r"pass" + _S + r"word",
+    r"pass(?:word|wd|code|phrase)s?", r"pwd", r"pw", r"pass" + _S + r"word",
     r"mots?" + _S + r"de" + _S + r"passe", r"motdepasse", r"mdp",
     r"contrasena", r"clave", r"passwort", r"kennwort", r"senha",
     r"jelsz(?:o|avam|ava|avak)", r"wachtwoord", r"haslo", r"heslo")
 # PINs and the codes of a house: the value is a number ("PIN 4821").
 _PIN_WORDS = _rx(
-    r"pins?", r"pin" + r"[\s\-]*(?:code|number|no|#|kod)", r"nip",
+    r"pins?", r"pin" + r"[\s\-]*(?:code|number|no|#|kod)", r"nip", r"digicodes?",
     r"code" + _S + r"(?:nip|pin)", r"geheimzahl", r"cvv2?", r"cvc2?", r"cvn",
     r"numero" + _S + r"d'?\s*identification" + _S + r"personnel(?:le)?",
     r"personal" + _S + r"identification" + _S + r"number",
@@ -436,7 +449,8 @@ _PIN_WORDS = _rx(
     r"entry" + _S + r"code", r"code" + _S + r"d'?\s*entree",
     r"(?:(?:front|back|side|garage|patio|main)" + _S + r")?door" + _S + r"(?:code|pin)",
     r"code" + _S + r"(?:de" + _S + r"(?:la" + _S + r")?|du" + _S + r")?"
-    r"(?:porte|garage|barriere|portail|cadenas|coffre|boite" + _S + r"a" + _S + r"cles?)",
+    r"(?:porte|garage|barriere|portail|cadenas|coffre|boite" + _S + r"a" + _S + r"cles?"
+    r"|(?:l'\s*)?immeuble|batiment|(?:l'\s*)?entree|(?:l'\s*)?appartement)",
     r"code" + _S + r"(?:de" + _S + r"|d'\s*)(?:l'\s*)?alarme",
     r"code" + _S + r"du" + _S + r"systeme" + _S + r"d'\s*alarme",
     r"gate" + _S + r"code", r"garage" + _S + r"(?:code|pin)",
@@ -744,6 +758,51 @@ def _digit_words(n: str, toks: list, i: int) -> int | None:
     return toks[k - 1].end() if k - i >= 4 else None
 
 
+# Words that may stand at the start of the sentence after a code's own
+# ('My PIN changed. It is now 5932.', 'Garage code: see below. 4821', 'The
+# wifi password changed. Now it is BlueSky42', 'ask Karen. It is tulip99').
+_LEAD_IN = frozenset("""it it's its is was 's now new one the a my his her our c'est est
+    maintenant nouveau nouvelle le la mon ma : = - -> then so and but et alors donc code
+    pin nip number numero password mot de passe today below here ci-dessous voici""".split())
+
+
+def _next_sentence_value(n: str, at: int, fam: str) -> tuple[int, int] | None:
+    """The value of a password, PIN or code written in one of the next two
+    sentences, right after a few little words (D3, round 7): a number for a
+    PIN or a code; a word with a digit in it for a password ('It is
+    tulip99'), never a plain word ('It is annoying' says nothing secret)."""
+    pos = at
+    for _ in range(2):
+        m = _CLAUSE_END.match(n, pos)
+        if not m:
+            return None
+        start = m.end()
+        nxt = _CLAUSE_END.search(n, start)
+        stop = nxt.start() if nxt else len(n)
+        for t in _TOK.finditer(n, start, stop):
+            raw = t.group()
+            low = raw.lower().strip(_LEAD + _TRAIL)
+            if not low or low in _LEAD_IN or raw in _CONNECT:
+                continue
+            v = raw.lstrip(_LEAD + "-").rstrip(_TRAIL)
+            at_v = t.start() + len(raw) - len(raw.lstrip(_LEAD + "-"))
+            if fam in ("pw", "weak"):
+                d = _ndigits(v)
+                if d and (any(c.isalpha() for c in v) and len(v) >= 4
+                          or _PIN_VALUE.fullmatch(v) and d >= 3) \
+                        and not _why_not_the_code(n, at_v, v, "", True):
+                    return _tail(n, t.start(), stop)
+            else:
+                end = _spaced_pin(n, t.start())
+                if end:
+                    return _trim(n, t.start(), end)
+                if _PIN_VALUE.fullmatch(v) and not _why_not_the_code(n, at_v, v, "", True):
+                    return _trim(n, t.start(), t.end())
+            break                          # the first real word holds no value
+        pos = stop
+    return None
+
+
 def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
     """The secrets that words announce ('PIN 4821', 'the password is couch').
 
@@ -846,6 +905,11 @@ def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
             prev = low.strip(_LEAD + _TRAIL)
             if fam in ("weak", "code") and not found:
                 break                               # these hold their value only at once
+        if not found and fam in ("pw", "pin", "code", "codes"):
+            nxt = _next_sentence_value(n, end_c, fam)
+            if nxt:
+                out.append((*nxt, what))
+                found = True
         if candidate and not found:
             out.append((*candidate, what))
         # ...or before it: "4821 is my PIN", "Soleil2024 est mon mot de passe"
@@ -1256,7 +1320,156 @@ def secret_signals(text) -> list[str]:
 
 
 def hidden_mark(what: str) -> str:
+    if what == NOTE_NUMBER:
+        return f"[hidden: {what}]"
     return f"[hidden: looks like {what}]"
+
+
+# ---- a note that mentions a code keeps every number in it at home (D3)
+# Rounds 4 to 6 tried to tell, number by number, which one after 'PIN' or
+# 'code' was the code and which a phone, a ticket, a year or a time — and
+# each round a neighbouring note went out with its code in clear ('My PIN is
+# 4821. The new one is 5932', 'Garage code changed today. New one: 5932').
+# The decision now (round 7):
+#   * going OUT, a note that names a password, a PIN or a code (password,
+#     passcode, PIN, NIP, code, digicode, combination, alarm, mot de passe,
+#     wifi …) has every run of three or more digits and every word that mixes
+#     letters and digits hidden, anywhere in it, in every sentence — except a
+#     phone number written with its separators. Hiding too much is the
+#     accepted cost;
+#   * coming IN from an AI, such a note with such a value anywhere after the
+#     word is not kept: the AI is told to ask the owner, who can keep it
+#     himself (/remember, at his own keyboard) if it holds no secret. An
+#     amount, a whole date, a dose, an ordinal ('3rd') or a time like '10am'
+#     is not code-shaped there.
+_TRIGGER = re.compile(r"(?<![^\W_])(?:" + _PW_WORDS + "|" + _PIN_WORDS + "|" + _WEAK_WORDS
+                      + r"|codes?|digicodes?|alarms?|alarmes?|combinations?|combinaisons?"
+                      r"|combos?)(?![^\W_])", re.I)
+_DRUN = re.compile(r"(?<![^\W_])\d+(?:(?:[ \t]?[\-./,][ \t]?|[ \t])\d+)*(?![^\W_])")
+_DWORD_RUN = re.compile(r"(?<![^\W_])(?:" + "|".join(sorted(_DIGIT_WORDS, key=len, reverse=True))
+                        + r")(?:[ \t,\-]+(?:" + "|".join(sorted(_DIGIT_WORDS, key=len,
+                                                               reverse=True))
+                        + r")){2,}(?![^\W_])", re.I)
+_ORDINAL = re.compile(r"\d{1,3}(?:st|nd|rd|th|e|er|re|eme|ieme)", re.I)
+_TIME_TOKEN = re.compile(r"\d{1,2}(?::\d\d)?(?:am|pm|a\.m\.?|p\.m\.?|h\d{0,2}|hrs?)", re.I)
+_UNIT_TOKEN = re.compile(r"\d+(?:[.,]\d+)?(?:mg|mcg|ml|g|kg|lbs?|oz|km|cm|mm|m|ft|in|%|k|x)",
+                         re.I)
+
+
+def _secret_word_ends(n: str) -> list[int]:
+    """Where each word that names a password, a PIN or a code ends — not
+    'postal code', 'dress code' or a Legion pin."""
+    out = []
+    for m in _TRIGGER.finditer(n):
+        w = m.group().lower()
+        before = re.findall(r"[a-z]+", n[max(0, m.start() - 24):m.start()].lower())
+        if w.startswith("code") and before and before[-1] in _NOT_A_SECRET_CODE:
+            continue
+        if w in ("pin", "pins") and before and before[-1] in _NOT_A_PIN_BEFORE:
+            continue
+        out.append(m.end())
+    return out
+
+
+def _code_shapes(n: str, start: int = 0, at_door: bool = False) -> list[tuple[int, int]]:
+    """Every code-shaped value in `n` from `start` on: a word that mixes
+    letters and digits, a run of three or more digits (groups joined by a
+    space, a dash, a dot or a comma count as one run), three or more digits
+    said in words — never a phone number written with its separators.
+    `at_door`: also not an amount, a whole date, a dose, an ordinal or a
+    time like '10am'."""
+    spans: list[tuple[int, int]] = []
+    for t in re.finditer(r"\S+", n[start:]):
+        s0, e0 = start + t.start(), start + t.end()
+        while s0 < e0 and (n[s0] in _LEAD or n[s0] in "#*-"):
+            s0 += 1
+        while e0 > s0 and n[e0 - 1] in _TRAIL + "#*":
+            e0 -= 1
+        core = n[s0:e0]
+        if not (any(c.isdigit() for c in core) and any(c.isalpha() for c in core)):
+            continue
+        if _MARK.search(core) or core.startswith("[") or core.endswith("]"):
+            continue
+        if at_door and (_ORDINAL.fullmatch(core) or _TIME_TOKEN.fullmatch(core)
+                        or _UNIT_TOKEN.fullmatch(core)):
+            continue
+        spans.append((s0, e0))
+    for m in _DRUN.finditer(n, start):
+        groups = [(m.start() + g.start(), m.start() + g.end())
+                  for g in _DIGITS.finditer(m.group())]
+        runs: list[list[tuple[int, int]]] = [[]]
+        skip = -1
+        for gs, ge in groups:
+            if gs < skip:
+                continue
+            ph = _PHONE_WRITTEN.match(n, gs)
+            if ph and re.search(r"[\s.\-()]", ph.group()):
+                skip = ph.end()
+                runs.append([])
+                continue
+            runs[-1].append((gs, ge))
+        for run in runs:
+            if not run or sum(ge - gs for gs, ge in run) < 3:
+                continue
+            s1, e1 = run[0][0], run[-1][1]
+            if at_door and (_DATE_SHAPE.fullmatch(n[s1:e1]) or _MONEY_AFTER.match(n, e1)
+                            or _MONEY_BEFORE.search(n[max(0, s1 - 2):s1])
+                            or _UNIT_AFTER.match(n, e1)):
+                continue
+            spans.append((s1, e1))
+    for m in _DWORD_RUN.finditer(n, start):
+        spans.append((m.start(), m.end()))
+    spans.sort()
+    merged: list[list[int]] = []
+    for s1, e1 in spans:
+        if merged and s1 <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e1)
+        else:
+            merged.append([s1, e1])
+    return [(a, b) for a, b in merged]
+
+
+def names_a_code(text) -> bool:
+    """Does this text name a password, a PIN or a code (any spelling, any
+    look-alike letters)?"""
+    if not isinstance(text, str) or not text:
+        return False
+    n, _ = _normalise(text)
+    return bool(_secret_word_ends(n))
+
+
+def code_after_its_word(text) -> bool:
+    """A note that names a password, a PIN or a code and has a code-shaped
+    value anywhere after that word, in any later sentence (the door, D3)."""
+    if not isinstance(text, str) or len(text) < 4:
+        return False
+    n, _ = _normalise(text)
+    ends = _secret_word_ends(n)
+    return bool(ends) and bool(_code_shapes(n, min(ends), at_door=True))
+
+
+def hide_numbers_in_code_note(text: str) -> tuple[str, int]:
+    """Going out (D3): if this note names a password, a PIN or a code, every
+    code-shaped value in it — anywhere, in every sentence — is hidden, except
+    a phone number written with its separators. Returns the text and how
+    many were hidden."""
+    if not isinstance(text, str) or not names_a_code(text):
+        return text, 0
+    n, src = _normalise(text)
+    spans = _code_shapes(n)
+    if not spans:
+        return text, 0
+    if src is not None:
+        spans = [(src[s], src[e - 1] + 1) for s, e in spans]
+    marks = [(m.start(), m.end()) for m in _MARK.finditer(text)]
+    parts, last, count = [], 0, 0
+    for s, e in spans:
+        if any(ms <= s < me or ms < e <= me for ms, me in marks):
+            continue
+        parts += [text[last:s], hidden_mark(NOTE_NUMBER)]
+        last, count = e, count + 1
+    parts.append(text[last:])
+    return "".join(parts), count
 
 
 def mask_text(text: str, legacy: bool = False) -> tuple[str, list[str]]:
@@ -1339,18 +1552,28 @@ def _scan(obj, where: str = "") -> tuple[str, str] | None:
     return None
 
 
-def mask(obj, where: str = "") -> tuple[object, list[tuple[str, str]]]:
+# JEFFEREY's own words, never a note of the owner's: no number in them is hidden
+# for being near the word 'code' (the directives name PINs and codes).
+_OWN_TEXT = frozenset({"get_directives"})
+
+
+def mask(obj, where: str = "", notes: bool = True) -> tuple[object, list[tuple[str, str]]]:
     """A copy of `obj` with every secret-shaped part hidden in place, and
     (where, what) for each. A field whose NAME looks like a secret is left
     out whole. What it is given is what the store holds (a tool's answer, or
     what an engine sent, for the record), so a mark an older version let in
-    is read harder (legacy, see _MARK)."""
+    is read harder (legacy, see _MARK), and in a text that names a password,
+    a PIN or a code every number is hidden too (D3; `notes=False` for
+    JEFFEREY's own words)."""
     found: list[tuple[str, str]] = []
 
     def go(o, w):
         if isinstance(o, str):
             m, whats = mask_text(o, legacy=True)
             found.extend((w or "text", x) for x in whats)
+            if notes and (names_a_code(o) or whats):
+                m, more = hide_numbers_in_code_note(m)
+                found.extend((w or "text", NOTE_NUMBER) for _ in range(more))
             return m
         if _is_number(o):
             why = looks_secret(str(o))
@@ -1469,8 +1692,12 @@ def kept_home_note(found: list[tuple[str, str]]) -> str:
     """What the model is told when part of an answer stayed in the house."""
     kinds = sorted({w for _, w in found}, key=_ORDER.index)
     n = len(found)
-    return (f"{n} part{'s' if n != 1 else ''} of this answer looked like "
-            f"{', or '.join(kinds)}, so {'they were' if n != 1 else 'it was'} hidden "
+    looked = [k for k in kinds if k != NOTE_NUMBER]
+    why = (f"looked like {', or '.join(looked)}" if looked else "") + (
+        (" or " if looked else "") + "were numbers in a note that mentions a password, "
+        "a PIN or a code" if NOTE_NUMBER in kinds else "")
+    return (f"{n} part{'s' if n != 1 else ''} of this answer {why}, so "
+            f"{'they were' if n != 1 else 'it was'} hidden "
             f"and stayed in the house; the rest is complete. Never ask anyone to read "
             f"a hidden part to you. If it came from the owner's own memories, tell him "
             f"plainly: he can move it into his vault by typing /secrets in 'Talk to "
@@ -2195,6 +2422,26 @@ def admit(tool: str, asked) -> None:
             f"a PIN or a code he wants kept, he puts it in his vault himself, at his own "
             f"keyboard (python connector/vault.py set <name>).")
     hit = _scan(plain)
+    if not hit and tool not in _NOT_NOTES:
+        asked_about = _code_note(plain)
+        if asked_about is not None:
+            try:
+                _write(_entry("tool_call", tool=tool, sent=None, asked=_describe(asked, tool),
+                              withheld=[], refused=f"a note in '{asked_about}' names a "
+                                                   f"password, PIN or code and has a number "
+                                                   f"after it; not taken"))
+            except OSError:
+                pass
+            raise EgressRefused(
+                f"not kept: '{asked_about}' in what you sent mentions a password, a PIN or "
+                f"a code and has a number or a code-like word after it. JEFFEREY does not "
+                f"keep a note like that from an AI, in case that is the code itself, so "
+                f"nothing was stored. Ask the owner, in plain words, without asking him to "
+                f"read out any code. If it holds no secret, he can keep it himself by "
+                f"typing /remember and the note in 'Talk to JEFFEREY on this Mac'. If it "
+                f"is a password or a code he wants kept, it belongs in his vault "
+                f"(python connector/vault.py set <name>), and you then use "
+                f"'vault:<name>' without ever seeing it.")
     if hit:
         field, what = hit
         try:
@@ -2210,6 +2457,35 @@ def admit(tool: str, asked) -> None:
             f"belongs in his vault: he stores it himself, at his own keyboard "
             f"(python connector/vault.py set <name>), and you then use 'vault:<name>' "
             f"without ever seeing it.")
+
+
+# What these tools are handed is a bank statement's line — a merchant's name
+# with its store number ('ADT ALARM #4821 OTTAWA') — not a note of his: only
+# the strict scan reads it.
+_NOT_NOTES = frozenset({"check_charge", "review_statement", "expect_charge", "mark_cancelled",
+                        "name_for_charge", "decline_charge_change"})
+# ...and what the money watch answers is about those lines: their amounts and
+# dates go out as they are (the strict scan still hides any secret in them).
+_STATEMENTS = _NOT_NOTES | frozenset({"expected_charges", "dispute_pack",
+                                      "charge_changes_waiting"})
+
+
+def _code_note(obj, where: str = "") -> str | None:
+    """The first text of what an engine sent that names a password, a PIN or
+    a code with a code-shaped value after the word (D3), or None."""
+    if isinstance(obj, str):
+        return (where or "text") if code_after_its_word(obj) else None
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            hit = _code_note(v, f"{where}.{k}" if where else str(k))
+            if hit:
+                return hit
+    elif isinstance(obj, (list, tuple)):
+        for i, v in enumerate(obj):
+            hit = _code_note(v, f"{where}[{i}]")
+            if hit:
+                return hit
+    return None
 
 
 def _marked(obj, where: str = "") -> str | None:
@@ -2323,7 +2599,7 @@ def release(tool: str, out, asked=None):
         kept, withheld = _filter(tool, out)
     except ValueError as e:
         raise _refuse("tool_result", tool, asked, str(e))
-    kept, found = mask(kept)
+    kept, found = mask(kept, notes=tool not in _OWN_TEXT and tool not in _STATEMENTS)
     if found:
         hit = _scan(kept)
         if hit:                       # hiding did not clear it: nothing goes

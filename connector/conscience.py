@@ -2425,10 +2425,12 @@ class Conscience:
                   "it. Only he can let other AIs see it, typing /share "
                 + f"{entry['id']} engines himself.")
         if entry["status"] == "pending":
-            notes.append("It is marked 'not yet confirmed by him', because an AI wrote "
-                         "it down and it is not plainly his own words (an AI's wording, or "
-                         "something he said someone else claims); he confirms it with "
-                         "/pending in 'Talk to JEFFEREY on this Mac'.")
+            out["noted_by"] = provenance.NOTED_BY_AI
+            notes.append("Noted by the AI, not yet confirmed by him: an AI never makes "
+                         "something his own words, whatever he typed. It is used, marked "
+                         "unconfirmed, until he confirms it himself — /confirm in 'Talk to "
+                         "JEFFEREY on this Mac'. If he wants it kept in his own words, he "
+                         "types /remember and the words there.")
         if notes:
             out["note"] = " ".join(notes)
         return out
@@ -2459,14 +2461,15 @@ class Conscience:
         for f in self.data.get("facts") or []:
             if not isinstance(f, dict):
                 continue
-            if not rd["owner"]:
-                if f.get("visibility", "engines") != "engines" and (bulk or not rd["caretaker"]):
-                    held.append((f, "private"))
-                    continue
-                if _rules.held_back(self.data, rd["audiences"], f.get("fact", ""),
-                                    self._fact_tags(f)):
-                    held.append((f, "rules"))
-                    continue
+            if not rd["owner"] and f.get("visibility", "engines") != "engines" and (
+                    bulk or not rd["caretaker"]):
+                held.append((f, "private"))
+                continue
+            # a no for an AI holds for every engine reader, his own too (D1)
+            if _rules.held_back(self.data, rd["audiences"], f.get("fact", ""),
+                                self._fact_tags(f)):
+                held.append((f, "rules"))
+                continue
             seen.append(f)
         return seen, held
 
@@ -2479,18 +2482,25 @@ class Conscience:
             v["private_because"] = [grounding.CLASS_WORDS_PLAIN[k] for k in kinds]
         if provenance.pending(f):
             v["unconfirmed"] = True
+            v["noted_by"] = provenance.NOTED_BY_AI
         if reason:
             v["match_reason"] = reason
         return v
 
     # ------------------------------------------------------------ priorities
     def _find_priority(self, context: str, a: str, b: str) -> dict | None:
+        """The value about this context and these two things. 'the car', 'The
+        car!', 'car' and 'my car' are one context (the same words that matter;
+        R9 convergence: 'the car.' made a second row beside his locked one)."""
         n = grounding.normalise
-        for p in self.data["priorities"]:
-            if not isinstance(p, dict):
-                continue
-            if n(p.get("context")) == n(context) and {
-                n(p.get("higher")), n(p.get("lower"))} == {n(a), n(b)}:
+        same = [p for p in self.data["priorities"] if isinstance(p, dict)
+                and {n(p.get("higher")), n(p.get("lower"))} == {n(a), n(b)}]
+        for p in same:
+            if n(p.get("context")) == n(context):
+                return p
+        words = grounding.content(context)
+        for p in same:
+            if words and grounding.content(p.get("context", "")) == words:
                 return p
         return None
 
@@ -2562,6 +2572,7 @@ class Conscience:
                 v["locked"] = True
         if provenance.pending(p):
             v["unconfirmed"] = True
+            v["noted_by"] = provenance.NOTED_BY_AI
         if p.get("question"):
             v["question_for_owner"] = p["question"]
         if isinstance(p.get("proposed"), dict):
@@ -3228,8 +3239,8 @@ class Conscience:
         if not filtered:
             return acts
         rd = provenance.reader()
-        if rd["owner"]:
-            return acts
+        if not rd["audiences"]:
+            return acts                  # the owner himself, at his keyboard
         out = []
         for a in acts:
             text = " ".join(str(a.get(k) or "") for k in ("description", "approved_for",
@@ -3248,10 +3259,10 @@ class Conscience:
         kinds only through his caretaker key, and never what his rules keep
         from this reader."""
         import rules as _rules
-        if rd.get("owner"):
-            return True
+        if not rd.get("audiences"):
+            return True                  # the owner himself, at his keyboard
         kinds = grounding.sensitivity(text, category)
-        if kinds and not rd.get("caretaker"):
+        if kinds and not rd.get("caretaker") and not rd.get("owner"):
             return False
         return not _rules.held_back(self.data, rd["audiences"], text,
                                     [str(category or "")] + kinds)
@@ -3410,7 +3421,7 @@ class Conscience:
         obs = self.data["observations"][-5:][::-1]
         acts = self.action_log(10, filtered=False)
         goals, held, more_goals = self._goals_for(rd)
-        if not rd["owner"]:
+        if rd["audiences"]:
             def ok(text, cat):
                 return self.reader_may_see(rd, text, cat)
             keep_obs = [o for o in obs if ok(o.get("note", ""), o.get("category", ""))]
@@ -3437,12 +3448,10 @@ class Conscience:
             out["held_back"] = {"count": held, "why": (
                 "Some recent lines are private, or kept from this connection by his "
                 "own rules. Do not guess at them.")}
+        waiting = self.waiting_for_owner()
+        if waiting:
+            out["waiting_for_owner"] = waiting
         if rd["owner"] or rd["caretaker"]:
-            waiting = len(self.pending_items())
-            if waiting:
-                out["waiting_for_owner"] = {"count": waiting, "how": (
-                    "Things an AI wrote down that he has not confirmed, or asked to "
-                    "share. He sees them with /pending in 'Talk to JEFFEREY on this Mac'.")}
             # changes to his list of agreed payments an AI asked for (verify
             # I-47: nothing showed they waited, so they waited forever)
             charges = sum(1 for p in self.data.get("charge_proposals") or []
@@ -3504,11 +3513,26 @@ class Conscience:
                         + ("Ask explain_basis about the subject and the ones that matter "
                            "come back. " if rd["caretaker"] else "")
                         + "Never guess at what is held back.")}
-        if rd["owner"] or rd["caretaker"]:
-            waiting = len(self.pending_items())
-            if waiting:
-                out["waiting_for_owner"] = waiting
+        waiting = self.waiting_for_owner()
+        if waiting:
+            out["waiting_for_owner"] = waiting
         return out
+
+    def waiting_for_owner(self) -> dict | None:
+        """How many notes an AI wrote down wait for his confirmation (D2,
+        round 7) — a count, said to every reader, never what they say."""
+        items = self.pending_items()
+        notes = sum(1 for x in items if x["kind"] != "request to share")
+        if not items:
+            return None
+        return {"count": len(items), "notes_to_confirm": notes, "how": (
+            f"{notes} note(s) an AI wrote down wait for his confirmation"
+            + (f", and {len(items) - notes} request(s) to share something" if
+               len(items) > notes else "")
+            + ". They are used, marked unconfirmed, but they are not his words until he "
+              "confirms them himself: /pending and /confirm in 'Talk to JEFFEREY on this "
+              "Mac', or 'python connector/conscience.py confirm'. Never call them his "
+              "words before he does.")}
 
     def owner_view(self) -> dict:
         """Everything, for the owner's own screen (/conscience) — never sent
@@ -3683,6 +3707,8 @@ class Conscience:
             it.pop("question", None)
             it["status"] = "confirmed"
             it["confirmed_by_owner"] = _now()
+            if sec == "memories" and "verbatim" in it:
+                it["verbatim"] = True          # his words now: he said so himself (D2)
             if sec == "priorities":
                 it["evidence"] = int(it.get("for") or 0) + int(it.get("against") or 0) or 1
                 it["confidence"] = self._confidence(it)
@@ -3905,6 +3931,72 @@ def edit(c: Conscience, editor: list[str] | None = None) -> int:
     return 0
 
 
+def confirm_at_keyboard(c: "Conscience", which=(), yes: bool = False, input_fn=input,
+                        out=print) -> int:
+    """What an AI noted down, in plain words, numbered; he says which are
+    right — one, several or all — and those become his own words (D2,
+    round 7). Only a person at this keyboard: there is no AI in this
+    process."""
+    import answers
+    try:
+        c.refresh()
+    except StoreProblem as e:
+        out("  " + e.for_owner())
+        return 1
+    items = [it for it in c.pending_items() if it["kind"] != "request to share"]
+    if not items:
+        out("  Nothing is waiting for you: everything kept is in your own words, or you "
+            "have confirmed it.")
+        return 0
+    out(f"  {len(items)} thing(s) an AI noted down wait for your OK:")
+    for k, it in enumerate(items, 1):
+        out(f"    {k}. ({it['kind']}) {it['what'][:110]}")
+        out(f"          — {it['why']}")
+    chosen = [w for w in which or () if str(w).strip()]
+    if not chosen:
+        if yes:
+            out("  Say which ones: their numbers, or all.")
+            return 1
+        answers.flush_typeahead()
+        try:
+            said = input_fn("  Which are right? Type their numbers (for example 1 3), or "
+                            "all, and press return. Press return alone to stop: ")
+        except EOFError:
+            said = ""
+        chosen = str(said).replace(",", " ").split()
+    if not chosen:
+        out("  Nothing was changed.")
+        return 0
+    if any(str(w).lower() == "all" for w in chosen):
+        picked = items
+    else:
+        picked = []
+        for w in chosen:
+            if not str(w).isdigit() or not 1 <= int(w) <= len(items):
+                out(f"  There is no number {w} in the list. Nothing was changed.")
+                return 1
+            picked.append(items[int(w) - 1])
+    out("  You are saying these are right — your own words from now on:")
+    for it in picked:
+        out(f"    · {it['what'][:110]}")
+    if not yes:
+        answers.flush_typeahead()
+        try:
+            said = input_fn("  Is that right? Type yes and press return: ")
+        except EOFError:
+            said = ""
+        if answers.yes_no(said) is not True:
+            out("  Nothing was changed.")
+            return 1
+    try:
+        res = c.confirm([it["id"] for it in picked])
+    except (StoreProblem, PermissionError) as e:
+        out("  Not done: " + (e.for_owner() if isinstance(e, StoreProblem) else str(e)))
+        return 1
+    out(f"  Done. Confirmed {len(res['confirmed'])}: they are your own words now.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--path", default=None,
@@ -3921,6 +4013,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--yes", action="store_true", help="do not ask first")
     sub.add_parser("dismiss", parents=[common], help="I have read the notices")
     sub.add_parser("edit", parents=[common], help="change them by hand, checked")
+    cf = sub.add_parser("confirm", parents=[common],
+                        help="say yes to what an AI noted down, so it is your own words")
+    cf.add_argument("which", nargs="*", help="their numbers in the list, or all")
+    cf.add_argument("--yes", action="store_true", help="do not ask first")
     a = ap.parse_args(argv)
     path = Path(a.path).expanduser() if a.path else DEFAULT_STORE
 
@@ -3943,6 +4039,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "edit":
         return edit(c)
+    if a.cmd == "confirm":
+        return confirm_at_keyboard(c, a.which, a.yes)
     if a.cmd == "dismiss":
         try:
             c.refresh()

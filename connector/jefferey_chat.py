@@ -29,8 +29,9 @@ In-chat commands:
                   change what JEFFEREY may do — e.g. /permit groceries act 100
                   per week, /permit selling act at least 500, /permit
                   payments recommend. You are asked to confirm first.
-    /pending      what an AI wrote down that waits for your OK
-    /confirm CODE yes, that is right (or /confirm all)
+    /pending      what an AI noted down that waits for your OK, numbered
+    /confirm 1 3  yes, those are right (or /confirm all): then they are your words
+    /remember TEXT  keep exactly these words, as your own
     /share CODE family|legacy|engines   let more people see something
     /legacy       what you meant for after: /legacy open executor, /legacy seal
     /charges      payments an AI asked to add to your agreed list: yes or no
@@ -70,6 +71,7 @@ from rules import ConscienceRules
 from reminisce import Reminisce
 import access
 import egress
+import grounding
 from access import AccessDenied, OwnerOnly
 from egress import EgressRefused
 import provenance
@@ -175,9 +177,10 @@ TOOLS = [
             "The user explicitly stated a priority (e.g. context='travel', "
             "higher='direct flights', lower='saving money'). The context must "
             "name a subject. You may claim at most 0.6 confidence; he confirms "
-            "it higher himself. Reversing something he stated himself is never "
-            "applied, even when he says he changed his mind: it becomes a "
-            "question for him, and only his own /confirm makes it so. "
+            "it higher himself. Whatever he typed, what you write is noted by "
+            "the AI, not yet confirmed: only his own /confirm makes it his. "
+            "Reversing something he stated himself is never applied, even when "
+            "he says he changed his mind: it becomes a question for him. "
             "Use record_correction instead when learning from an override."
         ),
         "input_schema": {
@@ -198,7 +201,8 @@ TOOLS = [
             "constraints). Facts are stored separately from values. Ask before "
             "remembering anything sensitive: health, money, children, the safety "
             "of his home and other people's confidences are kept private "
-            "automatically. Use his own words where you can."
+            "automatically. Use his own words where you can; it is still noted by "
+            "the AI, not yet confirmed, until he confirms it himself (/confirm)."
         ),
         "input_schema": {
             "type": "object",
@@ -918,8 +922,8 @@ TOOLS = [
         "name": "record_story",
         "description": (
             "Keep what they said about a moment VERBATIM, pinned to those "
-            "photographs, permanently, privately. If it comes back with "
-            "verbatim false, it is a summary, not his words — tell him so. "
+            "photographs, permanently, privately. It is noted by the AI, not "
+            "yet confirmed, until he confirms it himself (/confirm) — tell him so. "
             "Returns one gentle follow-up — ask it or let it go, never two."
         ),
         "input_schema": {
@@ -1426,7 +1430,7 @@ _TRACE = {
     ),
     "remember_fact": lambda a, r: (
         f"remembered{' (private)' if r.get('visibility') == 'private' else ''}"
-        f"{' — not yet confirmed by you (/pending)' if r.get('status') == 'pending' else ''}: "
+        f"{' — noted by the AI, not yet confirmed by you (/pending)' if r.get('status') == 'pending' else ''}: "
         f"{a.get('fact')}"),
     "forget": lambda a, r: _forget_trace(r, "fact(s)"),
     "explain_basis": lambda a, r: f"checking your values on: {a.get('topic')}",
@@ -1529,7 +1533,7 @@ _TRACE = {
            if r.get("needs_owner") else "")),
     "add_memory": lambda a, r: (
         f"kept a moment [{r.get('visibility', 'private')}]"
-        + ("" if r.get("verbatim") else " — a summary, not your exact words")
+        + ("" if r.get("verbatim") else " — noted by the AI, not yet confirmed by you (/pending)")
         + f": {str(a.get('text',''))[:52]}…"
     ),
     "add_media": lambda a, r: (
@@ -1559,11 +1563,11 @@ _TRACE = {
         f"opening the album: {r.get('label')} ({r.get('photos')} photos)"
         if r.get("moment_id") else f"album: {r.get('note')}"
     ),
-    # 'his words' only when they were (I-25: a local model's paraphrase was
-    # announced as 'kept his words')
+    # 'his words' only when they are (I-25: a local model's paraphrase was
+    # announced as 'kept his words'; D2: an AI never makes them his)
     "record_story": lambda a, r: (
-        ("kept his words" if (r.get("memory") or {}).get("verbatim") else
-         "kept a summary in the AI's words — not his exact words (/pending to check it)")
+        ("kept your words" if (r.get("memory") or {}).get("verbatim") else
+         "kept — noted by the AI, not yet confirmed by you (/pending to check it)")
         + (f", pinned to {r.get('pinned_to_photos')} photos" if r.get("pinned_to_photos")
            else " — not pinned to those photos: it is about somewhere else")
         if r.get("kept") else f"not kept: {r.get('error')}"
@@ -1584,7 +1588,7 @@ _TRACE = {
     "record_answer": lambda a, r: (
         f"kept what you said ({r.get('recorded')})"
         if (r.get("kept_as") or {}).get("verbatim", True) else
-        f"kept a summary of what you said ({r.get('recorded')}) — not your exact words"
+        f"kept what you said ({r.get('recorded')}) — noted by the AI, not yet confirmed by you"
     ),
     "interview_progress": lambda a, r: (
         f"knows you: {r.get('answered')} answered, {r.get('locked_deeper')} still locked"
@@ -1946,8 +1950,8 @@ def chat(once: str | None = None, engine: str = "claude") -> None:
         f"learned from {snap['corrections_learned_from']} corrections{RESET}"
     )
     if snap["waiting_for_you"]:
-        print(f"{DIM}{len(snap['waiting_for_you'])} thing(s) an AI wrote down wait for "
-              f"your OK — type /pending to see them{RESET}")
+        print(f"{DIM}{len(snap['waiting_for_you'])} thing(s) an AI noted down wait for "
+              f"your OK — type /pending to see them, /confirm to make them yours{RESET}")
 
     try:
         waiting_charges = guard.pending_changes()
@@ -2194,7 +2198,7 @@ def owner_secrets(command: str, answer=input) -> dict | None:
 
 
 _FORGET_COMMANDS = ("/removed", "/approve", "/bringback", "/erase")
-_LIFE_COMMANDS = ("/pending", "/confirm", "/share", "/legacy")
+_LIFE_COMMANDS = ("/pending", "/confirm", "/share", "/legacy", "/remember")
 _OWNER_COMMANDS = ("/permit", "/permissions", "/keys", "/grant", "/scope", "/revoke")
 _LEVEL_WORDS = {"act": "act", "recommend": "recommend", "observe": "observe",
                 "watch": "observe", "off": "recommend", "stop": "recommend",
@@ -2467,25 +2471,79 @@ def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | No
                 print("  Nothing is waiting for you. Everything kept is in your own words "
                       "or you have confirmed it.")
                 return {"pending": []}
-            print(f"  {len(items)} thing(s) wait for your OK:")
-            for it in items:
-                print(f"    {it['id']}  ({it['kind']}) {it['what'][:110]}")
-                print(f"          — {it['why']}")
-            print("  If one is right, type /confirm and its code (or /confirm all). If one "
-                  "is wrong, ask JEFFEREY to forget it. To let more people see something, "
+            print(f"  {len(items)} thing(s) an AI noted down wait for your OK:")
+            for k, it in enumerate(items, 1):
+                print(f"    {k}. ({it['kind']}) {it['what'][:110]}")
+                print(f"          — {it['why']}   [code {it['id']}]")
+            print("  If they are right, type /confirm and their numbers (for example "
+                  "/confirm 1 3), or /confirm all. Then they are your own words. If one is "
+                  "wrong, ask JEFFEREY to forget it. To let more people see something, "
                   "type /share and its code, then who (family, legacy, engines).")
             return {"pending": items}
         if verb == "/confirm":
-            ids = rest.split()
-            print("  You are confirming " + ("everything listed by /pending" if ids == ["all"]
-                                            else ", ".join(ids)) + " as right.")
+            items = [it for it in conscience.pending_items()
+                     if it["kind"] != "request to share"]
+            ids, what = [], []
+            for w in rest.replace(",", " ").split():
+                if w.lower() == "all":
+                    ids, what = ["all"], ["everything an AI noted down that waits for you"]
+                    break
+                listed = conscience.pending_items()
+                if w.isdigit() and 1 <= int(w) <= len(listed):
+                    it = listed[int(w) - 1]
+                    if it["kind"] == "request to share":
+                        print(f"  {w} is a request to share: type /share {it['id']} and who, "
+                              "if you want that.")
+                        continue
+                    ids.append(it["id"])
+                    what.append(f"{w}. {it['what'][:80]}")
+                else:
+                    ids.append(w)
+                    what.append(w)
+            if not items or not ids:
+                print("  Nothing was confirmed." if items else "  Nothing is waiting for you.")
+                return {"confirmed": [], "unknown_ids": []}
+            print("  You are saying these are right, in your own words:")
+            for line in what:
+                print(f"    {line}")
             if not _confirmed("  Is that right? Type yes and press return: ", answer, tty,
                               widen=True):
                 return None
             with access.owner_console():
                 res = conscience.confirm(ids)
-            print(f"  Done. Confirmed {len(res['confirmed'])}."
-                  + (f" No such code: {', '.join(res['unknown_ids'])}." if res["unknown_ids"] else ""))
+            print(f"  Done. Confirmed {len(res['confirmed'])}: they are your own words now."
+                  + (f" Not found: {', '.join(res['unknown_ids'])}." if res["unknown_ids"] else ""))
+            return res
+        if verb == "/remember":
+            text = rest
+            if not text:
+                print("  Type it like this:  /remember Anna calls on Sundays\n"
+                      "  JEFFEREY keeps exactly those words, as your own.")
+                return None
+            secret = egress.looks_secret(text)
+            if secret:
+                print(f"  That looks like {secret}. A password or a code is safest in your "
+                      "vault (type /secrets). If you keep it as a note, JEFFEREY hides the "
+                      "number whenever an AI reads it.")
+                if not _confirmed("  Keep it as a note anyway? Type yes and press return: ",
+                                  answer, tty):
+                    print("  Nothing was kept.")
+                    return None
+            elif egress.names_a_code(text):
+                print("  This note mentions a password, a PIN or a code, so every number in "
+                      "it is hidden whenever an AI reads it.")
+            print(f"  JEFFEREY will keep, in your own words: \"{text}\"")
+            if not _confirmed("  Is that right? Type yes and press return: ", answer, tty):
+                print("  Nothing was kept.")
+                return None
+            with access.owner_console():
+                res = conscience.remember_fact(text)
+            print("  Kept, as your own words."
+                  + (" It is private, because it is about "
+                     + " and ".join(grounding.CLASS_WORDS_PLAIN.get(k, k)
+                                    for k in res.get("sensitivity") or [])
+                     + ": only your own JEFFEREY sees it." if res.get("visibility") == "private"
+                     else ""))
             return res
         if verb == "/share":
             parts = rest.split()

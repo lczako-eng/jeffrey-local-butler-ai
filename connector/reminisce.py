@@ -722,7 +722,8 @@ class Reminisce:
     def _kept_note(memory: dict, where_pinned: str) -> str:
         """What really happened, said plainly (I-25, I-26)."""
         how = ("Kept in their words" if memory.get("verbatim", True) else
-               "Kept as a summary in the AI's words, not his; he can check it with /pending")
+               "Kept, noted by the AI and not yet confirmed by him; he confirms it with "
+               "/pending and /confirm")
         who = ("privately" if memory.get("visibility", "private") == "private"
                else f"for {memory.get('visibility')}")
         note = f"{how}, {who}, {where_pinned}."

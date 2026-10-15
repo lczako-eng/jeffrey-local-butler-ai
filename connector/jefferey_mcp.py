@@ -181,8 +181,9 @@ def get_conscience(limit: int = 100, offset: int = 0) -> dict:
     corrections Jefferey has learned from. Private facts (health, money,
     children, the safety of the home, other people's confidences) are
     counted, not sent; explain_basis brings the ones a question names, to
-    his caretaker key. Anything marked unconfirmed was written by an AI and
-    not yet confirmed by him. The user owns every byte."""
+    his caretaker key. Anything marked unconfirmed was noted by an AI and
+    not yet confirmed by him: never call it his words. waiting_for_owner says
+    how many such notes wait for his own /confirm. The user owns every byte."""
     return conscience.snapshot(limit, offset)
 
 
@@ -217,11 +218,12 @@ def set_priority(context: str, higher: str, lower: str, confidence: float = 0.6)
     """The user explicitly stated a priority (e.g. context='travel',
     higher='direct flights', lower='saving money'). The context must name a
     subject ('general' or 'everything' is the owner's own to set). You may
-    claim at most 0.6 confidence; he confirms it higher himself. Reversing
-    something he stated himself is never applied, even when he says he
-    changed his mind: it becomes a question for him, and only his own
-    /confirm makes it so. Use record_correction instead when learning from
-    an override."""
+    claim at most 0.6 confidence; he confirms it higher himself. Whatever
+    he said, what you write is noted by the AI, not yet confirmed, until he
+    confirms it himself (/confirm). Reversing something he stated himself is
+    never applied, even when he says he changed his mind: it becomes a
+    question for him. Use record_correction instead when learning from an
+    override."""
     return conscience.set_priority(context, higher, lower, confidence)
 
 
@@ -679,7 +681,8 @@ def add_memory(text: str, when: str = "", people: str = "", tags: str = "",
     """Record a snippet of the user's life in their own words — a moment, a
     turning point, a lesson, a joke only their family gets. It is kept
     PRIVATE whatever visibility you pass: only he shares it (/share). Never
-    invent one; only record what they actually said, in their words."""
+    invent one; only record what they actually said, in their words. It is
+    noted by the AI, not yet confirmed, until he confirms it himself."""
     return life.add_memory(text, when, people, tags, visibility)
 
 
@@ -772,9 +775,10 @@ def next_story_prompt() -> dict:
 def record_story(moment_id: str, text: str, people: str = "", when: str = "",
                  visibility: str = "private") -> dict:
     """Keep what they said about a moment — VERBATIM, in their words, pinned to
-    those photographs, permanently, and private (only he shares it). If the
-    memory comes back with verbatim false, it is a summary, not his words:
-    tell him so. Returns one gentle follow-up: ask it or let it go, never two."""
+    those photographs, permanently, and private (only he shares it). It is
+    noted by the AI, not yet confirmed, until he confirms it himself with
+    /confirm — tell him so. Returns one gentle follow-up: ask it or let it
+    go, never two."""
     return album.record(moment_id, text, people, when, visibility)
 
 

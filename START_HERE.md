@@ -194,8 +194,15 @@ secret to an AI.** Secrets go in the vault, from your own terminal:
 and JEFFEREY uses them by *name* (`vault:sin`) on forms, never by value.
 
 If something like that is already in your memories (an alarm code, a PIN, a
-card number), no AI sees it — it reaches them as `[hidden]`. To move it into
+card number), no AI sees it — it reaches them as `[hidden]`. In a note that
+mentions a password, a PIN or a code, **every number is hidden from the AI**,
+in every sentence (a phone number written like 613-555-0199 still goes): it
+is better to hide too much than to let one code out. To move a secret into
 your vault, type `/secrets` in **`Talk to JEFFEREY on this Mac`**.
+
+An AI is also never allowed to keep a note like *"Called about my PIN reset,
+ref 5678"* — it does not know whether 5678 is the code. It will ask you. If
+it is not a secret, keep it yourself: type `/remember` and the note.
 
 ### Forms
 
@@ -276,18 +283,29 @@ always brings to you.
 
 ### Who may see what
 
-Whatever an AI writes down is kept private, and marked "not yet confirmed"
-unless it is word for word what you typed here. Your health, money,
-children, the safety of your home and other people's secrets are never sent
-to a plain Claude or ChatGPT. Only you let more people see something:
+Whatever an AI writes down is kept private, and marked **"noted by the AI,
+not yet confirmed"** — even when it is word for word what you said. It is
+still used, but it is not *your words* until you say so, with your own hands.
+Your health, money, children, the safety of your home and other people's
+secrets are never sent to a plain Claude or ChatGPT. Only you let more people
+see something:
 
 | Type | It means |
 |---|---|
-| `/pending` | what an AI wrote down, or asked to share, that waits for your OK |
-| `/confirm f-1a2b3c` (or `/confirm all`) | yes, that is right |
+| `/remember Anna calls on Sundays` | keep exactly these words, as your own |
+| `/pending` | what an AI noted down, or asked to share, that waits for your OK — numbered |
+| `/confirm 2` (or `/confirm 1 3`, or `/confirm all`) | yes, those are right: now they are your own words |
+| `python connector/conscience.py confirm` | the same, without starting a conversation |
 | `/share m-1a2b3c family` | your family's key may read this moment (`private` takes it back) |
 | `/legacy`, `/legacy open executor`, `/legacy seal` | what you meant for after: sealed until you open it, to the keys you name |
 | `/grant mira family.read` | give one family member her own key, so your rules about Mira apply to her |
+
+A rule you give about **an AI** — "never tell any AI about my health", "don't
+tell ChatGPT", "not Google" — holds for **every** AI, your own JEFFEREY
+included: only you, at your own keyboard, still see it. A rule about people
+("never tell anyone") does not keep it from your own JEFFEREY, which needs to
+know your life to look after you. A rule about your family or your children
+("ma famille", "my kids", "my daughter") holds for the key your family uses.
 
 ---
 

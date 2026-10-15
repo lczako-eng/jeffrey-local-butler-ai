@@ -683,31 +683,152 @@ def _plain_words(text: str) -> str:
     return re.sub(r"[^\w'\- ,;/&+|]", " ", n)
 
 
+# Round 7: more ways of saying 'anyone' the convergence skeptics wrote ('not
+# a soul', 'absolutely anyone', 'qui que ce soit', 'the masses', 'les gens du
+# village', 'outside people'). Words that only make 'anyone' stronger are
+# read past ('absolutely anyone' is anyone).
+_ANYONE_PHRASES = _ANYONE_PHRASES | frozenset("""
+    soul|a soul|souls|a living soul|living soul|single soul|a single soul|masses|the masses|
+    population|general population|the population|qui que ce soit|tout un chacun|un chacun|
+    etranger|etrangers|etrangere|etrangeres|n'importe lequel|n'importe laquelle|
+    n'importe lesquels|n'importe lesquelles|nimporte lequel|nimporte laquelle|
+    all and sundry|tom dick and harry|every tom dick and harry|third parties|third party|
+    tiers|public en general|gens de l'exterieur|le grand public|grand monde
+    """.replace("\n", " ").split("|")) - {""}
+_ANYONE_PHRASES = frozenset(" ".join(p.split()) for p in _ANYONE_PHRASES)
+_ANYONE_HEADS = _ANYONE_HEADS | frozenset("n'importe nimporte quiconque".split())
+_STRONGER = frozenset("""absolutely literally just simply really truly totally quite
+    basically virtually practically almost nearly not never even strictly
+    vraiment absolument strictement surtout pas meme""".split())
+# A part that starts with, or ends in, one of these — with no name in it —
+# is people in general ('les gens du village', 'outside people', 'people in
+# town', 'random folks').
+_PEOPLE_PLURAL = frozenset("""people persons folks gens personnes humans individuals
+    strangers outsiders etrangers inconnus""".split())
+
+
+def _anyone_part(ws: list[str], raw_part: str) -> bool:
+    phrase = " ".join(ws)
+    if phrase in _ANYONE_PHRASES or ws[0] in _ANYONE_HEADS:
+        return True
+    if len(ws) >= 2 and (ws[0], ws[1]) in {("no", "one"), ("any", "one"), ("every", "one")}:
+        return True
+    if ws[0] in _QUANTIFIERS and len(ws) >= 2 and ws[1] in _GENERIC_PERSON:
+        return True
+    later = raw_part.strip().split()[1:]
+    named = any(re.match(r"[A-Z][a-z]", w) for w in later) or {stem(w) for w in ws} & SOMEONE_WORDS
+    if not named and (ws[0] in _PEOPLE_PLURAL or ws[-1] in _PEOPLE_PLURAL):
+        return True
+    return False
+
+
+# 'le monde' in lower case is everyone ('ne le dis pas à le monde', 'tout le
+# monde'); 'Le Monde' with its capital M, as a newspaper is written, is the
+# newspaper (D1, round 7: round 6 made every 'le monde' the newspaper).
+_LE_MONDE_ANY = re.compile(r"(?<![^\W_])(?:le|la|du)\s+monde(?![^\W_])", re.I)
+_LE_MONDE_BRAND = re.compile(r"(?<![^\W_])[Ll]e\s+Monde(?![^\W_])")
+# ('LE MONDE' in capitals could be either: for a 'no', everyone.)
+
+
 def is_anyone(audience) -> bool:
     """Does this audience, as a rule that says NO names it, mean everyone
     (other than the owner's own keys)? Only an explicit anyone-word does
-    ('the public or the press', 'nobody but my doctor', 'les gens'); 'Le
-    Monde', 'Mr. Nobody', 'my GP' and 'Bob' each name only themselves."""
-    raw = _plain_words(audience)
+    ('the public or the press', 'nobody but my doctor', 'les gens', 'not a
+    soul', 'le monde'); 'Le Monde', 'Mr. Nobody', 'my GP' and 'Bob' each
+    name only themselves."""
+    text = str(audience or "")
+    raw = _plain_words(text)
     if not raw.strip():
         return False
-    if norm_audience(audience) == "anyone":
+    if norm_audience(text) == "anyone":
         return True
-    for part in _PART_BREAK.split(raw):
+    if _LE_MONDE_ANY.search(text) and not _LE_MONDE_BRAND.search(text):
+        return True
+    raws = _PART_BREAK.split(text)
+    for k, part in enumerate(_PART_BREAK.split(raw)):
         ws = [w for w in part.split() if w]
-        while ws and (ws[0] in _DETERMINERS or ws[0].rstrip("'") in ("l", "d")):
+        while ws and (ws[0] in _DETERMINERS or ws[0].rstrip("'") in ("l", "d")
+                      or ws[0] in _STRONGER and len(ws) > 1):
             ws = ws[1:]
         if not ws:
             continue
         if ws[0] in _TITLES:
             continue                                  # Mr. Nobody, Mrs. World
-        phrase = " ".join(ws)
-        if phrase in _ANYONE_PHRASES or ws[0] in _ANYONE_HEADS:
+        if _anyone_part(ws, raws[k] if len(raws) > k else part):
             return True
-        if len(ws) >= 2 and (ws[0], ws[1]) in {("no", "one"), ("any", "one"), ("every", "one")}:
+    return False
+
+
+# --------------------------------------------- a 'no' that names an AI (D1)
+# Round 7 decision: a rule that says NO to an AI, an engine or the company
+# behind one binds EVERY key that reaches an engine — Claude, ChatGPT, a
+# model on this Mac, and his own caretaker key 'jefferey' too. Only the owner
+# himself, reading at his own keyboard, is not an AI. Written with or without
+# a little word before it ('the AI', 'any AI', "l'IA", 'my assistant').
+AI_READER = "any ai"          # in every audience list of a key that reaches an engine
+_AI_WORDS = frozenset("""ai ais a.i a.i. ia ias chatbot chatbots chatbot's bot bots robot
+    robots chatgpt gpt gpts gpt4 gpt-4 gpt-4o gpt-5 gpt5 openai claude anthropic gemini
+    bard copilot llama llamas hermes llm llms grok mistral deepseek perplexity
+    engine engines moteur moteurs google microsoft meta""".split())
+_AI_PHRASES = frozenset(" ".join(p.split()) for p in """
+    artificial intelligence|intelligence artificielle|the cloud|cloud|le cloud|the assistant|
+    assistant|assistants|ai assistant|virtual assistant|assistant virtuel|google|microsoft|
+    meta|open ai|chat gpt|language model|language models|large language model|
+    machine learning|siri|alexa|cortana""".split("|") if p.strip())
+
+
+def names_ai(audience) -> bool:
+    """Does this audience name an AI, an engine or a company that makes one
+    ('ChatGPT', 'any AI', "l'IA", 'chatbots', 'artificial intelligence',
+    'Google', 'the cloud', 'the public and ChatGPT')?"""
+    raw = _plain_words(re.sub(r"(?i)(?<![^\W_])a\.\s?i(?![^\W_])\.?", "ai", str(audience or "")))
+    if not raw.strip():
+        return False
+    for part in _PART_BREAK.split(raw):
+        ws = [w.strip(".'") for w in part.split() if w]
+        ws = [w[2:] if w.startswith(("l'", "d'")) else w for w in ws]
+        ws = [w for w in ws if w]
+        while ws and (ws[0] in _DETERMINERS or ws[0] in _QUANTIFIERS or ws[0] in _STRONGER
+                      or ws[0] in ("other", "others", "autre", "autres")):
+            ws = ws[1:]
+        if not ws:
+            continue
+        if set(ws) & _AI_WORDS or " ".join(ws) in _AI_PHRASES \
+                or any(w.startswith(("gpt-", "chatgpt")) for w in ws):
             return True
-        if ws[0] in _QUANTIFIERS and len(ws) >= 2 and ws[1] in _GENERIC_PERSON:
+        if any(" ".join(ws[i:i + n]) in _AI_PHRASES for n in (2, 3)
+               for i in range(len(ws) - n + 1)):
             return True
+    return False
+
+
+# ------------------------------------- a 'no' that names his family (D1)
+# Round 7 decision: a rule that says NO to his family, or to the people who
+# read through his family's key — his children, grandchildren and relatives
+# — binds the family key, in English and in French ('ma famille', 'mes
+# enfants', 'my kids', 'my daughter', 'ma fille', 'mon fils'). A possessive
+# ("my son's teacher") is someone else.
+_FAMILY_MEMBERS = frozenset("""family families famille familles kids kid children child
+    childrens enfant enfants grandchildren grandchild grandkids grandkid grandson grandsons
+    granddaughter granddaughters petits-enfants petit-enfant petits petit-fils petite-fille
+    petites-filles relatives relative proches parente descendants daughter daughters son sons
+    fille filles fils""".split())
+
+
+def names_family(audience) -> bool:
+    """Does this audience name his family, or the people who use the family
+    key ('ma famille', 'my kids', 'the grandchildren', 'my daughter')?"""
+    raw = _plain_words(audience)
+    for part in _PART_BREAK.split(raw):
+        ws = [w for w in part.split() if w]
+        if any(w.endswith("'s") for w in ws):
+            continue                       # 'my son's teacher' is the teacher
+        for i, w in enumerate(ws):
+            if w in ("son", "sons") and i + 1 < len(ws) and not (
+                    i and ws[i - 1] in ("my", "the", "our", "his", "her", "their", "a")):
+                continue                   # French 'son médecin' is 'his doctor'
+            if w in _FAMILY_MEMBERS:
+                return True
     return False
 
 

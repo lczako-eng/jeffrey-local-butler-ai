@@ -1,5 +1,6 @@
 """
-Frozen corpus — the egress door's secret scan (R1), repair round 6.
+Frozen corpus — the egress door's secret scan (R1), repair round 6, and the
+round-7 decision (D3).
 
 Two repair rounds patched the scan case by case, and each broke cases next
 to the ones it fixed. This file freezes EVERY concrete case the round-4 and
@@ -25,12 +26,36 @@ The structural rules it holds the door to:
     it is stepped over, and only an unexplained number is the code. A note
     with a code word and a phone or reference number, but no code, is kept.
 
+Round 7 (D3) — a note that mentions a code keeps every number in it at
+home. Rounds 4 to 6 told, number by number, the code from a phone, a ticket,
+a year or a time, and each round a neighbouring note went out with its code
+in clear ('My PIN is 4821. The new one is 5932'). Now:
+
+  * GOING OUT, a note that names a password, a PIN or a code (password,
+    passcode, PIN, NIP, code, digicode, combination, alarm, mot de passe,
+    pw, pwd, wifi …, in look-alike Cyrillic or Greek letters too) has every
+    run of three or more digits and every word that mixes letters and digits
+    hidden, anywhere in it, across sentences — except a phone number written
+    with its separators. Hiding too much is the accepted cost, so the
+    round-5 and round-6 notes whose ticket, case, dossier, year or time went
+    out word for word ('ref 5678', 'case 58213', 'at 1430') now go out with
+    that number hidden.
+  * COMING IN from an AI, such a note with a code-shaped value anywhere after
+    the word, in any later sentence, is not kept, and the AI is told to ask
+    the owner (who can keep it himself with /remember) — the round-6 'benign'
+    notes with a ticket or a time are among them, by decision. An amount, a
+    whole date, a dose, an ordinal or a time like '10am' is not code-shaped
+    there. A value in the next sentence counts ('ask Karen. It is tulip99').
+
 Outcomes:
   MARK    refused at the door with the 'already has something hidden' message;
           if an older version kept it, it still never goes out with the
           secret in it ('values')
   SECRET  refused at the door; on the way out the values are hidden, the
           words listed in 'kept' still go
+  ASK     not kept from an AI: the AI is told to ask the owner (round 7); on
+          the way out the values are hidden, the words in 'kept' still go
+  KEPT    kept at the door; on the way out the values are hidden (round 7)
   BENIGN  kept, and goes out word for word
 """
 
@@ -44,7 +69,7 @@ import unittest
 
 from test_egress import EgressTest, TOKENS, TA, TG
 
-MARK, SECRET, BENIGN = "mark", "secret", "benign"
+MARK, SECRET, ASK, KEPT, BENIGN = "mark", "secret", "ask", "kept", "benign"
 M = "[hidden: looks like a PIN or a door, alarm or lock code]"
 P = "[hidden: looks like a password or PIN]"
 
@@ -53,11 +78,13 @@ CASES: list[tuple[str, str, list[str], list[str]]] = [
     # ---------------------------------------------------------------- round 4
     # verify-b: a phone, ref, dossier, tel or call between the word and the
     # PIN switched the scan off (stored on 93db2aa, sent to claude-raw)
-    ("Votre NIP, dossier 8765, est 4321", SECRET, ["4321"], ["dossier 8765"]),
+    # (round 7, D3: every number in a note that names a code is hidden on the
+    # way out — the dossier and ref numbers too)
+    ("Votre NIP, dossier 8765, est 4321", SECRET, ["4321", "8765"], ["Votre NIP, dossier"]),
     ("My PIN, tel 4824", SECRET, ["4824"], []),
     ("My debit card PIN: call 4825", SECRET, ["4825"], []),
     ("Voicemail PIN: call *98 then 4823", SECRET, ["4823"], ["call *98 then"]),
-    ("My bank PIN (ref 5678) is 4822", SECRET, ["4822"], ["ref 5678"]),
+    ("My bank PIN (ref 5678) is 4822", SECRET, ["4822", "5678"], ["My bank PIN (ref"]),
     ("The alarm code (call 613-555-0199 if it rings) is 4821", SECRET, ["4821"],
      ["613-555-0199"]),
     ("Le code de l'alarme (appeler le 613 555 0199 si ça sonne) est 4821", SECRET, ["4821"],
@@ -75,9 +102,10 @@ CASES: list[tuple[str, str, list[str], list[str]]] = [
     (f"Gate code {M} and the gate is at 1550 Elm Road", MARK, [], []),
     (f"Garage code {M} - we moved in 2019", MARK, [], []),
     (f"Alarm code {M}\nAnna's birthday is 12 May 1975", MARK, [], []),
-    # verify-c over-masking: a code's value is hidden, a year or a birthday
-    # after it in the same sentence still goes; a password hides its clause
-    ("My alarm code is 4821 and my birthday is March 3 1950", SECRET, ["4821"], ["March 3 1950"]),
+    # verify-c over-masking: a code's value is hidden; a password hides its
+    # clause (round 7, D3: the year of his birthday is hidden too)
+    ("My alarm code is 4821 and my birthday is March 3 1950", SECRET, ["4821", "1950"],
+     ["and my birthday is March"]),
     ("My email password is Hunter22! and my daughter Anna lives in Ottawa with her two kids",
      SECRET, ["Hunter22"], ["My email password is"]),
     ("Wifi password: maple-tree-42 (the router is in the basement next to the furnace)",
@@ -147,12 +175,15 @@ CASES: list[tuple[str, str, list[str], list[str]]] = [
     ("Bank PIN[hidden]4821", MARK, ["4821"], []),
     (f"The garage code is {M}, changed to 1987 today", MARK, ["1987"], []),
     ("Mot de passe Netflix[hidden]Soleil2025!", MARK, ["Soleil2025"], []),
-    # verify-b: false refusals (round 4 kept them)
-    ("Alarm code reset: called 613-555-0199, they will send a tech at 1430", BENIGN, [],
-     ["613-555-0199", "1430"]),
-    ("PIN reset requested: phoned 1-800-769-2511, ticket 58213", BENIGN, [],
-     ["1-800-769-2511", "ticket 58213"]),
-    ("Forgot my PIN, called RBC at 1-800-769-2511, case 58213", BENIGN, [], ["case 58213"]),
+    # verify-b: false refusals (round 4 kept them). Round 7, D3: a time, a
+    # ticket or a case number after a code word is code-shaped; the AI asks
+    # the owner, and only the phone number goes out
+    ("Alarm code reset: called 613-555-0199, they will send a tech at 1430", ASK, ["1430"],
+     ["613-555-0199"]),
+    ("PIN reset requested: phoned 1-800-769-2511, ticket 58213", ASK, ["58213"],
+     ["1-800-769-2511", "ticket"]),
+    ("Forgot my PIN, called RBC at 1-800-769-2511, case 58213", ASK, ["58213"],
+     ["1-800-769-2511", "case"]),
     ("Lost my bank card PIN, phoned 1-800-769-2511 on Monday, new card arrives in 7 to 10 "
      "business days", BENIGN, [], ["1-800-769-2511"]),
     # verify-b: still missed in both rounds
@@ -174,56 +205,119 @@ CASES: list[tuple[str, str, list[str], list[str]]] = [
     ("The password is car", SECRET, [" car"], ["The password is"]),
     ("My password is car", SECRET, [" car"], ["My password is"]),
     ("Mot de passe: car", SECRET, [" car"], ["Mot de passe:"]),
-    # verify-c 4: benign notes with a code word and a phone or file number
-    ("The door code changed, call Mike 613-555-0199, he lives at 1550 Elm Road", BENIGN, [],
-     ["613-555-0199", "1550 Elm Road"]),
-    ("My PIN was locked so I called 1-800-555-0199 at 1030 this morning", BENIGN, [],
-     ["1-800-555-0199", "1030"]),
-    ("Called about my PIN reset, ref 5678.", BENIGN, [], ["ref 5678"]),
-    ("Le code de la porte a changé, appeler le 613 555 0199, dossier 88213", BENIGN, [],
-     ["613 555 0199", "dossier 88213"]),
-    ("PIN reset: call 1-888-555-0123, case 99812 opened Oct 3", BENIGN, [],
-     ["1-888-555-0123", "case 99812"]),
+    # verify-c 4: notes with a code word and a phone or file number (round 7,
+    # D3: the AI asks the owner; only the phone number goes out)
+    ("The door code changed, call Mike 613-555-0199, he lives at 1550 Elm Road", ASK, ["1550"],
+     ["613-555-0199", "Elm Road"]),
+    ("My PIN was locked so I called 1-800-555-0199 at 1030 this morning", ASK, ["1030"],
+     ["1-800-555-0199"]),
+    ("Called about my PIN reset, ref 5678.", ASK, ["5678"], ["Called about my PIN reset, ref"]),
+    ("Le code de la porte a changé, appeler le 613 555 0199, dossier 88213", ASK, ["88213"],
+     ["613 555 0199", "dossier"]),
+    ("PIN reset: call 1-888-555-0123, case 99812 opened Oct 3", ASK, ["99812"],
+     ["1-888-555-0123", "opened Oct 3"]),
+    # ---------------------------------------------------------------- round 7
+    # convergence vb R1 remaining: stored and sent in clear on every snapshot
+    ("Netflix password - ask Karen. It is tulip99", SECRET, ["tulip99"], ["ask Karen. It is"]),
+    ("pw: Hunter22", SECRET, ["Hunter22"], ["pw:"]),
+    ("The code to get in the building is 4821", ASK, ["4821"], ["The code to get in the"]),
+    ("Digicode de l'immeuble : 4821", SECRET, ["4821"], ["Digicode de l'immeuble"]),
+    ("Bank \u0420IN 4821", SECRET, ["4821"], ["Bank"]),
+    # ...refused by mistake on every snapshot: by decision a code word with a
+    # code-shaped value after it, or a password word with a word after 'is',
+    # is not kept from an AI (he can keep it himself with /remember)
+    ("Bank PIN reset: branch 0412 on Bank St, appointment at 1030", SECRET, ["0412", "1030"],
+     ["Bank PIN reset: branch", "on Bank St, appointment at"]),
+    ("My password is long and hard to remember", SECRET, ["long and hard"], ["My password is"]),
+    ("Mot de passe du wifi: soleil levant, routeur au sous-sol", SECRET, ["soleil levant"],
+     ["Mot de passe du wifi:"]),
+    # ...and the ones fixed in round 6, kept fixed
+    ("The Netflix password? It's bluebird77.", SECRET, ["bluebird77"], []),
+    ("NIP : quatre huit deux un", SECRET, ["quatre huit deux un"], []),
+    ("My password is Rover and the dog's name is Rover", SECRET, ["Rover"], ["My password is"]),
+    ("PIN [hidden] call 4821", MARK, ["4821"], []),
+    ("Code [HIDDEN] 4821", MARK, ["4821"], []),
+    ("Bank PIN [hidden: x], the new PIN is four eight two one", MARK, ["four eight"], []),
+    # convergence vc R1 [HIGH-MEDIUM] regression: a second code in a later
+    # sentence of a kept note went out in clear
+    ("My PIN is 4821. The new one is 5932", SECRET, ["4821", "5932"], ["The new one is"]),
+    ("Mon NIP est 4821. Le nouveau: 5932", SECRET, ["4821", "5932"], ["Le nouveau:"]),
+    ("The garage code is 4821. New one: 5932", SECRET, ["4821", "5932"], ["New one:"]),
+    ("Garage code 4821. Backup: 7731", SECRET, ["4821", "7731"], ["Backup:"]),
+    ("Bank PIN 4821. Old one was 7731", SECRET, ["4821", "7731"], ["Old one was"]),
+    ("password is Hunter22! My son's is Tiger7", SECRET, ["Hunter22", "Tiger7"], ["My son's is"]),
+    ("PIN 4821. PUK 12345678", SECRET, ["4821", "12345678"], ["PUK"]),
+    # ...holes in all three snapshots
+    ("My PIN changed. It is now 5932.", SECRET, ["5932"], ["My PIN changed. It is now"]),
+    ("Garage code changed today. New one: 5932", SECRET, ["5932"], ["New one:"]),
+    ("The wifi password changed. Now it is BlueSky42", SECRET, ["BlueSky42"],
+     ["The wifi password changed. Now it is"]),
+    ("Garage code: see below. 4821", SECRET, ["4821"], ["Garage code: see below."]),
+    ("Garage 4821, alarm 7731 (codes)", ASK, ["4821", "7731"], ["Garage", "alarm", "(codes)"]),
+    # the decision's own words: digicode, combination, pw, pwd, look-alike
+    # letters, the value in the next sentence
+    ("Le digicode est 4821", SECRET, ["4821"], ["Le digicode est"]),
+    ("The safe combination changed. New one: 4821", SECRET, ["4821"], ["New one:"]),
+    ("pwd: Soleil2025", SECRET, ["Soleil2025"], ["pwd:"]),
+    ("Bank \u03a1\u0399\u039d 4821", SECRET, ["4821"], ["Bank"]),
+    ("My \u0440assword is Hunter22", SECRET, ["Hunter22"], []),
+    ("Email password: ask Anna. It's Sunflower77.", SECRET, ["Sunflower77"], ["ask Anna."]),
+    ("Alarm: call ADT first. Then 4821#", ASK, ["4821"], ["Alarm: call ADT first."]),
+    # D3 on the way out: kept from an AI (nothing code-shaped after the word),
+    # but every number in the note is hidden all the same
+    ("My blood pressure was 140 over 90 and my PIN is fine", KEPT, ["140"],
+     ["over 90 and my PIN is fine"]),
+    ("Remind me to change my PIN on 2026-11-02", KEPT, ["2026-11-02"],
+     ["Remind me to change my PIN on"]),
+    ("Lost my bank card PIN, phoned 1-800-769-2511 on Monday, new card arrives in 7 to 10 "
+     "business days", BENIGN, [], ["1-800-769-2511"]),
+    ("Anna calls on Sundays at 1030", BENIGN, [], []),
 ]
 
-# verify-c's own corpus (sk5/corp_mine.py): benign notes
+# verify-c's own corpus (sk5/corp_mine.py): benign notes. Round 7 (D3): a
+# note whose code word has a code-shaped value after it is not kept from an
+# AI (ASK), and every number in a note that names a code is hidden on the way
+# out (KEPT) — only a phone number written with its separators still goes.
 CORP_BENIGN = [
-    "I forgot my PIN, so I called the bank at 1-800-769-2511 and they mailed a new card. "
-    "Ref 55821.",
-    "Called about my PIN reset, ref 5678.",
-    "My PIN letter came today, ref 5678",
-    "My PIN was locked so I called 1-800-555-0199 at 1030 this morning",
-    "Need to change the garage code, call the installer at 613 555 0199 after 1500",
-    "Alarm code: call ADT 1-800-238-2727 and give them account 7731",
-    "The door code changed, call Mike 613-555-0199, he lives at 1550 Elm Road",
-    "The gate code is on the fridge, call 613 555 0199 if you cannot find it, apartment 1204",
-    "Reset my password: called 1 800 555 0199, ticket 482193",
-    "PIN: ask the bank, call 613 555 0199, they close at 1700",
-    "My debit PIN expired, tel 613 555 0199 ext 2201",
-    "The keypad code, call Linda 613 555 0199 for 2 hours",
-    "Voicemail password: call 1-800-555-0199 to reset it, it costs $25",
-    "For a new alarm code call 613 555 0199 and quote order 482193",
-    "The alarm code company: phone 613-555-0199, invoice 20931 paid",
-    "To change the garage door code call Chamberlain 1-800-528-9131 and have serial 4419220 ready",
-    "Le code de la porte, appeler le 613 555 0199, dossier 88213",
-    "My bank PIN, tel 613-555-0199 open 0900 to 1700",
-    "The safe combination is with the lawyer, call 613-555-0199, file 2291",
-    "PIN reset: call 1-888-555-0123, case 99812 opened Oct 3",
-    "Password help line 1-800-555-0199, wait time 45 minutes, option 3",
-    "The password is in my wallet. Room 4821.",
-    "My password needs changing; the help desk ticket is INC0012345",
-    "Remind me to change my PIN on 2026-11-02",
-    "The door code is on the card in the kitchen drawer, 3rd drawer down",
-    "My password for the bank expired on March 3 and I need a new one",
-    "The combination pill, 250 mg, twice a day",
-    "My Legion pin 1985 is in the drawer",
-    "Postal code K1A 0B1",
-    "My blood pressure was 140 over 90 and my PIN is fine",
-    "Garage code: the installer number is 613-555-0199 and his name is Bob",
-    "PIN number: phone the branch, 613-555-0199, before 2027",
-    "Netflix password changed, Bell says invoice 448213 is due",
-    "The alarm number is 1-800-555-0199 and it covers 3 doors",
-    "wifi: see router label, phone support 1-866-310-2355",
+    ("I forgot my PIN, so I called the bank at 1-800-769-2511 and they mailed a new card. "
+     "Ref 55821.", ASK, ["55821"]),
+    ("Called about my PIN reset, ref 5678.", ASK, ["5678"]),
+    ("My PIN letter came today, ref 5678", ASK, ["5678"]),
+    ("My PIN was locked so I called 1-800-555-0199 at 1030 this morning", ASK, ["1030"]),
+    ("Need to change the garage code, call the installer at 613 555 0199 after 1500", ASK,
+     ["1500"]),
+    ("Alarm code: call ADT 1-800-238-2727 and give them account 7731", ASK, ["7731"]),
+    ("The door code changed, call Mike 613-555-0199, he lives at 1550 Elm Road", ASK, ["1550"]),
+    ("The gate code is on the fridge, call 613 555 0199 if you cannot find it, apartment 1204",
+     ASK, ["1204"]),
+    ("Reset my password: called 1 800 555 0199, ticket 482193", ASK, ["482193"]),
+    ("PIN: ask the bank, call 613 555 0199, they close at 1700", ASK, ["1700"]),
+    ("My debit PIN expired, tel 613 555 0199 ext 2201", ASK, ["2201"]),
+    ("The keypad code, call Linda 613 555 0199 for 2 hours", BENIGN, []),
+    ("Voicemail password: call 1-800-555-0199 to reset it, it costs $25", BENIGN, []),
+    ("For a new alarm code call 613 555 0199 and quote order 482193", ASK, ["482193"]),
+    ("The alarm code company: phone 613-555-0199, invoice 20931 paid", ASK, ["20931"]),
+    ("To change the garage door code call Chamberlain 1-800-528-9131 and have serial 4419220 "
+     "ready", ASK, ["4419220"]),
+    ("Le code de la porte, appeler le 613 555 0199, dossier 88213", ASK, ["88213"]),
+    ("My bank PIN, tel 613-555-0199 open 0900 to 1700", ASK, ["0900", "1700"]),
+    ("The safe combination is with the lawyer, call 613-555-0199, file 2291", ASK, ["2291"]),
+    ("PIN reset: call 1-888-555-0123, case 99812 opened Oct 3", ASK, ["99812"]),
+    ("Password help line 1-800-555-0199, wait time 45 minutes, option 3", BENIGN, []),
+    ("The password is in my wallet. Room 4821.", ASK, ["4821"]),
+    ("My password needs changing; the help desk ticket is INC0012345", ASK, ["INC0012345"]),
+    ("Remind me to change my PIN on 2026-11-02", KEPT, ["2026"]),
+    ("The door code is on the card in the kitchen drawer, 3rd drawer down", KEPT, ["3rd"]),
+    ("My password for the bank expired on March 3 and I need a new one", BENIGN, []),
+    ("The combination pill, 250 mg, twice a day", KEPT, ["250"]),
+    ("My Legion pin 1985 is in the drawer", BENIGN, []),
+    ("Postal code K1A 0B1", BENIGN, []),
+    ("My blood pressure was 140 over 90 and my PIN is fine", KEPT, ["140"]),
+    ("Garage code: the installer number is 613-555-0199 and his name is Bob", BENIGN, []),
+    ("PIN number: phone the branch, 613-555-0199, before 2027", ASK, ["2027"]),
+    ("Netflix password changed, Bell says invoice 448213 is due", ASK, ["448213"]),
+    ("The alarm number is 1-800-555-0199 and it covers 3 doors", BENIGN, []),
+    ("wifi: see router label, phone support 1-866-310-2355", BENIGN, []),
 ]
 # ...the notes in that list that carry a mark: refused now (the structural rule)
 CORP_BENIGN_MARKED = [
@@ -347,7 +441,7 @@ def fuzz_strings(n: int = 1500) -> list[str]:
 
 def all_rows() -> list[tuple[str, str, list[str], list[str]]]:
     rows = list(CASES)
-    rows += [(t, BENIGN, [], []) for t in CORP_BENIGN]
+    rows += [(t, want, v, []) for t, want, v in CORP_BENIGN]
     rows += [(t, MARK, [], []) for t in CORP_BENIGN_MARKED]
     rows += [(t, SECRET, v, []) for t, v in CORP_SECRET]
     rows += [(t, MARK, v, []) for t, v in CORP_SECRET_MARKED + CORP_MARK]
@@ -364,7 +458,8 @@ for text, want, values, kept in rows:
         egress.admit("remember_fact", {"fact": text})
         door = "kept"
     except egress.EgressRefused as e:
-        door = "mark" if "already has something hidden in it" in str(e) else "secret"
+        door = ("mark" if "already has something hidden in it" in str(e) else
+                "ask" if "in case that is the code itself" in str(e) else "secret")
     shown, _ = egress.mask({"fact": text})
     shown = shown["fact"]
     res.append({"door": door, "shown": shown, "again": egress.looks_secret(shown)})
@@ -380,7 +475,7 @@ class TheDoorsFrozenCorpus(EgressTest):
         got = self.py(UNIT % (rows,))
         bad = []
         for (text, want, values, kept), g in zip(rows, got):
-            door = {MARK: "mark", SECRET: "secret", BENIGN: "kept"}[want]
+            door = {MARK: "mark", SECRET: "secret", ASK: "ask", KEPT: "kept", BENIGN: "kept"}[want]
             why = []
             if g["door"] != door:
                 why.append(f"door said {g['door']}, wanted {door}")
@@ -401,8 +496,8 @@ class TheDoorsFrozenCorpus(EgressTest):
     def test_the_named_cases(self):
         self.check(CASES)
 
-    def test_the_skeptics_own_benign_notes_are_kept(self):
-        self.check([(t, BENIGN, [], []) for t in CORP_BENIGN])
+    def test_the_skeptics_own_benign_notes_are_kept_or_asked(self):
+        self.check([(t, want, v, []) for t, want, v in CORP_BENIGN])
 
     def test_the_skeptics_own_secrets_are_refused_and_hidden(self):
         self.check([(t, SECRET, v, []) for t, v in CORP_SECRET])
@@ -493,6 +588,84 @@ class AMarkIsRefusedOnEverySurface(EgressTest):
         for v in ("Bluebird77", "7731", "1962", "5932", "1955", "7741", "4821", "purple monkey"):
             self.assertNotIn(v, sent)
             self.assertNotIn(v, log)
+
+
+class ANoteThatMentionsACodeKeepsItsNumbersAtHome(EgressTest):
+    """Round 7, D3, on the three surfaces: Claude (MCP), ChatGPT (HTTP) and the
+    terminal."""
+
+    # convergence vc R1 [HIGH-MEDIUM]: kept by an older version or by hand,
+    # these went out with the second code in clear (sk6/s_r1_legacy.py)
+    KEPT_ANOTHER_WAY = ["My PIN is 4821. The new one is 5932", "Mon NIP est 4821. Le nouveau: 5932",
+                        "The garage code is 4821. New one: 5932", "Garage code 4821. Backup: 7731",
+                        "Bank PIN 4821. Old one was 7731", "password is Hunter22! My son's is Tiger7",
+                        "PIN 4821. PUK 12345678", "My PIN changed. It is now 5932.",
+                        "Garage code: see below. 4821", "Garage 4821, alarm 7731 (codes)",
+                        "Netflix password - ask Karen. It is tulip99", "Bank \u0420IN 4821"]
+    VALUES = ("4821", "5932", "7731", "Hunter22", "Tiger7", "12345678", "tulip99")
+
+    def test_a_second_code_in_a_later_sentence_never_goes_out(self):
+        self.py("""
+            seed(os.environ["JEFFEREY_CONSCIENCE_PATH"], facts=%r + ["Anna calls on Sundays"])
+            out(1)
+        """ % self.KEPT_ANOTHER_WAY)
+        r = self.py("""
+            import jefferey_mcp as m
+            con = mcp_call(m, "get_conscience")
+            os.environ["JEFFEREY_HTTP_TOKENS"] = %r
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            g = TestClient(h.app).get("/conscience", headers=H(%r))
+            out({"con": con, "gpt": [g.status_code, g.json()]})
+        """ % (TOKENS, TG), JEFFEREY_CLIENT="claude-raw")
+        r2 = self.py("""
+            import jefferey_mcp as m, jefferey_chat as jc
+            topics = ("PIN", "garage code", "NIP", "password", "codes", "Netflix password")
+            out({"mcp": [mcp_call(m, "explain_basis", {"topic": q}) for q in topics],
+                 "terminal": [jc.dispatch_tool("explain_basis", {"topic": q}) for q in topics],
+                 "prompt": jc.system_prompt()})
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertEqual(r["gpt"][0], 200, r["gpt"])
+        # the ids JEFFEREY gives each note ('f-3a4821') are hex: not values
+        sent = re.sub(r"\b[a-z]{1,2}-[0-9a-f]{6}\b", "<id>", json.dumps([r, r2], ensure_ascii=False))
+        self.assertIn("Anna calls on Sundays", sent)
+        self.assertIn("The new one is", sent)
+        log = re.sub(r"[0-9a-f]{64}", "", self.log_text())
+        for v in self.VALUES:
+            at = sent.find(v)
+            self.assertEqual(at, -1, (v, sent[max(0, at - 300):at + 80]))
+            self.assertNotIn(v, log, v)
+
+    ASK = ["Called about my PIN reset, ref 5678.", "The code to get in the building is 4821",
+           "Garage 4821, alarm 7731 (codes)",
+           "Alarm code reset: called 613-555-0199, they will send a tech at 1430"]
+
+    def test_the_ai_is_told_to_ask_the_owner_and_nothing_is_kept(self):
+        r = self.py("""
+            notes = %r
+            import jefferey_chat as jc, jefferey_mcp as m
+            os.environ["JEFFEREY_HTTP_TOKENS"] = %r
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            c = TestClient(h.app)
+            res = []
+            for n in notes:
+                t = jc.dispatch_tool("remember_fact", {"fact": n})
+                mc = mcp_call(m, "remember_fact", {"fact": n})
+                ht = c.post("/facts", json={"fact": n}, headers=H(%r))
+                res.append([str(t.get("reason") or t), str(mc.get("reason")), ht.status_code,
+                            ht.text])
+            out(res)
+        """ % (self.ASK, TOKENS, TA), JEFFEREY_CLIENT="jefferey")
+        for note, (chat, mcp, code, http) in zip(self.ASK, r):
+            for where, said in (("terminal", chat), ("Claude", mcp), ("ChatGPT", http)):
+                self.assertIn("Ask the owner", said, (where, note))
+                self.assertIn("/remember", said, (where, note))
+                self.assertNotIn("looks like", said, (where, note))     # never an accusing no
+            self.assertEqual(code, 403, note)
+        stored = self.store_text()
+        for v in ("5678", "4821", "7731", "1430"):
+            self.assertNotIn(v, stored)
 
 
 class AMarkIsStillASignForAScamCheck(EgressTest):
