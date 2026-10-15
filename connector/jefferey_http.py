@@ -639,8 +639,10 @@ def fill_form(f: FormIn) -> dict:
     """Given a form's field labels, return what Jefferey can fill from the
     user's own profile and exactly what he cannot. He never guesses, never
     fills a box about someone else with the owner's details, and never fills
-    sensitive identifiers — those go back to the user. On a bill of sale he
-    is the seller; pass owner_is='buyer' when he is buying."""
+    sensitive identifiers — those go back to the user. On a bill of sale
+    between two people, say which side he is on: owner_is='seller' or
+    'buyer'; with nothing said, every seller's, buyer's, vendor's or shop's
+    box is left for him."""
     return rep.fill_form(f.fields, f.owner_is)
 
 

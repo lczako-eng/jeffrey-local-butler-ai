@@ -1187,5 +1187,57 @@ class AfterTheFixes(Temp):
         self.assertIn("NOT recorded", r["none"])
         self.assertIn("waiting for you", r["later"])
 
+
+# ===================================================== repair round 4 (R5)
+class ShoppingIsNotTheMembership(Temp):
+    """R5: the rule that a yearly plan is billed once a year, whatever the
+    amount, met a matcher that took 'COSTCO WHSE' and 'COSTCO.CA' for the
+    Costco Membership: three purchases became 'duplicate' membership bills
+    and the dispute pack asked Costco for $274.50. Shopping where he holds a
+    membership is shopping; only the fee itself, billed again inside its
+    year, is a second bill."""
+
+    SHOPPING = (("COSTCO WHSE #0545", 120.31, "2026-09-03"),
+                ("COSTCO WHSE #0545", 64.20, "2026-09-10"),
+                ("COSTCO.CA", 89.99, "2026-09-20"))
+
+    def test_three_costco_purchases_are_never_claimed_from_costco(self):
+        for with_fee in (False, True):
+            g = self.guard(name=f"c{with_fee}.json")
+            g.expect_charge("Costco Membership", 65.00, "yearly")
+            if with_fee:
+                self.assertEqual(g.check_charge("COSTCO MEMBERSHIP", 65.00,
+                                                "2026-08-01")["verdict"], "expected")
+            for name, amt, d in self.SHOPPING:
+                r = g.check_charge(name, amt, d)
+                self.assertNotIn(r["verdict"], ("duplicate", "amount_increased"), (name, amt, r))
+                self.assertEqual(r["recoverable"], 0.0, (name, amt, r))
+                self.assertIn("purchase", r["what_happened"])
+            pack = g.dispute_pack("Costco Membership")
+            self.assertEqual(pack["amount_in_dispute"], 0.0, pack)
+            self.assertEqual(pack["charges_in_dispute"], [])
+            whole = self.guard(name=f"s{with_fee}.json").review_statement(
+                ([{"merchant": "COSTCO MEMBERSHIP", "amount": 65.00, "date": "2026-08-01"}]
+                 if with_fee else []) +
+                [{"merchant": n, "amount": a, "date": d} for n, a, d in self.SHOPPING])
+            self.assertEqual(whole["recoverable_total"], 0.0, whole)
+
+    def test_the_fee_billed_twice_in_its_year_is_still_a_second_bill(self):
+        g = self.guard()
+        g.expect_charge("Costco Membership", 65.00, "yearly")
+        g.check_charge("COSTCO MEMBERSHIP", 65.00, "2026-08-01")
+        for name, amt, d in self.SHOPPING:
+            g.check_charge(name, amt, d)
+        r = g.check_charge("COSTCO MEMBERSHIP", 65.00, "2026-09-25")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", 65.0), r)
+        self.assertEqual(g.dispute_pack("Costco Membership")["amount_in_dispute"], 65.0)
+        # ...and a plain yearly plan keeps the I-38 rule: a second charge
+        # inside the year is a second bill, whatever the amount
+        g.expect_charge("Norton 360", 119.99, "yearly")
+        g.check_charge("NORTON 360", 119.99, "2026-08-01")
+        self.assertEqual(g.check_charge("NORTON 360", 59.99, "2026-09-01")["verdict"],
+                         "duplicate")
+
+
 if __name__ == "__main__":
     unittest.main()

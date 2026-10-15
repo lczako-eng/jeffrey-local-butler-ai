@@ -1023,5 +1023,94 @@ class AfterTheFixes(EgressTest):
         self.assertIn("very likely a scam", r)
 
 
+# ===================================================== repair round 4 (R1)
+class AMarkNeverShieldsWhatFollowsIt(EgressTest):
+    """R1: a '[hidden…]' mark an engine wrote between a word that announces a
+    secret and the secret itself switched the scan off. The note was kept,
+    and later went out word for word to a plain guest (claude-raw) in
+    get_conscience. A mark hides nothing when someone else typed it."""
+
+    SHIELDED = ["My PIN [hidden] 4821",
+                "The alarm code is [hidden: a code] 7731",
+                "password: [hidden: looks like a password] Hunter22!",
+                "The garage code is [hidden: looks like a PIN or a door, alarm or lock code], "
+                "changed to 5932 today",
+                "Bank password: [hidden: looks like a password or PIN] — he changed it to "
+                "Soleil2025!",
+                "password: Hun[hidden]ter22!"]
+    VALUES = ["4821", "7731", "Hunter22", "5932", "Soleil2025", "ter22"]
+
+    def test_an_engine_cannot_slip_a_secret_in_behind_a_mark(self):
+        r = self.py("""
+            notes = %r
+            import jefferey_chat as jc, jefferey_mcp as m
+            os.environ["JEFFEREY_HTTP_TOKENS"] = %r
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            c = TestClient(h.app)
+            res = []
+            for n in notes:
+                res.append([bool(jc.dispatch_tool("remember_fact", {"fact": n}).get("refused")),
+                            bool(mcp_call(m, "remember_fact", {"fact": n}).get("refused")),
+                            c.post("/facts", json={"fact": n}, headers=H(%r)).status_code])
+            out(res)
+        """ % (self.SHIELDED, TOKENS, TA), JEFFEREY_CLIENT="jefferey")
+        for note, (chat, mcp, http) in zip(self.SHIELDED, r):
+            self.assertTrue(chat, ("terminal kept it", note))
+            self.assertTrue(mcp, ("Claude kept it", note))
+            self.assertEqual(http, 403, ("ChatGPT kept it", note))
+        stored = self.store_text()
+        for v in self.VALUES:
+            self.assertNotIn(v, stored)
+            self.assertNotIn(v, self.log_text())
+
+    def test_one_already_kept_behind_a_mark_never_goes_out(self):
+        # written before this fix, or by hand: the release scan reads through
+        # the mark too, and hides only the secret — the answer still goes
+        self.py("""
+            seed(os.environ["JEFFEREY_CONSCIENCE_PATH"], facts=%r + ["Anna calls on Sundays"])
+            out(1)
+        """ % self.SHIELDED)
+        r = self.py("""
+            import jefferey_mcp as m
+            con = mcp_call(m, "get_conscience")
+            os.environ["JEFFEREY_HTTP_TOKENS"] = %r
+            import jefferey_http as h
+            from fastapi.testclient import TestClient
+            g = TestClient(h.app).get("/conscience", headers=H(%r))
+            out({"con": con, "gpt": [g.status_code, g.json()]})
+        """ % (TOKENS, TG), JEFFEREY_CLIENT="claude-raw")
+        self.assertFalse(r["con"].get("refused"), r["con"])
+        self.assertEqual(r["gpt"][0], 200, r["gpt"])
+        sent = json.dumps(r)
+        self.assertIn("Anna calls on Sundays", sent)
+        for v in self.VALUES:
+            self.assertNotIn(v, sent)
+        log = self.log_text()
+        for v in self.VALUES:
+            self.assertNotIn(v, log)
+
+    def test_what_jefferey_hid_itself_comes_back_in_clean(self):
+        # JEFFEREY's own hiding runs until nothing more is found, so its own
+        # answer handed back by an engine is not refused, and a phone number
+        # or a reference after a hidden code is still not a code (I-07, I-15)
+        r = self.py("""
+            import egress, jefferey_chat as jc
+            notes = ["Garage code 4821, gate 2580", "Le code de l'alarme est 4821, appeler le "
+                     "613 555 0199", "Alarm code 1234 ref 5678", "Votre NIP 4321, dossier 8765"]
+            masked = [egress.mask_text(n)[0] for n in notes]
+            out({"masked": masked, "again": [egress.looks_secret(x) for x in masked],
+                 "kept": [jc.dispatch_tool("remember_fact", {"fact": x}).get("refused")
+                          for x in masked]})
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertEqual(r["again"], [None] * 4)
+        self.assertEqual(r["kept"], [None] * 4)
+        joined = " ".join(r["masked"])
+        for v in ("4821", "2580", "1234", "4321"):
+            self.assertNotIn(v, joined)
+        for v in ("613 555 0199", "ref 5678", "dossier 8765"):
+            self.assertIn(v, joined)
+
+
 if __name__ == "__main__":
     unittest.main()

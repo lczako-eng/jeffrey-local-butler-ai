@@ -44,9 +44,13 @@ UNKNOWN_SOURCE = {"stated_by": UNKNOWN,
 
 # What the owner typed at his own terminal this session, word for word. Only
 # 'Talk to JEFFEREY on this Mac' fills it; over MCP and HTTP JEFFEREY never
-# sees what the owner said, only what the AI chose to send.
-_typed: list[str] = []
-_typed_words: list[frozenset] = []
+# sees what the owner said, only what the AI chose to send. Each message is
+# kept as the sentences that are his own voice: words in quotation marks, and
+# a sentence that reports what someone else says ('My sister says cost
+# matters more than safety'), are somebody else's words even when he typed
+# them (R9: that sentence, followed by 'Ridiculous.', made an AI's cost >
+# safety 'his words' and reversed his own safety > cost).
+_messages: list[dict] = []
 _turn: int | None = None
 _MAX_TYPED = 400
 
@@ -55,6 +59,50 @@ _MAX_TYPED = 400
 _HIDDEN = re.compile(r"<!--.*?(?:-->|$)", re.S)
 _HEADERS = re.compile(r"^\s*(?:from|to|subject|sent|date|cc|reply-to|de|à|objet|envoyé)\s*:",
                       re.I | re.M)
+# Words in quotation marks — and in single quotes used as quotation marks,
+# never an apostrophe ("Mom's").
+_QUOTED = re.compile(r"[\"“”«»„‟][^\"“”«»„‟]*[\"“”«»„‟]?"
+                     r"|(?:(?<=\s)|^)['‘][^'‘’\n]{2,}?['’](?=[\s.,!?;:)]|$)")
+_SENTENCES = re.compile(r"[.!?;\n]+|\s[-–—]+\s|:\s")
+# Someone else's opinion, reported: 'my sister says', 'the doctor thinks',
+# 'she has always said', 'according to Karen', 'ma soeur dit'. His own ('I
+# think', "I've always said", 'I really believe') is his.
+_REPORTED_ANY = re.compile(r"\b(?:according to|selon|d'?apr[eè]s|apparently|supposedly"
+                           r"|allegedly)\b", re.I)
+_REPORTER = re.compile(
+    r"\b(?P<who>[^\W\d_]+)(?:'s|'ve|'d|'ll|'m)?\s+"
+    r"(?:(?:has|have|had|always|often|keeps|keep|kept|also|really|still|just|once|would"
+    r"|will|did|does|do|honestly|truly|personally|a|ne|n'a|toujours)\s+)*"
+    r"(?:says|said|say|saying|thinks|think|thought|believes|believe|believed|claims|claim"
+    r"|claimed|insists|insist|insisted|reckons|reckon|feels|felt|tells me|told me|tell me"
+    r"|wants me to|dit|disait|pense|pensait|croit|croyait|trouve|affirme|pretend)\b", re.I)
+_HIS_OWN = frozenset("i we je j nous moi".split())
+
+
+def _reported(piece: str) -> bool:
+    n = grounding.normalise(piece)
+    if _REPORTED_ANY.search(n):
+        return True
+    return any(m.group("who") not in _HIS_OWN for m in _REPORTER.finditer(n))
+
+
+def _own_voice(text: str) -> list[list[str]]:
+    """The owner's own sentences in what he typed, as runs: sentences next to
+    each other stay together, a quoted or reported one breaks the run."""
+    t = _QUOTED.sub(" | ", text)
+    runs: list[list[str]] = [[]]
+    for part in _SENTENCES.split(t):
+        pieces = part.split("|")
+        for k, piece in enumerate(pieces):
+            if k:
+                runs.append([])               # a quotation broke the sentence
+            if not piece.strip():
+                continue
+            if _reported(piece):
+                runs.append([])
+                continue
+            runs[-1].append(piece)
+    return [r for r in runs if r]
 
 
 def _now() -> str:
@@ -64,20 +112,26 @@ def _now() -> str:
 def owner_typed(text: str) -> None:
     """The owner typed this at his own terminal (it is about to be sent).
     It starts a new turn. A pasted message — e-mail headers, or text hidden
-    in an HTML comment — is somebody else's words, so it never counts as his."""
+    in an HTML comment — is somebody else's words, so it never counts as his;
+    nor do the words he quotes, or what he reports someone else saying."""
     global _turn
     _turn = (_turn or 0) + 1
     t = str(text or "")
     if _HEADERS.search(t):
         return
     t = _HIDDEN.sub(" ", t)
-    ws = grounding.words(t)
-    if not ws:
+    runs = _own_voice(t)
+    sentences = [(" ".join(grounding.words(x)), frozenset(grounding.content(x)))
+                 for run in runs for x in run]
+    sentences = [(w, b) for w, b in sentences if w]
+    if not sentences:
         return
-    _typed.append(" ".join(ws))
-    del _typed[:-_MAX_TYPED]
-    _typed_words.append(frozenset(grounding.content(t)))
-    del _typed_words[:-_MAX_TYPED]
+    _messages.append({
+        "runs": [" ".join(w for x in run for w in grounding.words(x)) for run in runs],
+        "sentences": sentences,
+        "bag": frozenset().union(*(b for _, b in sentences)),
+    })
+    del _messages[:-_MAX_TYPED]
 
 
 def new_turn() -> None:
@@ -96,8 +150,7 @@ def turn() -> int | None:
 def reset() -> None:
     """For tests: forget what was typed."""
     global _turn
-    _typed.clear()
-    _typed_words.clear()
+    _messages.clear()
     _turn = None
 
 
@@ -124,10 +177,10 @@ def verbatim(text) -> bool:
     are never stitched together), and not inside words that deny it ('I
     never said …', '… that is a lie')?"""
     ws = grounding.words(text)
-    if not ws or not _typed:
+    if not ws or not _messages:
         return False
     needle = " " + " ".join(ws) + " "
-    for said in _typed:
+    for said in (run for m in _messages for run in m["runs"]):
         hay = f" {said} "
         i = hay.find(needle)
         while i >= 0:
@@ -145,19 +198,21 @@ def said_by_owner(*values) -> bool:
     need: set[str] = set()
     for v in values:
         need |= grounding.content(v)
-    return bool(need) and any(need <= said for said in _typed_words)
+    return bool(need) and any(need <= m["bag"] for m in _messages)
 
 
 def ranked_by_owner(higher, lower) -> bool:
-    """Did the owner himself put HIGHER before LOWER, in one message, with no
-    word that turns it round? 'safety matters more than cost' backs safety >
-    cost — never cost > safety (verify I-25, I-48: the owner's own words were
-    used to unlock their reversal). When in doubt, it is not his: the value
+    """Did the owner himself put HIGHER before LOWER, in one sentence of his
+    own, with no word that turns it round? 'safety matters more than cost'
+    backs safety > cost — never cost > safety (verify I-25, I-48: the owner's
+    own words were used to unlock their reversal) — and 'My sister says cost
+    matters more than safety. Ridiculous.' backs nothing: it is his sister's
+    ranking, which he rejects (R9). When in doubt, it is not his: the value
     waits for his yes."""
     hi, lo = grounding.content(higher), grounding.content(lower)
     if not hi or not lo:
         return False
-    for said, bag in zip(_typed, _typed_words):
+    for said, bag in (x for m in _messages for x in m["sentences"]):
         if not (hi | lo) <= bag:
             continue
         ws = said.split()

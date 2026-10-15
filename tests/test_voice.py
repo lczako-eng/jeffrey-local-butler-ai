@@ -12,6 +12,7 @@ whose HOME is a temporary folder too. Nothing here touches the real home.
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import hashlib
 import io
 import json
@@ -830,15 +831,50 @@ class AfterTheFixes(VoiceCase):
         self.assertIn(str(custom / "erin"), out)
 
     def test_a_deletion_is_recorded_without_keeping_the_name(self):
+        # R6: the record kept the folder's name ('laszlo', 'erin-kowalski')
+        # and a plain sha256 of the name, which anyone can recompute from a
+        # guess — after the voice was deleted at the person's request
         self.assertEqual(self.enrol(), 0)
         self.assertEqual(self.delete(), 0)
-        lines = (self.root / "deletions.jsonl").read_text().splitlines()
-        rec = json.loads(lines[-1])
-        self.assertEqual(rec["name_fingerprint"], hashlib.sha256(b"laszlo").hexdigest())
+        text = (self.root / "deletions.jsonl").read_text()
+        rec = json.loads(text.splitlines()[-1])
+        self.assertEqual(sorted(rec), ["complete", "deleted_on", "deletion",
+                                       "files_overwritten"])
         self.assertTrue(rec["complete"])
         self.assertGreater(rec["files_overwritten"], 0)
-        self.assertNotIn("aszlo", "\n".join(lines).replace(rec["folder"], ""))
+        self.assertEqual(rec["deleted_on"], dt.date.today().isoformat())
+        self.assertNotIn("aszlo", text.lower())
+        for name in ("laszlo", "Laszlo"):
+            self.assertNotIn(hashlib.sha256(name.encode()).hexdigest(), text)
         self.assertEqual(mode(self.root / "deletions.jsonl"), 0o600)
+        # two deletions are two different records, never linked by a name
+        self.assertEqual(self.enrol("Erin Kowalski"), 0, self.last)
+        self.assertEqual(self.delete("Erin Kowalski"), 0, self.last)
+        lines = (self.root / "deletions.jsonl").read_text().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertNotEqual(json.loads(lines[0])["deletion"], json.loads(lines[1])["deletion"])
+        self.assertNotIn("erin", "\n".join(lines).lower())
+        self.assertNotIn("kowalski", "\n".join(lines).lower())
+
+    def test_an_older_record_that_kept_a_name_is_cleaned(self):
+        # R6: what the earlier version wrote is cleaned the next time a voice
+        # is deleted or looked at — the deletion is still recorded
+        self.root.mkdir(parents=True, exist_ok=True)
+        old = self.root / "deletions.jsonl"
+        old.write_text(json.dumps({
+            "deleted_at": "2026-10-12T09:14:03", "folder": "erin-kowalski",
+            "name_fingerprint": hashlib.sha256(b"erin kowalski").hexdigest(),
+            "files_overwritten": 9, "complete": True}) + "\n" + "{torn line erin\n")
+        os.chmod(old, 0o600)
+        self.status("Nobody")
+        text = old.read_text()
+        self.assertNotIn("erin", text.lower())
+        self.assertNotIn(hashlib.sha256(b"erin kowalski").hexdigest(), text)
+        rec = json.loads(text.splitlines()[0])
+        self.assertEqual(rec["deleted_on"], "2026-10-12")
+        self.assertEqual((rec["files_overwritten"], rec["complete"]), (9, True))
+        self.assertEqual(len(text.splitlines()), 1)
+        self.assertEqual(mode(old), 0o600)
 
 
 if __name__ == "__main__":

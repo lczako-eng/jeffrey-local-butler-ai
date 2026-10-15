@@ -396,7 +396,8 @@ class PrivateFactsStayPrivate(LifeTest):
         # verify I-48: the old confidence is kept as the weight it had (it
         # already counted the three observations), not re-counted from zero
         self.assertEqual((r["prio"]["for"], r["prio"]["against"], r["prio"]["confidence"]), (0, 0, 0.7))
-        self.assertEqual(r["prio"]["legacy"], {"confidence": 0.7, "evidence": 3})
+        self.assertEqual({k: r["prio"]["legacy"][k] for k in ("confidence", "evidence")},
+                         {"confidence": 0.7, "evidence": 3})
         self.assertEqual(r["people"]["visibility"], "private")
         self.assertEqual(r["people"]["notes"], "n")
         self.assertEqual(r["memories"][0]["visibility"], "family")
@@ -1278,7 +1279,8 @@ class AfterTheFixes(LifeTest):
             self.assertTrue(x["question_for_owner"])
         self.assertGreaterEqual(r["travel"]["confidence"], 0.85)
         self.assertEqual([x["higher"] for x in r["phone"]], ["reliability", "reliability", "price"])
-        self.assertEqual(r["kept"]["legacy"], {"confidence": 0.99, "evidence": 1})
+        self.assertEqual({k: r["kept"]["legacy"][k] for k in ("confidence", "evidence")},
+                         {"confidence": 0.99, "evidence": 1})
 
     def test_a_store_migrated_by_the_first_october_release_is_recognised(self):
         # the shape the first release wrote: for = evidence, against 0,
@@ -1299,6 +1301,263 @@ class AfterTheFixes(LifeTest):
         self.assertEqual((r["higher"], r["lower"]), ("safety", "cost"))
         self.assertTrue(r["question_for_owner"])
         self.assertGreater(r["confidence"], 0.5)
+
+
+# ===================================================== repair round 4 (R8)
+def _old_contradictions_to_flip(c: float, pattern: str = "a") -> int:
+    """How many contradictions the code before the October fixes (03187ae)
+    needed to turn a value round: each took 30% off its confidence, each
+    agreeing choice added 15% of what was left, and below 0.25 it turned.
+    `pattern` repeats: 'a' against, 'f' for."""
+    n = 0
+    for i in range(400):
+        if pattern[i % len(pattern)] == "a":
+            c = round(c * 0.7, 2)
+            n += 1
+            if c < 0.25:
+                return n
+        else:
+            c = round(c + (1 - c) * 0.15, 2)
+    return 10 ** 6
+
+
+class OldValuesAreNoEasierToTurnRound(LifeTest):
+    """R8: the migration of values saved before October 2026 made them
+    easier to turn round than they ever were: an old 0.55 (the old default
+    for every inferred value) after 2 contradictions instead of 3, and
+    0.41-0.49 after 1 instead of 2."""
+
+    def run_store(self, levels, pattern):
+        return self.py("""
+            import provenance
+            from conscience import Conscience
+            levels, pattern = %r, %r
+            res = {}
+            for i, L in enumerate(levels):
+                path = os.path.join(os.path.dirname(os.environ["JEFFEREY_CONSCIENCE_PATH"]),
+                                    f"old-{i}.json")
+                open(path, "w").write(json.dumps({"_rev": 2, "facts": [], "goals": [],
+                    "corrections": [], "priorities": [{"context": "the phone plan",
+                    "higher": "reliability", "lower": "price", "confidence": L,
+                    "evidence": 1, "updated": "x"}]}))
+                c = Conscience(path)
+                n = 0
+                for k in range(60):
+                    provenance.new_turn()
+                    agree = pattern[k %% len(pattern)] == "f"
+                    hi, lo = ("reliability", "price") if agree else ("price", "reliability")
+                    out_ = c.record_correction("the phone plan", "x", "y", hi, lo)
+                    n += 0 if agree else 1
+                    if out_.get("flipped"):
+                        break
+                else:
+                    n = 10 ** 6
+                res[str(L)] = n
+            out(res)
+        """ % (levels, pattern))
+
+    def test_every_old_confidence_needs_at_least_as_many_contradictions_as_it_did(self):
+        levels = [round(0.26 + 0.01 * i, 2) for i in range(54)]       # 0.26 … 0.79
+        for pattern in ("a", "af", "aaf"):
+            now = self.run_store(levels, pattern)
+            for L in levels:
+                self.assertGreaterEqual(now[str(L)], _old_contradictions_to_flip(L, pattern),
+                                        (pattern, L))
+        now = self.run_store([0.55, 0.41, 0.45, 0.49], "a")
+        self.assertEqual(now["0.55"], 3, "the old default turned round after 3")
+        for L in ("0.41", "0.45", "0.49"):
+            self.assertEqual(now[L], 2, L)
+
+    def test_a_store_migrated_by_the_first_october_release_is_no_easier_either(self):
+        # counted since that migration, without the old rule's own figure
+        first = {"_rev": 5, "facts": [], "goals": [], "corrections": [],
+                 "priorities": [{"id": "p1", "context": "the phone plan",
+                                 "higher": "reliability", "lower": "price", "confidence": 0.55,
+                                 "evidence": 1, "for": 0, "against": 0, "stated": False,
+                                 "status": "confirmed", "source": {"stated_by": "unknown"},
+                                 "legacy": {"confidence": 0.55, "evidence": 1},
+                                 "updated": "x"}]}
+        self.store.write_text(json.dumps(first))
+        r = self.py("""
+            import provenance
+            from conscience import Conscience
+            c = Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"])
+            seen = []
+            for k in range(4):
+                provenance.new_turn()
+                seen.append(c.record_correction("the phone plan", "x", "y", "price",
+                                                "reliability").get("higher"))
+            out(seen)
+        """)
+        self.assertEqual(r, ["reliability", "reliability", "price", "price"])
+
+
+# ===================================================== repair round 4 (R9)
+class WhatHeQuotesIsNotWhatHeSays(LifeTest):
+    """R9: 'My sister says cost matters more than safety... Ridiculous.' made
+    an AI's set_priority(cost > safety) his own words, confirmed with no
+    proposal, and it reversed the safety > cost he had stated himself.
+    Quoted or reported speech is never his words, and reversing a value he
+    stated always waits for his own yes."""
+
+    def test_a_ranking_he_quotes_and_rejects_never_reverses_his_own(self):
+        r = self.py("""
+            import jefferey_chat as jc, provenance
+            d = jc.dispatch_tool
+            provenance.owner_typed("For Mom's care, safety matters more than cost.")
+            a = d("set_priority", {"context": "mom's care", "higher": "safety", "lower": "cost"})
+            provenance.owner_typed("My sister says cost matters more than safety... Ridiculous.")
+            b = d("set_priority", {"context": "mom's care", "higher": "cost", "lower": "safety"})
+            provenance.owner_typed("My sister says for groceries cost matters more than safety. "
+                                   "Ridiculous.")
+            g = d("set_priority", {"context": "groceries", "higher": "cost", "lower": "safety"})
+            provenance.owner_typed('Karen said "the cottage goes to Mike" and I laughed.')
+            q = jc.life.add_memory("the cottage goes to Mike")
+            provenance.owner_typed("According to the nurse, cost matters more than comfort.")
+            n = d("set_priority", {"context": "the nursing home", "higher": "cost",
+                                   "lower": "comfort"})
+            rows = {p["context"]: p for p in store()["priorities"]}
+            out({"a": a, "b": b, "g": g, "q": q, "n": n, "rows": rows})
+        """)
+        self.assertEqual(r["a"].get("unconfirmed"), None, "his own sentence is his words")
+        self.assertIs(r["b"].get("changed"), False, r["b"])
+        care = r["rows"]["mom's care"]
+        self.assertEqual((care["higher"], care["lower"]), ("safety", "cost"))
+        self.assertEqual(care["proposed"]["higher"], "cost")
+        self.assertEqual(care["proposed"]["source"]["stated_by"], "engine")
+        for ctx in ("groceries", "the nursing home"):
+            self.assertEqual(r["rows"][ctx]["source"]["stated_by"], "engine", ctx)
+            self.assertEqual(r["rows"][ctx]["status"], "pending", ctx)
+        self.assertFalse(r["q"]["verbatim"], "a quotation is not his words")
+
+    def test_even_in_his_own_voice_a_reversal_waits_for_his_yes(self):
+        r = self.py("""
+            import jefferey_chat as jc, provenance
+            d = jc.dispatch_tool
+            provenance.owner_typed("For Mom's care, safety matters more than cost.")
+            d("set_priority", {"context": "mom's care", "higher": "safety", "lower": "cost"})
+            provenance.owner_typed("Things changed: for Mom's care cost matters more than "
+                                   "safety now.")
+            b = d("set_priority", {"context": "mom's care", "higher": "cost", "lower": "safety"})
+            row = [p for p in store()["priorities"] if p["context"] == "mom's care"][0]
+            jc.conscience.refresh()
+            jc.owner_life("/confirm " + row["id"], answer=yes, tty=True)
+            row2 = [p for p in store()["priorities"] if p["context"] == "mom's care"][0]
+            out({"b": b, "row": row, "row2": row2})
+        """)
+        self.assertIs(r["b"].get("changed"), False, r["b"])
+        self.assertEqual((r["row"]["higher"], r["row"]["lower"]), ("safety", "cost"))
+        self.assertEqual((r["row2"]["higher"], r["row2"]["lower"]), ("cost", "safety"),
+                         "his own yes changes it")
+
+
+# ===================================================== repair round 4 (R11)
+class ALittleWordGroundsNothing(LifeTest):
+    """R11: once two-letter words counted ('TV', 'AC'), so did 'go': "is it
+    ok to go up there" grounded on two unrelated facts (none at 35e4e9b).
+    Two letters ground only as a known abbreviation."""
+
+    def test_go_up_there_finds_nothing_and_tv_still_finds_the_tv(self):
+        r = self.py("""
+            import jefferey_chat as jc
+            d = jc.dispatch_tool
+            for t in ["We go to the cottage every July", "Mike will go to the dentist on Friday",
+                      "We bought a new TV in May", "Mom was in the ER in March"]:
+                d("remember_fact", {"fact": t, "category": "general"})
+            import jefferey_mcp as m
+            m.conscience.refresh()
+            q = "is it ok to go up there"
+            out({"chat": d("explain_basis", {"topic": q}).get("facts", []),
+                 "mcp": mcp_call(m, "explain_basis", {"topic": q}).get("facts", []),
+                 "tv": len(d("explain_basis", {"topic": "TV"}).get("facts", [])),
+                 "er": len(d("explain_basis", {"topic": "the ER"}).get("facts", []))})
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertEqual(r["chat"], [], r["chat"])
+        self.assertEqual(r["mcp"], [], r["mcp"])
+        self.assertEqual(r["tv"], 1)
+        self.assertEqual(r["er"], 1)
+
+
+# ===================================================== repair round 4 (R2)
+class ANoForThePublicIsANoForEveryone(LifeTest):
+    """R2: 'the ' was taken off an audience before the list of ways of saying
+    'anyone' was read, so 'the public' and 'the world' never matched it. A
+    rule 'never tell the public about my health' then let the family key
+    read his diagnosis on HTTP and over Claude."""
+
+    DOCUMENTED = ["anyone", "everyone", "everybody", "anybody", "all", "the world", "world",
+                  "the public", "public", "The Public", "the World.", "others", "the others",
+                  "other people", "everyone else", "people", "the people", "strangers",
+                  "tout le monde", "les autres", "n'importe qui", "tous"]
+
+    def audiences(self) -> list[str]:
+        sys.path.insert(0, str(CONNECTOR))
+        import grounding
+        listed = sorted(grounding._ANYONE)
+        both = set(self.DOCUMENTED) | set(listed)
+        both |= {"the " + a for a in listed if not a.startswith("the ")}
+        both |= {a[4:] for a in listed if a.startswith("the ")}
+        return sorted(both)
+
+    def setup_life(self):
+        self.py("""
+            import access, jefferey_chat as jc
+            with access.owner_console():
+                jc.life.add_memory("Diagnosed with type 2 diabetes in June.", visibility="family")
+                jc.life.add_memory("The orb made her laugh.", visibility="family")
+                jc.life.add_memory("My heart surgery in 1999 scared everyone.", visibility="legacy")
+                jc.life.add_memory("I want the cottage to stay in the family.", visibility="legacy")
+                jc.life.release_legacy(["executor"])
+            out(1)
+        """)
+
+    def test_every_way_of_saying_anyone_holds_his_health_back_on_mcp_and_http(self):
+        self.setup_life()
+        auds = self.audiences()
+        loop = """
+            import access, json as _j
+            auds = %r
+            h, c = http()
+            import jefferey_mcp as m
+            seen = {}
+            for a in auds:
+                with access.owner_console():
+                    h.conscience.save_fresh(lambda d: d.__setitem__("rules", []))
+                    h.rules.set_rule("disclosure", "health", "Never tell my health to " + a,
+                                     audience=a, allow=False)
+                m.conscience.refresh()
+                row = {}
+                for who, tok in (("family", TF), ("executor", TE)):
+                    row["http " + who] = [x["text"] for x in
+                                          c.get("/life", headers=H(tok)).json()["moments"]]
+                row["mcp " + os.environ["JEFFEREY_CLIENT"]] = [
+                    x["text"] for x in mcp_call(m, "who_am_i")["moments"]]
+                seen[a] = row
+            out(seen)
+        """
+        fam = self.py(loop % auds, JEFFEREY_CLIENT="family")
+        exe = self.py(loop % auds, JEFFEREY_CLIENT="executor")
+        for a in auds:
+            for who, texts in list(fam[a].items()) + [("mcp executor", exe[a]["mcp executor"])]:
+                joined = " ".join(texts)
+                self.assertNotIn("diabetes", joined, (a, who))
+                self.assertNotIn("heart surgery", joined, (a, who))
+            self.assertIn("The orb made her laugh.", fam[a]["http family"], a)
+            self.assertIn("The orb made her laugh.", fam[a]["mcp family"], a)
+            self.assertIn("I want the cottage to stay in the family.",
+                          exe[a]["mcp executor"], a)
+            self.assertIn("I want the cottage to stay in the family.",
+                          fam[a]["http executor"], a)
+
+    def test_a_no_for_someone_else_still_names_only_them(self):
+        # the fix reads only the ways of saying 'anyone': 'the family' is
+        # still the family, 'my sister' still his sister
+        r = self.py("""
+            import grounding
+            out([grounding.norm_audience(a) for a in
+                 ("the family", "my sister", "the public", "the world", "La Rue", "Le Blanc")])
+        """)
+        self.assertEqual(r, ["family", "sister", "anyone", "anyone", "la rue", "le blanc"])
 
 
 if __name__ == "__main__":

@@ -151,12 +151,26 @@ def stem(w: str) -> str:
     return w
 
 
+# Two-letter words that say what something is about. Any other word of two
+# letters ('go', 'oh', 'ya') grounds nothing (R11: once two-letter words
+# counted, "is it ok to go up there" grounded on two unrelated facts).
+KNOWN_SHORT = frozenset("""
+tv ac er gp id pc pt ot iv bp hr rn md ct ex uk eu ai uv cd vr rv ev va ei hq pr ip os
+bc ab sk mb qc nb ns pe nl yt nt nu
+""".split())
+
+
 def _keeps(s: str) -> bool:
-    """Is this (stemmed) word enough to say what something is about? Two
-    letters or more ('TV', 'AC'), a number, a Chinese or Japanese pair (or a
-    single character standing alone), or an emoji. The little words are
-    already gone (STOP)."""
-    return (len(s) >= 2 or s.isdigit() or bool(_RUN.match(s)) or _is_symbol(s))
+    """Is this (stemmed) word enough to say what something is about? Three
+    letters or more; two letters only for a known abbreviation ('TV', 'AC',
+    'ER', 'GP'); a number, or letters with a number ('5G'); a Chinese or
+    Japanese pair (or a single character standing alone); or an emoji. The
+    little words are already gone (STOP)."""
+    if _RUN.match(s) or _is_symbol(s) or s.isdigit():
+        return True
+    if len(s) == 2:
+        return s in KNOWN_SHORT or any(c.isdigit() for c in s)
+    return len(s) >= 3
 
 
 @functools.lru_cache(maxsize=1 << 16)
@@ -517,13 +531,26 @@ _ANYONE = frozenset({"anyone", "everyone", "everybody", "anybody", "all", "any o
 _TITLES = frozenset({"mr", "mrs", "ms", "miss", "dr", "mme", "mlle", "m", "sir", "madam"})
 
 
+_DETERMINER = re.compile(r"^(?:my|the|our|ma|mon|mes)\s+")
+_ANY_DETERMINER = re.compile(r"^(?:my|the|our|ma|mon|mes|le|la|les|tout\s+le|all\s+the)\s+")
+# Each way of saying 'anyone' with and without its first little word, so 'the
+# public', 'public', 'the world' and 'world' are all 'anyone' (R2: 'the ' was
+# taken off before the list was read, so 'the public' and 'the world' never
+# matched, and a no for them let the family key read his health).
+_ANYONE_ALL = _ANYONE | frozenset(_ANY_DETERMINER.sub("", a) for a in _ANYONE) \
+    | frozenset({"general public", "public at large", "whole world", "the whole world",
+                 "the general public", "le public", "le monde", "le grand public",
+                 "grand public", "monde"})
+
+
 def norm_audience(s) -> str:
     """'My Sister' and 'sister' are one audience; 'the family' is 'family';
-    'everyone' and 'everybody' are 'anyone'."""
-    n = normalise(s)
-    n = re.sub(r"^(?:my|the|our|ma|mon|mes)\s+", "", n)
-    n = n.strip(" .,:;!\"'")
-    return "anyone" if n in _ANYONE else n
+    'everyone', 'everybody', 'the public' and 'the world' are 'anyone'."""
+    n = normalise(s).strip(" .,:;!\"'")
+    if n in _ANYONE_ALL or _ANY_DETERMINER.sub("", n) in _ANYONE_ALL:
+        return "anyone"
+    n = _DETERMINER.sub("", n).strip(" .,:;!\"'")
+    return "anyone" if n in _ANYONE_ALL else n
 
 
 def _emails_in(text) -> set[str]:

@@ -165,12 +165,12 @@ RELEASE: dict[str, frozenset[str]] = {
     "fill_pdf": frozenset({"written", "saved_in", "fields_set", "filled_from_vault",
                            "original_untouched", "fields", "references", "available",
                            "secrets_used", "not_on_this_form", "removed_from_copy",
-                           "signed", "wrong_boxes", "owner_is_can_be"}),
+                           "signed", "wrong_boxes", "owner_is_can_be", "needs_you"}),
     # field names are the PDF author's words: data, never instructions (I-31)
     "pdf_form_fields": frozenset({"path", "fields", "count", "field_names_are",
                                   "described", "sensitive", "for_someone_else",
                                   "signing", "suspicious", "warning", "owner_is",
-                                  "sides", "owner_is_can_be"}),
+                                  "sides", "owner_is_can_be", "needs_you"}),
     # who wrote each line and through which door (I-45); an approval's id is
     # given only to the connection that asked for it, never in the log view
     "action_log": frozenset({"category", "description", "amount", "currency",
@@ -642,6 +642,14 @@ def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
                 # code at the new house is 4821' is a code, not a house number
                 just_said, prev = low in _SAYS, ""
                 continue
+            # a phone number written as one ('appeler le 613 555 0199') is
+            # never the code, and nothing after it is either; nor is the
+            # number after 'ref' or 'dossier' — a hidden value no longer
+            # stops the search, so these are where it ends (R1)
+            if gap and _PHONE_WRITTEN.match(n, t.start() + len(raw) - len(raw.lstrip(_LEAD))):
+                break
+            if fam in ("pin", "code") and prev in _NOT_THE_VALUE_BEFORE and _ndigits(raw):
+                break
             # a plain-word password right after 'is' or ':', when the words
             # before it said whose ('Mot de passe de ma banque: soleil')
             plain_ok = (fam == "pw" and just_said and linked and gap <= _MAX_GAP)
@@ -692,7 +700,11 @@ def _keyword_hits(n: str) -> list[tuple[int, int, str]]:
 _NOT_A_CODE_BEFORE = frozenset("ref reference dossier file case order no number num "
                                 "invoice account compte tel phone telephone call appeler "
                                 "since depuis".split())
+# After these, the number is what they name, not the code a word before announced.
+_NOT_THE_VALUE_BEFORE = frozenset("ref reference dossier invoice facture tel phone "
+                                  "telephone call appeler".split())
 _PHONE_AT = re.compile(r"\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}(?!\d)")
+_PHONE_WRITTEN = re.compile(r"(?:\+?1[\s.\-])?(?:\(\d{3}\)\s?|\d{3}[\s.\-])\d{3}[\s.\-]\d{4}(?!\d)")
 
 
 def _more_codes(n: str, start: int, what: str) -> list[tuple[int, int, str]]:
@@ -946,27 +958,65 @@ def _key_hits(n: str) -> list[tuple[int, int, str]]:
 _HEXID = re.compile(r"(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{20,}")
 
 
-# A mark JEFFEREY put in place of something hidden. It is never scanned, and
-# nothing reaches across it: the mark says "a PIN or a door, alarm or lock
-# code", and read as words it announced the next number — so one old note
+# A mark in place of something hidden: "[hidden: looks like a card number]".
+# Its own words are never read — the mark says "a PIN or a door, alarm or lock
+# code", and read as words it announced the next number, so one old note
 # ('Garage code 4821, gate 2580') blacked out 'who am I' and 'tell my story'
-# whole, and a scam's subject line ('Your PIN 4821 4821 is locked') switched
-# off its own verdict (verify I-07, I-14, I-15).
+# whole (verify I-07, I-14, I-15).
+#
+# But a mark never shields what follows it either. Anyone can type one: an
+# engine that writes "My PIN [hidden] 4821" or "password: [hidden: looks like
+# a password] Hunter22!" has hidden nothing — the secret is right there — and
+# when the mark was read as a wall the scan never saw it, so it was kept and
+# later went out in clear to any guest. So the text is scanned as if every
+# mark were not there at all: once with each mark simply taken out (a secret
+# split by a mark, 'Hun[hidden]ter22!', joins up again) and once with each
+# mark and the spaces around it read as one space ('My PIN 4821'). JEFFEREY's
+# own hiding (mask_text) runs until nothing is left to find that way, so what
+# it sends out is always clean when it comes back in.
 _MARK = re.compile(r"\[hidden(?::[^\[\]]{0,120})?\]")
+_MARK_SPACED = re.compile(r"[ \t]*\[hidden(?::[^\[\]]{0,120})?\][ \t]*")
+
+
+def _without_marks(text: str, rx: re.Pattern, glue: str
+                   ) -> tuple[str, list[int], dict[int, int]]:
+    """`text` with every mark replaced by `glue`; where each character of the
+    result came from in `text` (glue points at the start of its mark); and
+    where each such mark ends."""
+    out: list[str] = []
+    src: list[int] = []
+    ends: dict[int, int] = {}
+    last = 0
+    for m in rx.finditer(text):
+        out.append(text[last:m.start()])
+        src.extend(range(last, m.start()))
+        out.append(glue)
+        src.extend([m.start()] * len(glue))
+        ends[m.start()] = m.end()
+        last = m.end()
+    out.append(text[last:])
+    src.extend(range(last, len(text)))
+    return "".join(out), src, ends
 
 
 def find_secrets(text: str) -> list[tuple[int, int, str]]:
     """Every secret-shaped span in `text`: (start, end, what), in the
-    original text's positions, overlapping spans merged, in order."""
+    original text's positions, overlapping spans merged, in order. A hidden
+    mark is read as if it were not there (see _MARK above)."""
     if not isinstance(text, str) or len(text) < 6 or _HEXID.fullmatch(text):
         return []                      # a sha256 or other long hex id: never a secret
-    if "[hidden" in text:
-        out, last = [], 0
-        for m in _MARK.finditer(text):
-            out += [(a + last, b + last, w) for a, b, w in _find(text[last:m.start()])]
-            last = m.end()
-        return out + [(a + last, b + last, w) for a, b, w in _find(text[last:])]
-    return _find(text)
+    if "[hidden" not in text:
+        return _find(text)
+    hits: list[tuple[int, int, str]] = []
+    for rx, glue in ((_MARK, ""), (_MARK_SPACED, " ")):
+        plain, src, ends = _without_marks(text, rx, glue)
+        if not plain.strip():
+            continue
+        for s, e, w in _find(plain):
+            last = src[e - 1]
+            # a span that ends on a mark's glue covers that whole mark
+            hits.append((src[s], ends[last] if glue and last in ends else last + 1, w))
+    return _merge(hits)
 
 
 def _find(text: str) -> list[tuple[int, int, str]]:
@@ -978,7 +1028,12 @@ def _find(text: str) -> list[tuple[int, int, str]]:
         return []
     if src is not None:
         hits = [(src[s], src[e - 1] + 1, w) for s, e, w in hits]
-    hits.sort(key=lambda h: (h[0], -h[1]))
+    return _merge(hits)
+
+
+def _merge(hits: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
+    """Overlapping spans as one, the most serious name kept, in order."""
+    hits = sorted(hits, key=lambda h: (h[0], -h[1]))
     merged: list[list] = []
     for s, e, w in hits:
         if merged and s < merged[-1][1]:
@@ -1005,17 +1060,24 @@ def hidden_mark(what: str) -> str:
 
 def mask_text(text: str) -> tuple[str, list[str]]:
     """The text with every secret-shaped span replaced by a plain mark, and
-    what each was."""
-    hits = find_secrets(text)
-    if not hits:
-        return text, []
-    parts, last = [], 0
-    for s, e, w in hits:
-        parts.append(text[last:s])
-        parts.append(hidden_mark(w))
-        last = e
-    parts.append(text[last:])
-    return "".join(parts), [w for _, _, w in hits]
+    what each was. Marks are read as if they were not there (see _MARK), so
+    hiding one value can bring the next into reach ('Alarm code 1234, 5678
+    for the gate'); this runs until nothing more is found, and what it
+    returns is clean when scanned again."""
+    whats: list[str] = []
+    for _ in range(8):
+        hits = find_secrets(text)
+        if not hits:
+            break
+        parts, last = [], 0
+        for s, e, w in hits:
+            parts.append(text[last:s])
+            parts.append(hidden_mark(w))
+            last = e
+        parts.append(text[last:])
+        text = "".join(parts)
+        whats += [w for _, _, w in hits]
+    return text, whats
 
 
 def _label(k) -> str:

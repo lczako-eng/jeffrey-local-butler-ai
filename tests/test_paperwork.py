@@ -1168,7 +1168,7 @@ class TheOwnersSideOfASale(PaperworkTest):
             D("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
             D("set_profile_field", {"field": "address", "value": "12 Elm St"})
             out(D("fill_form", {"fields": %r + %r + ["VIN", "Seller signature",
-                                                     "Spouse's name"]}))
+                                                     "Spouse's name"], "owner_is": "seller"}))
         """ % (self.SELLER, self.BUYER), JEFFEREY_CLIENT="jefferey")
         self.assertEqual(r["filled"], {
             "Seller full name": "Laszlo Czako", "Seller address": "12 Elm St",
@@ -1180,7 +1180,7 @@ class TheOwnersSideOfASale(PaperworkTest):
         self.assertNotIn("someone else", why["Seller signature"])
         self.assertIn("only he signs", why["Seller signature"])
         self.assertEqual(r["owner_is"], "seller")
-        self.assertIn("owner_is='buyer'", r["sides"])
+        self.assertIn("as you said", r["sides"])
 
     def test_when_he_is_buying_the_sides_swap_on_every_surface(self):
         r = self.py("""
@@ -1215,10 +1215,10 @@ class TheOwnersSideOfASale(PaperworkTest):
             import jefferey_mcp as m
             mcp_call(m, "set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
             form = make_form("bos.pdf", [{"name": "Seller name"}, {"name": "Buyer name"}])
-            read = mcp_call(m, "pdf_form_fields", {"pdf_path": form})
-            sold = mcp_call(m, "fill_pdf", {"pdf_path": form,
+            read = mcp_call(m, "pdf_form_fields", {"pdf_path": form, "owner_is": "seller"})
+            sold = mcp_call(m, "fill_pdf", {"pdf_path": form, "owner_is": "seller",
                                             "values": {"Seller name": "Laszlo Czako"}})
-            wrong = mcp_call(m, "fill_pdf", {"pdf_path": form,
+            wrong = mcp_call(m, "fill_pdf", {"pdf_path": form, "owner_is": "seller",
                                              "values": {"Buyer name": "Laszlo Czako"}})
             bought = mcp_call(m, "fill_pdf", {"pdf_path": form, "owner_is": "buyer",
                                               "values": {"Seller name": "Laszlo Czako"}})
@@ -1231,6 +1231,137 @@ class TheOwnersSideOfASale(PaperworkTest):
         self.assertTrue(r["wrong"].get("refused"), r["wrong"])
         self.assertTrue(r["bought"].get("refused"), r["bought"])
         self.assertEqual(len(r["files"]), 1)
+
+
+# ===================================================== repair round 4 (R4)
+class NoSideIsHisUntilItIsSaid(PaperworkTest):
+    """R4: with the seller as the default on every form, a warranty card's
+    'Vendor name' and 'Vendor address' got his own name and address, and on
+    a bill of sale where he was BUYING and the model said nothing, the
+    seller's boxes got his name. A box for a seller, buyer, vendor, shop or
+    store is his only on a sale between two people where the model said
+    which side he is on."""
+
+    WARRANTY = ["Your name", "Vendor name", "Vendor address", "Date of purchase"]
+    SALE = ["Seller name", "Seller address", "Buyer name", "Buyer address", "VIN"]
+
+    def test_a_warranty_card_never_gives_the_vendor_his_name_on_any_surface(self):
+        r = self.py("""
+            import jefferey_chat as jc
+            jc.dispatch_tool("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
+            jc.dispatch_tool("set_profile_field", {"field": "address", "value": "12 Elm St"})
+            import jefferey_mcp as m
+            from fastapi.testclient import TestClient
+            import jefferey_http as jh
+            res = {}
+            for said in ("", "seller"):
+                res[said or "nothing"] = [
+                    jc.dispatch_tool("fill_form", {"fields": %r, "owner_is": said}),
+                    mcp_call(m, "fill_form", {"fields": %r, "owner_is": said}),
+                    TestClient(jh.app).post("/forms/fill", headers=H(%r),
+                                            json={"fields": %r, "owner_is": said}).json()]
+            shops = jc.dispatch_tool("fill_form", {"fields": ["Store name", "Shop address",
+                                                              "Merchant name", "Dealer address"],
+                                                   "owner_is": "buyer"})
+            form = make_form("w.pdf", [{"name": n} for n in %r])
+            pdf = [mcp_call(m, "fill_pdf", {"pdf_path": form, "owner_is": said,
+                                            "values": {"Vendor name": "Laszlo Czako"}})
+                   for said in ("", "seller")]
+            out({"res": res, "shops": shops, "pdf": pdf, "files": outbox()})
+        """ % (self.WARRANTY, self.WARRANTY, TA, self.WARRANTY, self.WARRANTY),
+            JEFFEREY_CLIENT="jefferey", JEFFEREY_HTTP_TOKENS=TOKENS)
+        for said, rows in r["res"].items():
+            for x in rows:
+                self.assertEqual(x["filled"], {"Your name": "Laszlo Czako"}, (said, x))
+                left = [n["field"] for n in x["needs_you"]]
+                self.assertIn("Vendor name", left, said)
+                self.assertIn("Vendor address", left, said)
+                self.assertIsNone(x.get("owner_is"), (said, x))
+        self.assertEqual(r["shops"]["filled"], {})
+        for n in r["shops"]["needs_you"]:
+            self.assertIn("other than the owner", n["why"], n)
+        for x in r["pdf"]:
+            self.assertTrue(x.get("refused"), x)
+        self.assertEqual(r["files"], [])
+
+    def test_buying_with_nothing_said_leaves_both_sides_for_him(self):
+        r = self.py("""
+            import jefferey_chat as jc
+            jc.dispatch_tool("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
+            jc.dispatch_tool("set_profile_field", {"field": "address", "value": "12 Elm St"})
+            import jefferey_mcp as m
+            silent = mcp_call(m, "fill_form", {"fields": %r})
+            bought = mcp_call(m, "fill_form", {"fields": %r, "owner_is": "buyer"})
+            form = make_form("bos.pdf", [{"name": n} for n in %r])
+            read = mcp_call(m, "pdf_form_fields", {"pdf_path": form})
+            pdf = mcp_call(m, "fill_pdf", {"pdf_path": form,
+                                           "values": {"Seller name": "Laszlo Czako"}})
+            out({"silent": silent, "bought": bought, "read": read, "pdf": pdf})
+        """ % (self.SALE, self.SALE, self.SALE), JEFFEREY_CLIENT="jefferey")
+        self.assertEqual(r["silent"]["filled"], {})
+        left = {n["field"]: n["why"] for n in r["silent"]["needs_you"]}
+        for label in self.SALE[:4]:
+            self.assertIn("nobody said", left[label], label)
+        self.assertIn("owner_is='buyer'", r["silent"]["sides"])
+        self.assertEqual(r["bought"]["filled"], {"Buyer name": "Laszlo Czako",
+                                                 "Buyer address": "12 Elm St"})
+        self.assertEqual(sorted(r["read"]["for_someone_else"]), sorted(self.SALE[:4]))
+        self.assertTrue(r["pdf"].get("refused"), r["pdf"])
+        self.assertIn("owner_is='seller'", r["pdf"]["reason"])
+
+
+# ===================================================== repair round 4 (R3)
+class APaymentCardOnlyIntoAPaymentCardBox(PaperworkTest):
+    """R3: a box named 'Card number' whose description names another card
+    ('Health card number', 'Your library card number', 'Costco membership
+    card') got the owner's credit card number. When a box's own words
+    disagree, or name a card that is not a payment card, nothing from his
+    vault goes in: the box goes back to him (needs_you)."""
+
+    OTHER = ["Health card number", "Your library card number", "Costco membership card",
+             "Numéro de carte Costco", "Enter the number on your OHIP card"]
+
+    def test_his_credit_card_never_goes_into_a_box_that_names_another_card(self):
+        r = self.py("""
+            import jefferey_mcp as m, jefferey_chat as jc
+            keep_secrets(visa_card=%r)
+            res = {}
+            for i, tip in enumerate(%r):
+                form = make_form(f"f{i}.pdf", [{"name": "Card number", "tu": tip}])
+                res[tip] = {
+                    "read": mcp_call(m, "pdf_form_fields", {"pdf_path": form}),
+                    "mcp": mcp_call(m, "fill_pdf", {"pdf_path": form,
+                                                    "values": {"Card number": "vault:visa_card"}}),
+                    "chat": jc.dispatch_tool("fill_pdf", {"pdf_path": form, "values": {
+                        "Card number": "vault:visa_card"}})}
+            ok = make_form("ok.pdf", [{"name": "Card number", "tu": "Credit card number"}])
+            good = mcp_call(m, "fill_pdf", {"pdf_path": ok,
+                                            "values": {"Card number": "vault:visa_card"}})
+            plan = jc.dispatch_tool("fill_form", {"fields": ["Card number (Health card)",
+                                                             "Card number"]})
+            out({"res": res, "good": good, "plan": plan, "outbox": outbox()})
+        """ % (CARD, self.OTHER), JEFFEREY_CLIENT="jefferey")
+        for tip, x in r["res"].items():
+            for k in ("mcp", "chat"):
+                self.assertTrue(x[k].get("refused"), (tip, k, x[k]))
+                self.assertEqual([n["field"] for n in x[k]["needs_you"]], ["Card number"], tip)
+            self.assertEqual([n["field"] for n in x["read"].get("needs_you", [])],
+                             ["Card number"], (tip, x["read"]))
+        self.assertIn("written", r["good"], "a box that is plainly a payment card still fills")
+        self.assertEqual(len(r["outbox"]), 1)
+        self.assertEqual(r["plan"]["filled"], {"Card number": "vault:visa_card"})
+        self.assertIn("Card number (Health card)", [n["field"] for n in r["plan"]["needs_you"]])
+        self.assertNotIn(CARD, self.egress.read_text() if self.egress.exists() else "")
+
+    def test_a_box_whose_name_and_description_ask_for_different_secrets_is_left(self):
+        r = self.py("""
+            import jefferey_mcp as m
+            keep_secrets(sin=%r)
+            form = make_form("s.pdf", [{"name": "SIN", "tu": "Health card number"}])
+            out(mcp_call(m, "fill_pdf", {"pdf_path": form, "values": {"SIN": "vault:sin"}}))
+        """ % SIN, JEFFEREY_CLIENT="jefferey")
+        self.assertTrue(r.get("refused"), r)
+        self.assertEqual([n["field"] for n in r["needs_you"]], ["SIN"])
 
 
 if __name__ == "__main__":

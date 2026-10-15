@@ -1368,5 +1368,73 @@ class AfterTheFixes(DriveTest):
         self.assertNotIn("✗", text)
 
 
+# ===================================================== repair round 4 (R7)
+class TheMacCopyThatCouldNotBePutAside(DriveTest):
+    """R7: when the drive's copy was complete, checked and in place, and only
+    putting the Mac's copy aside failed, the owner was told 'Your memories
+    were not moved … nothing of them was left on the drive. Make room on the
+    drive'. All three were false. He is told what is true: the drive holds
+    his life, the Mac's copy is still there, and how to finish."""
+
+    FALSE = ("not moved", "nothing of them was left", "Make room on the drive",
+             "exactly where they were")
+    laptop_life = AfterTheFixes.laptop_life
+    facts = AfterTheFixes.facts
+
+    def failing_aside(self):
+        import errno
+        real = os.rename
+
+        def rename(a, b, *k, **kw):
+            if "moved-to-self-cloud" in str(b):
+                raise OSError(errno.EACCES, "Permission denied", str(b))
+            return real(a, b, *k, **kw)
+        return mock.patch.object(pd.os, "rename", rename)
+
+    def test_provisioning_says_the_drive_holds_the_life_and_the_mac_copy_is_left(self):
+        self.laptop_life("The blue kettle was Mum's")
+        vol = self.vols / "Self-Cloud"
+        vol.mkdir()
+        with self.failing_aside(), contextlib.redirect_stdout(io.StringIO()) as buf:
+            pd.provision(vol, "Self-Cloud", False, False, None, move_life=True)
+        text = buf.getvalue()
+        for words in self.FALSE:
+            self.assertNotIn(words, text)
+        self.assertIn("moved your memories onto the drive", text)
+        self.assertIn("JEFFEREY uses the drive's copy", text)
+        self.assertIn("could not be put aside", text)
+        self.assertIn(str(self.home / ".jefferey"), text)
+        self.assertTrue((vol / home.NAMESPACE / "conscience.json").exists())
+        self.assertTrue((self.home / ".jefferey" / "conscience.json").exists())
+        r = self.facts()
+        self.assertFalse(r.get("refused"), r)
+        self.assertEqual(len(r["facts"]) + r.get("held_back", {}).get("private", 0), 1, r)
+
+    def test_the_window_says_so_too_and_finishes_the_next_time(self):
+        self.laptop_life("The blue kettle was Mum's")
+        vol = self.drive()
+        said: list[str] = []
+        feed = iter(["1", "yes"])
+        with self.failing_aside(), mock.patch.object(pd, "_why_not", lambda v: None):
+            rc = pd.interactive(lambda _: next(feed), said.append, bases=[str(self.vols)])
+        text = "\n".join(said)
+        self.assertEqual(rc, 1, text)
+        for words in self.FALSE:
+            self.assertNotIn(words, text)
+        self.assertIn("could not be put aside", text)
+        self.assertTrue((vol / home.NAMESPACE / "conscience.json").exists())
+        self.assertTrue((self.home / ".jefferey" / "conscience.json").exists())
+        # the next time: the two copies are the same, so the Mac's is put aside
+        said.clear()
+        feed = iter(["1", "yes"])
+        with mock.patch.object(pd, "_why_not", lambda v: None):
+            rc = pd.interactive(lambda _: next(feed), said.append, bases=[str(self.vols)])
+        self.assertEqual(rc, 0, "\n".join(said))
+        self.assertFalse((self.home / ".jefferey" / "conscience.json").exists())
+        kept = list((self.home / ".jefferey").glob("moved-to-self-cloud-*/conscience.json"))
+        self.assertEqual(len(kept), 1, "the Mac's copy is kept, never deleted")
+        self.assertIn("put aside", "\n".join(said))
+
+
 if __name__ == "__main__":
     unittest.main()

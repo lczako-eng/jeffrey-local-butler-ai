@@ -382,6 +382,19 @@ def move_home_life(drive_root: Path, out=say) -> dict:
     if not (src / "conscience.json").is_file():
         return {"moved": 0}
     if (dst / "conscience.json").exists():
+        if same_on_drive(items, dst):
+            # an earlier move put everything on the drive but could not put
+            # the Mac's copy aside (R7): that is finished now, nothing more
+            try:
+                aside, done = _put_aside(src, items)
+            except _AsideFailed as e:
+                _left_on_mac(out, 0, src, e)
+                return {"moved": 0, "aside": None, "left_on_mac": str(src),
+                        "problem": e.why}
+            out("  ✓ your memories were already on the drive, every byte the same as the")
+            out(f"    Mac's copy. The Mac's old copy is now put aside in {aside}.")
+            out("    JEFFEREY never reads it again.")
+            return {"moved": 0, "aside": str(aside), "finished": len(done)}
         out("  ! Your drive already holds memories, and this Mac holds some too. Nothing")
         out("    was moved or mixed: JEFFEREY will use the drive's. The Mac's copy stays")
         out(f"    where it is ({src}); ask someone you trust to help you bring the two together.")
@@ -431,19 +444,79 @@ def move_home_life(drive_root: Path, out=say) -> dict:
         raise
     shutil.rmtree(stage, ignore_errors=True)
     copied = [(a, dst / a.name) for a, _ in copied]
-    aside = src / f"moved-to-self-cloud-{dt.date.today().isoformat()}"
-    n = 1
-    while os.path.lexists(aside):
-        n += 1
-        aside = src / f"moved-to-self-cloud-{dt.date.today().isoformat()}-{n}"
-    aside.mkdir(mode=0o700)
-    for a, _ in copied:
-        os.rename(a, aside / a.name)
+    # From here the drive holds the whole life, checked byte for byte, and
+    # JEFFEREY uses it. Putting the Mac's copy aside can still fail; that is
+    # said as it is, never as 'your memories were not moved' (R7).
+    try:
+        aside, _ = _put_aside(src, [a for a, _ in copied])
+    except _AsideFailed as e:
+        _left_on_mac(out, len(copied), src, e)
+        return {"moved": len(copied), "aside": None, "left_on_mac": str(src),
+                "problem": e.why}
     out(f"  ✓ moved your memories onto the drive ({len(copied)} item(s), every byte checked)")
     out(f"    The Mac's old copy is put aside in {aside}.")
     out("    JEFFEREY never reads it again. Delete that folder once you have checked")
     out("    the drive, if you want no copy of your life left on this Mac.")
     return {"moved": len(copied), "aside": str(aside)}
+
+
+def same_on_drive(items: list[Path], dst: Path) -> bool:
+    """Is every one of these Mac items on the drive too, byte for byte?"""
+    if not items:
+        return False
+    try:
+        for it in items:
+            there = dst / it.name
+            fa, fb = _tree(it), _tree(there)
+            if (it.is_dir() != there.is_dir() or len(fa) != len(fb)
+                    or any(x.relative_to(it) != y.relative_to(there) for x, y in zip(fa, fb))
+                    or any(_sha_file(x) != _sha_file(y) for x, y in zip(fa, fb))):
+                return False
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+class _AsideFailed(Exception):
+    def __init__(self, why: str, aside: Path | None, done: list[str]):
+        super().__init__(why)
+        self.why, self.aside, self.done = why, aside, done
+
+
+def _put_aside(src: Path, items: list[Path]) -> tuple[Path, list[str]]:
+    """Move the Mac's copy into ~/.jefferey/moved-to-self-cloud-<date>/,
+    never deleting it. Raises _AsideFailed, saying how far it got."""
+    aside = src / f"moved-to-self-cloud-{dt.date.today().isoformat()}"
+    n = 1
+    while os.path.lexists(aside):
+        n += 1
+        aside = src / f"moved-to-self-cloud-{dt.date.today().isoformat()}-{n}"
+    done: list[str] = []
+    try:
+        aside.mkdir(mode=0o700)
+    except OSError as e:
+        raise _AsideFailed(_plain_oserror(e), None, done) from None
+    for a in items:
+        try:
+            os.rename(a, aside / a.name)
+        except OSError as e:
+            raise _AsideFailed(_plain_oserror(e), aside, done) from None
+        done.append(a.name)
+    return aside, done
+
+
+def _left_on_mac(out, moved: int, src: Path, e: _AsideFailed) -> None:
+    """The truth when the drive holds the life but the Mac's copy could not
+    be put aside (R7: this was reported as 'Your memories were not moved …
+    nothing of them was left on the drive. Make room on the drive')."""
+    if moved:
+        out(f"  ✓ moved your memories onto the drive ({moved} item(s), every byte checked).")
+    out("    JEFFEREY uses the drive's copy from now on; nothing is lost.")
+    out(f"  ! But the copy on this Mac could not be put aside ({e.why}), so it is still")
+    out(f"    there, in {src}" + (f" (part of it is already in {e.aside})." if e.done else "."))
+    out("    JEFFEREY does not read it. To finish, double-click 'Make this drive a")
+    out("    Self-Cloud.command' again later and answer yes when it offers to put the Mac's")
+    out("    copy aside — or ask someone you trust to move those files somewhere safe.")
 
 
 # --------------------------------------------------------------- provision
@@ -786,6 +859,18 @@ def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
             mine = False
         if mine:
             out("  This Mac already knows it is yours.")
+            if ((home.owner_dir() / "conscience.json").is_file()
+                    and same_on_drive(home_life(), vol / home.NAMESPACE)):
+                # an earlier move could not put the Mac's copy aside (R7)
+                out("  Your memories are on the drive. The copy left on this Mac is the same,")
+                out("  byte for byte, and JEFFEREY does not read it.")
+                if answers.ask_yes_no_or_none(
+                        "  Put the Mac's copy aside now (it is kept, not deleted)? Type yes or "
+                        "no: ", input_fn, out):
+                    res = move_home_life(vol, out)
+                    return 0 if res.get("aside") else 1
+                out("  Nothing was changed.")
+                return 0
             if (home.owner_dir() / "conscience.json").is_file() and not os.path.lexists(
                     vol / home.NAMESPACE / "conscience.json"):
                 move = answers.ask_yes_no_or_none(
@@ -793,7 +878,7 @@ def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
                     "or no: ", input_fn, out)
                 if move:
                     try:
-                        move_home_life(vol, out)
+                        res = move_home_life(vol, out)
                     except Refused as e:
                         out(f"  ! {e}")
                         return 1
@@ -801,7 +886,7 @@ def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
                         out(f"  ! Your memories were not moved: {_plain_oserror(e)}. They "
                             f"are exactly where they were, on this Mac.")
                         return 1
-                    return 0
+                    return 1 if res.get("left_on_mac") else 0
                 out("  Nothing was changed. JEFFEREY stays off until they are moved: he will")
                 out("  not start an empty life on the drive.")
                 return 1
@@ -826,13 +911,15 @@ def interactive(input_fn=input, out=say, bases: list[str] | None = None) -> int:
                 input_fn, out)
             if move:
                 try:
-                    move_home_life(vol, out)
+                    res = move_home_life(vol, out)
                 except Refused as e:
                     out(f"  ! {e}")
                     return 1
                 except OSError as e:
                     out(f"  ! Your memories were not moved: {_plain_oserror(e)}. They are "
                         f"exactly where they were, on this Mac.")
+                    return 1
+                if res.get("left_on_mac"):
                     return 1
             else:
                 out("  JEFFEREY stays off until they are moved: he will not start an empty life")

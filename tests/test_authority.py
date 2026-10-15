@@ -1356,5 +1356,38 @@ class AfterTheFixes(AuthorityTest):
         self.assertNotIn("owner", r)
 
 
+# ===================================================== repair round 4 (R10)
+class OnlyAPersonIsLetIn(AuthorityTest):
+    """R10: the 'let … in' door phrase refused 'Let the cat in' under a
+    no-money act category as 'letting anyone into the house' (allowed at
+    35e4e9b). Only a person — someone named, a stranger, a visitor, a
+    worker, anyone unknown — let into the home trips the door rule."""
+
+    def test_the_cat_comes_in_and_people_stay_out(self):
+        r = self.py("""
+            import access
+            from conscience import Conscience
+            c = Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"])
+            with access.owner_console():
+                c.set_permission("pets", "act")
+                c.set_permission("lights", "act")
+            yes = [("pets", "Let the cat in"), ("pets", "let the dog in before the storm"),
+                   ("lights", "Let the fresh air in: open the bedroom window"),
+                   ("pets", "let in the cat at 9")]
+            no = [("pets", "let the plumber in through the back"), ("pets", "Let Mike in"),
+                  ("pets", "buzz the courier in"), ("pets", "let in whoever is at the door"),
+                  ("pets", "Let the visitors into the house"), ("lights", "let them in"),
+                  ("lights", "let the man from Hydro in"), ("pets", "let a stranger in"),
+                  ("pets", "allow the technician inside")]
+            out({"yes": [(d, c.authorize_action(k, d)) for k, d in yes],
+                 "no": [(d, c.authorize_action(k, d)) for k, d in no]})
+        """)
+        for d, v in r["yes"]:
+            self.assertTrue(v["allowed"], (d, v))
+        for d, v in r["no"]:
+            self.assertFalse(v["allowed"], (d, v))
+            self.assertIn("into the house", json.dumps(v), d)
+
+
 if __name__ == "__main__":
     unittest.main()

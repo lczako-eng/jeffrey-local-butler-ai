@@ -200,6 +200,13 @@ ENGINE_CONFIDENCE_CAP = 0.6   # the most an AI may say it is sure of (I-25)
 UNCONFIRMED_CAP = 0.8         # the most evidence alone may reach; above it, only
                               # what the owner set or confirmed himself
 LEGACY_FLIP_BELOW = 0.4       # an older value turns round only below this
+# ...and only once the rules it was saved under (before October 2026) would
+# have turned it round too: there a contradiction took 30% off its
+# confidence, a choice that agreed added 15% of what was left, and it turned
+# round below 0.25. So a value saved then is never easier to turn round now
+# (R8: an old 0.55, the old default for every inferred value, turned round
+# after 2 contradictions instead of 3, and 0.41-0.49 after 1 instead of 2).
+_OLD_CONTRADICT, _OLD_REINFORCE, _OLD_FLIP_BELOW = 0.30, 0.15, 0.25
 DEDUP_SECONDS = 600           # the same correction within ten minutes: once
 FACT_VISIBILITY = ("private", "engines", "family", "legacy")
 LIFE_VISIBILITY = ("private", "family", "legacy")
@@ -547,8 +554,7 @@ _NEVER_IN_TEXT = (
     (re.compile(r"\b(?:bitcoin|crypto\w*|btc|ethereum|usdt|usdc|tether|stablecoins?)\b"),
      "crypto-currency"),
     (re.compile(r"\b(?:unlock\s+(?:the\s+)?(?:front|back|side|garage|door|house|gate|lock)\w*"
-                r"|disarm\w*|open\s+(?:the\s+)?(?:front\s+|back\s+|side\s+)?(?:door|garage|gate)"
-                r"|let\s+(?:\w+\s+){1,3}in\b|buzz\s+(?:\w+\s+){1,3}in\b)"),
+                r"|disarm\w*|open\s+(?:the\s+)?(?:front\s+|back\s+|side\s+)?(?:door|garage|gate))"),
      "letting anyone into the house"),
     (re.compile(r"\b(?:phone\s?call|place\s+a\s+call|in\s+(?:my|his|her)\s+voice"
                 r"|call\s+(?:him|her|them|back|the\s+(?:bank|police|number|office)"
@@ -557,6 +563,47 @@ _NEVER_IN_TEXT = (
                 r"|phone\s+(?:him|her|them|the\s+(?:bank|police|office)|back|up))"),
      "speaking for the owner on the phone or in his voice"),
 )
+# 'Let the plumber in', 'buzz the courier in', 'let Mike into the house',
+# 'let in whoever is at the door': a PERSON let into the home. 'Let the cat
+# in' and 'let the fresh air in' are not (R10: the cat was refused as
+# 'letting anyone into the house').
+_LET_IN = re.compile(r"\b(?:let|buzz|allow)\s+(?P<who>(?:[\w'’-]+\s+){1,5}?)(?:in|into|inside)\b"
+                     r"|\b(?:let|buzz)\s+in\s+(?P<after>(?:[\w'’-]+\s*){1,3})", re.I)
+_PERSONS = frozenset("""him her them us someone somebody anyone anybody everyone everybody
+    whoever people person persons man men woman women guy guys lady ladies gentleman
+    stranger strangers visitor visitors guest guests caller callers courier couriers
+    driver drivers delivery deliveryman deliverymen plumber plumbers electrician
+    electricians technician technicians tech techs contractor contractors worker workers
+    workman workmen repairman repairmen handyman installer installers mover movers crew
+    inspector inspectors agent agents officer officers police cop cops nurse nurses
+    caregiver caregivers carer carers cleaner cleaners maid neighbour neighbours neighbor
+    neighbors friend friends relative relatives family cousin cousins nephew nephews niece
+    nieces grandson grandsons granddaughter granddaughters grandchild grandchildren son sons
+    daughter daughters boy boys girl girls kid kids child children teen teens teenager
+    teenagers salesman salesmen salesperson rep reps representative serviceman landlord
+    superintendent super janitor locksmith gardener gardeners painter painters roofer
+    roofers builder builders mechanic doctor paramedic paramedics firefighter firefighters
+    fireman firemen staff employee employees client clients customer customers buyer buyers
+    tenant tenants he she they whoever's somebody's someone's""".split())
+_NOT_A_NAME = frozenset("""the a an my his her our their this that these those some any
+    in into inside cat cats dog dogs kitty kitten puppy pup bird birds air light sunshine
+    sun water rain heat cold breeze""".split())
+
+
+def _lets_someone_in(description: str) -> bool:
+    """Does this description let a person into the home?"""
+    for m in _LET_IN.finditer(str(description or "")):
+        raw = (m.group("who") or m.group("after") or "").split()
+        for w in raw:
+            low = w.lower().strip("'’")
+            if low.removesuffix("'s").removesuffix("’s") in _PERSONS or low in _PERSONS:
+                return True
+            # a name: 'let Mike in', 'buzz Karen in'
+            if w[:1].isupper() and w[1:].islower() and low not in _NOT_A_NAME:
+                return True
+    return False
+
+
 # A category about money: 'act' there needs a limit.
 _MONEYISH = re.compile(
     r"buy|purchas|pay|bill|shop|grocer|subscri|order|spend|money|fund|donat|gift"
@@ -1243,7 +1290,8 @@ class Conscience:
         old = _real_number(p.get("confidence"))
         if old is None or not untouched:
             return
-        p["legacy"] = {"confidence": round(max(0.05, min(0.99, old)), 2), "evidence": ev}
+        kept = round(max(0.05, min(0.99, old)), 2)
+        p["legacy"] = {"confidence": kept, "evidence": ev, "old_rule": kept}
         p["for"], p["against"] = 0, 0
         p["confidence"] = Conscience._confidence(p)
 
@@ -2194,6 +2242,34 @@ class Conscience:
         return round(max(0.05, min(cap, c)), 2)
 
     @staticmethod
+    def _old_rule(p: dict) -> float:
+        """Where a value saved before October 2026 stands by the rules it was
+        saved under. A store migrated before this was kept has only counts:
+        they are replayed contradictions first, the order that leaves it
+        hardest to turn round."""
+        legacy = p["legacy"]
+        v = _real_number(legacy.get("old_rule"))
+        if v is not None:
+            return v
+        v = _real_number(legacy.get("confidence"))
+        v = 0.55 if v is None else v
+        for _ in range(max(0, int(p.get("against") or 0))):
+            v = round(v * (1 - _OLD_CONTRADICT), 2)
+        for _ in range(max(0, int(p.get("for") or 0))):
+            v = round(v + (1 - v) * _OLD_REINFORCE, 2)
+        return v
+
+    @classmethod
+    def _legacy_seen(cls, p: dict, agrees: bool) -> None:
+        """One more choice about a value saved before October 2026, counted
+        the old way as well — called before the new count is added."""
+        if not isinstance(p.get("legacy"), dict):
+            return
+        v = cls._old_rule(p)
+        v = round(v + (1 - v) * _OLD_REINFORCE, 2) if agrees else round(v * (1 - _OLD_CONTRADICT), 2)
+        p["legacy"]["old_rule"] = v
+
+    @staticmethod
     def _prio_view(p: dict, reason: str | None = None) -> dict:
         """A value as an engine reads it, with the evidence for and against."""
         v = {k: p[k] for k in ("id", "context", "higher", "lower", "confidence", "for",
@@ -2265,6 +2341,7 @@ class Conscience:
               and isinstance(p.get("legacy"), dict) and status != "confirmed"):
             # An AI repeating a value he has held since before October 2026:
             # one more observation for it, never a drop to an AI's cap.
+            self._legacy_seen(p, True)
             p["for"] = int(p.get("for") or 0) + 1
             p.pop("question", None)
             p["updated"] = _now()
@@ -2288,7 +2365,10 @@ class Conscience:
             legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else {}
             locked = (bool(p.get("stated")) and not provenance.pending(p)) or (
                 (_real_number(legacy.get("confidence")) or 0) >= 0.8)
-            if locked and engine and status != "confirmed":
+            # Reversing what he stated is always his to confirm: even when
+            # the AI's words look like his own, they may be what he quoted
+            # and rejected (R9). Only his own hands change it at once.
+            if locked and engine:
                 p["proposed"] = {"higher": higher, "lower": lower, "confidence": c,
                                  "source": src, "at": _now()}
                 self._log_change("reversal_asked", context, was, now, src, applied=False)
@@ -2387,8 +2467,10 @@ class Conscience:
                  "status": provenance.status_for(src), "updated": _now()}
             self.data["priorities"].append(p)
         elif grounding.normalise(p.get("higher")) == grounding.normalise(hi):
+            self._legacy_seen(p, True)
             p["for"] = int(p.get("for") or 0) + 1
         else:
+            self._legacy_seen(p, False)
             p["against"] = int(p.get("against") or 0) + 1
             legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else None
             strong_old = bool(legacy) and (_real_number(legacy.get("confidence")) or 0) >= 0.8
@@ -2405,8 +2487,9 @@ class Conscience:
                                f"JEFFEREY in your own words if it has.")
                 p["question"] = q
                 extra["question_for_owner"] = q
-            elif (self._confidence(p) < LEGACY_FLIP_BELOW) if legacy else (
-                    p["against"] > p["for"]):
+            elif ((self._confidence(p) < LEGACY_FLIP_BELOW
+                   and self._old_rule(p) < _OLD_FLIP_BELOW) if legacy else (
+                    p["against"] > p["for"])):
                 was = f"{p['higher']} > {p['lower']}"
                 p["higher"], p["lower"] = hi, lo
                 if legacy:
@@ -2476,6 +2559,8 @@ class Conscience:
         for rx, why in _NEVER_IN_TEXT:
             if rx.search(text):
                 return why
+        if _lets_someone_in(description or ""):
+            return "letting anyone into the house"
         return None
 
     @staticmethod

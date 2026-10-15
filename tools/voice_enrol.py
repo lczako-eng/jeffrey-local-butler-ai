@@ -1254,6 +1254,8 @@ def _people_in(root: Path) -> list[tuple[Path, dict | None]]:
 
 
 def status(who: str | None = None) -> int:
+    for r in all_roots():
+        _scrub_deletions(r)          # an older version kept a name there (R6)
     if not (who or "").strip():
         found = False
         for root in all_roots():
@@ -1540,15 +1542,18 @@ def _count(p: Path) -> int:
         return 0
 
 
-def _record_deletion(root: Path, raw: str, p: Path, res: dict, complete: bool) -> None:
-    """A line in the voice folder saying a voice was deleted, when, and how
-    completely (voice-35: nothing recorded that it happened). It keeps no
-    voice and not the name itself, only a fingerprint of it, so it can show
-    a voice was deleted without keeping whose."""
+def _record_deletion(root: Path, res: dict, complete: bool) -> None:
+    """A line in the voice folder saying a voice was deleted, on which day,
+    and how completely (voice-35: nothing recorded that it happened). It
+    keeps no voice, no name and nothing that leads back to one (R6: the
+    folder's name, 'erin-kowalski', stood in it beside a plain fingerprint of
+    the name, after her voice was deleted at her request): only a random
+    deletion number, the day, and how many files were overwritten."""
+    _scrub_deletions(root)
     line = json.dumps({
-        "deleted_at": dt.datetime.now().isoformat(timespec="seconds"),
-        "name_fingerprint": hashlib.sha256(_norm(raw).encode("utf-8")).hexdigest(),
-        "folder": p.name, "files_overwritten": res["wiped"], "complete": complete,
+        "deletion": secrets.token_hex(8),
+        "deleted_on": dt.date.today().isoformat(),
+        "files_overwritten": res["wiped"], "complete": complete,
     }) + "\n"
     with contextlib.suppress(OSError):
         if _is_link(root):
@@ -1560,6 +1565,60 @@ def _record_deletion(root: Path, raw: str, p: Path, res: dict, complete: bool) -
             os.fsync(fd)
         finally:
             os.close(fd)
+
+
+_KEPT_IN_A_DELETION = ("deletion", "deleted_on", "files_overwritten", "complete")
+
+
+def _scrub_deletions(root: Path) -> None:
+    """Rewrite the record of deletions an older version wrote, keeping only
+    what a deletion record may hold: no folder name, no fingerprint of the
+    name, no time of day (R6). A line that cannot be read is dropped — it
+    could hold anything. Nothing happens when there is nothing to clean."""
+    f = root / "deletions.jsonl"
+    with contextlib.suppress(OSError, ValueError):
+        if _is_link(root) or _is_link(f) or not f.is_file():
+            return
+        fd = os.open(f, os.O_RDONLY | _NOFOLLOW)
+        try:
+            raw = b""
+            while True:
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    break
+                raw += chunk
+        finally:
+            os.close(fd)
+        out, changed = [], False
+        for text in raw.decode("utf-8", "replace").splitlines():
+            if not text.strip():
+                continue
+            try:
+                rec = json.loads(text)
+            except ValueError:
+                changed = True
+                continue
+            if not isinstance(rec, dict):
+                changed = True
+                continue
+            clean = {k: rec[k] for k in _KEPT_IN_A_DELETION if k in rec}
+            if "deleted_on" not in clean and isinstance(rec.get("deleted_at"), str):
+                clean["deleted_on"] = rec["deleted_at"][:10]
+            if "deletion" not in clean:
+                clean = {"deletion": secrets.token_hex(8), **clean}
+            if clean != rec:
+                changed = True
+            out.append(json.dumps(clean))
+        if not changed:
+            return
+        tmp = root / f".deletions.{secrets.token_hex(4)}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600)
+        try:
+            os.write(fd, ("".join(x + "\n" for x in out)).encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, f)
 
 
 def _account_name() -> str:
@@ -1610,6 +1669,8 @@ def delete(who: str, force: bool = False) -> int:
         _tell("Please say whose recordings to delete, by name. Nothing was deleted.")
         return 2
     roots = all_roots()
+    for r in roots:
+        _scrub_deletions(r)          # what an older version kept of a name (R6)
     if force and not _test_place(*roots):
         _tell("Deleting a voice cannot be done by a script, or with --yes. The "
               "person has to be at the keyboard and type the name. Nothing was "
@@ -1683,7 +1744,7 @@ def delete(who: str, force: bool = False) -> int:
             print(_wrap(f"This was a shortcut to {_link_target_text(res)}. JEFFEREY "
                         "removed the shortcut but did not follow it, so anything there "
                         "is untouched. Please look there with someone you trust.", "    "))
-            _record_deletion(p.parent, raw, p, res, False)
+            _record_deletion(p.parent, res, False)
             continue
         here_complete = True
         print(f"\n  {where}:")
@@ -1717,7 +1778,7 @@ def delete(who: str, force: bool = False) -> int:
             for fp, why in res["failed"]:
                 print(f"    could not finish with {fp}: {why}")
         complete = complete and here_complete
-        _record_deletion(p.parent, raw, p, res, here_complete)
+        _record_deletion(p.parent, res, here_complete)
     for r, target in blocked:
         complete = False
         print("\n" + _wrap(f"The voice folder at {r} is a shortcut to {target}. "
@@ -1898,6 +1959,8 @@ def main() -> int:
 
     if a.selftest:
         return selftest()
+    for r in all_roots():
+        _scrub_deletions(r)          # an older version kept a name there (R6)
     why = home.problem()
     if why:
         # The drive is away (or not yet known): recordings must not go
