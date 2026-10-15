@@ -1299,8 +1299,11 @@ class AfterTheFixes(AuthorityTest):
                   ("lights", "Call Karen and tell her the money is ready", None),
                   ("lights", "ring the bank and confirm the transfer", None),
                   ("lights", "open the garage for the courier", None),
-                  ("lights", "let the plumber in through the back", None)]
-            yes = [("shopping", "Buy an unlocked iPhone", 500), ("shopping", "pay unlock fee", 40),
+                  ("lights", "let the plumber in through the back", None),
+                  # D4, round 7: an 'unlock' asks the owner first, under any
+                  # category (round 6 approved it as an ordinary purchase)
+                  ("shopping", "pay unlock fee", 40)]
+            yes = [("shopping", "Buy an unlocked iPhone", 500),
                    ("voice lessons", "four voice lessons with Ms Hall", 160),
                    ("alarm clock", "a new alarm clock", 30), ("lights", "turn on the porch light", None),
                    ("shopping", "weekly groceries from Metro", 120)]
@@ -1362,11 +1365,12 @@ class AfterTheFixes(AuthorityTest):
 # ===================================================== repair round 4 (R10)
 class OnlyAPersonIsLetIn(AuthorityTest):
     """R10: the 'let … in' door phrase refused 'Let the cat in' under a
-    no-money act category as 'letting anyone into the house' (allowed at
-    35e4e9b). Only a person — someone named, a stranger, a visitor, a
-    worker, anyone unknown — let into the home trips the door rule."""
+    no-money act category as 'letting anyone into the house … a scam'.
+    Round 4 let the cat in and kept people out. D4, round 7: nothing is
+    read for who is let in any more, so the cat asks the owner too — in
+    plain words, never 'never' and never 'scam' — and so does everyone."""
 
-    def test_the_cat_comes_in_and_people_stay_out(self):
+    def test_the_cat_and_people_alike_ask_the_owner(self):
         r = self.py("""
             import access
             from conscience import Conscience
@@ -1385,20 +1389,20 @@ class OnlyAPersonIsLetIn(AuthorityTest):
             out({"yes": [(d, c.authorize_action(k, d)) for k, d in yes],
                  "no": [(d, c.authorize_action(k, d)) for k, d in no]})
         """)
-        for d, v in r["yes"]:
-            self.assertTrue(v["allowed"], (d, v))
-        for d, v in r["no"]:
+        for d, v in r["yes"] + r["no"]:
             self.assertFalse(v["allowed"], (d, v))
+            self.assertEqual(v["verdict"], "ask_owner", (d, v))
             self.assertIn("into the house", json.dumps(v), d)
+            self.assertNotIn("scam", json.dumps(v), d)
 
 
 class OnlyTheCatIsLetIn(AuthorityTest):
     """R10, round 5: the door rule tripped only on people named in a list,
     so anyone missing from it was let in under any 'act' category: the dog
     walker, the PSW, the realtor, the meter reader, his brother, his ex, his
-    grandkids. And the French was never read. Now only what is plainly not a
-    person — the cat, the dog, the fresh air — may be let in; anything else
-    is taken for someone, in English and in French."""
+    grandkids. And the French was never read. Round 6 let in only what was
+    plainly not a person. D4, round 7: whatever is let in — the dog walker
+    or the dog — the owner is asked first, in English and in French."""
 
     PEOPLE = ["Let the dog walker in", "Let the pet sitter in", "Let the PSW in",
               "Let the exterminator in", "Let the realtor in", "Let the babysitter in",
@@ -1412,7 +1416,7 @@ class OnlyTheCatIsLetIn(AuthorityTest):
     NOT_PEOPLE = ["Let the cat in", "let the dog in before the storm", "let the fresh air in",
                   "Laisse entrer le chat", "let in the cat at 9"]
 
-    def test_anyone_not_plainly_an_animal_or_the_air_stays_out(self):
+    def test_whoever_or_whatever_is_let_in_the_owner_is_asked(self):
         r = self.py("""
             import access
             from conscience import Conscience
@@ -1423,11 +1427,10 @@ class OnlyTheCatIsLetIn(AuthorityTest):
             out({"no": [(d, c.authorize_action(k, d)) for d in %r for k in ("pets", "lights")],
                  "yes": [(d, c.authorize_action("pets", d)) for d in %r]})
         """ % (self.PEOPLE, self.NOT_PEOPLE))
-        for d, v in r["no"]:
+        for d, v in r["no"] + r["yes"]:
             self.assertFalse(v["allowed"], (d, v))
+            self.assertEqual(v["verdict"], "ask_owner", (d, v))
             self.assertIn("into the house", json.dumps(v), d)
-        for d, v in r["yes"]:
-            self.assertTrue(v["allowed"], (d, v))
 
 
 if __name__ == "__main__":

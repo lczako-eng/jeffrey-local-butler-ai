@@ -281,9 +281,12 @@ TOOLS = [
             "once, then cite it in log_action. A no is final: recommend "
             "instead — only the owner can raise the level, by typing it "
             "himself. Moving money, gift cards, crypto, phone calls and the "
-            "doors are never approved as a category; a description that lets "
-            "someone into his home, or names moving money, gift cards, crypto "
-            "or a call as him, is 'ask the owner first'."
+            "doors are never approved as a category. Under any category, a "
+            "description that touches getting into his home — a door, gate, "
+            "garage, key, lock, code, alarm, intercom, entry or access, or "
+            "letting, showing or welcoming anyone in — comes back verdict "
+            "'ask_owner', and so does one that names moving money, gift cards, "
+            "crypto or a call as him: ask him, plainly; he decides himself."
         ),
         "input_schema": {
             "type": "object",
@@ -457,8 +460,9 @@ TOOLS = [
         "name": "check_draft",
         "description": (
             "Check a draft BEFORE showing or sending it: his rules for this "
-            "person, his private facts, and his safety (never when he is "
-            "home, alone or away, or how to get in). Fix every problem it lists."
+            "person, his private facts (read in any case: 'li has hiv' "
+            "repeats 'Li has HIV'), and his safety (never when he is home, "
+            "alone or away, or how to get in). Fix every problem it lists."
         ),
         "input_schema": {
             "type": "object",
@@ -613,11 +617,13 @@ TOOLS = [
             "most are ordinary purchases; offer a dispute only if they say it "
             "is not theirs. needs_date: ask for the date. possible_card_testing "
             "or possible_scam: tell them gently; the next step is the bank, on "
-            "the number on the back of the card. amount_increased, duplicate, "
+            "the number on the back of the card. ask_owner: a charge at the "
+            "place of a membership or plan that does not clearly match it, or a "
+            "name made to look like one he pays — nothing is claimed; ask him "
+            "the 'question' plainly. amount_increased, duplicate, "
             "unauthorized_renewal, charged_after_cancel: say it plainly, with "
             "the dollars at stake, and offer a dispute_pack — but when the "
-            "action says to ask him first (a charge near a membership's fee "
-            "that may be shopping there), ask him first."
+            "action says to ask him first, ask him first."
         ),
         "input_schema": {
             "type": "object",
@@ -1438,8 +1444,9 @@ _TRACE = {
     "add_goal": lambda a, r: f"goal registered: {a.get('goal')}",
     "close_goal": lambda a, r: _forget_trace(r, "goal(s)", "closed"),
     "authorize_action": lambda a, r: (
-        f"{'✓ allowed, once' if r.get('allowed') else '✗ not allowed'}: "
-        f"{a.get('description')} [{a.get('category')}]"
+        ("✓ allowed, once" if r.get("allowed") else
+         "? asks you first" if r.get("verdict") == "ask_owner" else "✗ not allowed")
+        + f": {a.get('description')} [{a.get('category')}]"
         + ("" if r.get("allowed") else f" — {r.get('reason')}")
     ),
     "log_action": lambda a, r: (
@@ -1515,6 +1522,7 @@ _TRACE = {
     "review_statement": lambda a, r: (
         f"statement: {len(r.get('flagged', []))} flagged of {r.get('checked')} "
         f"· ${r.get('recoverable_total', 0)} at stake"
+        + (f" · {r['questions']} for you to answer" if r.get("questions") else "")
     ),
     "expected_charges": lambda a, r: "reading your charge register",
     "dispute_pack": lambda a, r: (

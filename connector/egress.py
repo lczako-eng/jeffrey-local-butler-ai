@@ -207,7 +207,7 @@ RELEASE: dict[str, frozenset[str]] = {
     "resolve_opportunity": FORGET | {"resolved"},
     # acting on their behalf. Raising a permission is not a tool on any
     # surface (the owner types /permit himself), so it releases nothing.
-    "authorize_action": frozenset({"allowed", "level", "cap", "period", "currency",
+    "authorize_action": frozenset({"allowed", "verdict", "level", "cap", "period", "currency",
                                    "floor", "spent_this_period", "left_this_period",
                                    "authorization_id", "expires"}),
     "log_action": frozenset({"category", "description", "amount", "outcome",
@@ -227,10 +227,11 @@ RELEASE: dict[str, frozenset[str]] = {
     "check_charge": frozenset({"merchant", "amount", "date", "cadence", "verdict",
                                "severity", "what_happened", "recoverable",
                                "authorized_on_file", "action", "matched_to",
-                               "possible_match", "already_on_file", "kept"}),
+                               "possible_match", "already_on_file", "kept", "question"}),
     "review_statement": frozenset({"checked", "flagged", "quiet",
                                    "recoverable_total", "annualized_estimate",
-                                   "summary", "attention", "new_merchants", "refunds",
+                                   "summary", "attention", "questions", "new_merchants",
+                                   "refunds",
                                    "already_on_file", "recorded", "errors"}),
     "expected_charges": frozenset({"key", "merchant", "amount", "cadence",
                                    "authorized_recurring", "active",

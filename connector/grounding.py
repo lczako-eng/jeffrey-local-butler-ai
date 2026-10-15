@@ -177,6 +177,16 @@ _TITLES_SHORT = frozenset("dr mr ms er".split())
 # (check_draft reads names this way; grounding never does)
 _NAMES_TOO = frozenset("do an ma ha vu vo ly".split())
 _ALPHA2 = re.compile(r"^[^\W\d_]{1,2}$")
+# D6, round 7: a closed list of abbreviations that count in small letters
+# too ('my bp', 'is the pc ok'), and 'ER' even in a message typed all in
+# capitals ('GO TO THE ER NOW'). 'or', 'ms' and 'er' are also a little word,
+# a title and a hesitation, so in small letters they count only beside a
+# medical word ('the or nurse', 'an ms flare', 'the er doctor'); 'OR' in
+# capitals is the operating room.
+_ABBR_ALWAYS = frozenset("bp pc".split())
+_ABBR_MEDICAL = frozenset("or ms er".split())
+_ABBR_SKIP = frozenset("the a an my his her their our your le la les l un une mon ma son sa"
+                       .split())
 
 
 def _short_keeps(w: str, low: str, shouting: bool, names: bool) -> bool:
@@ -204,11 +214,36 @@ def _keeps(s: str) -> bool:
     return len(s) >= 3
 
 
+def _medical(w: str) -> bool:
+    """Is this word (as written, any case) a medical one?"""
+    low = _normalise(w)
+    return stem(low) in _SENSE_WORDS["health"] or low in _MEDICAL_TOO
+
+
+def _abbreviation(w: str, low: str, shouting: bool, toks: list[str], i: int) -> bool:
+    """Is this short word one of the closed list of abbreviations, here (D6)?"""
+    if low in _ABBR_ALWAYS:
+        return True
+    if low not in _ABBR_MEDICAL:
+        return False
+    if w.isupper() and ((low == "or" and not shouting) or low == "er"):
+        return True                        # 'Mom was in the OR', 'GO TO THE ER NOW'
+    for step in (-1, 1):                   # beside a medical word
+        j = i + step
+        while 0 <= j < len(toks) and _normalise(toks[j]) in _ABBR_SKIP:
+            j += step
+        if 0 <= j < len(toks) and _medical(toks[j]):
+            return True
+    return False
+
+
 @functools.lru_cache(maxsize=1 << 16)
 def _content(t: str, names: bool = False) -> frozenset:
     n = unicodedata.normalize("NFKC", t).translate(_QUOTES)
     long = re.findall(r"[^\W\d_]{3,}", n)
     shouting = bool(long) and sum(w.isupper() for w in long) >= 0.6 * len(long)
+    toks = [m.group("w") for m in _TOKEN.finditer(n) if m.group("w")]
+    k = -1
     out = set()
     for m in _TOKEN.finditer(n):
         run, w = m.group("run"), m.group("w")
@@ -221,6 +256,7 @@ def _content(t: str, names: bool = False) -> frozenset:
             if sym and _is_symbol(sym):
                 out.add(sym)
             continue
+        k += 1
         if "'" in w:
             head, _, tail = w.partition("'")
             if len(head) == 1 or head.casefold() == "qu":   # l'alarme, d'abord, qu'il
@@ -233,7 +269,7 @@ def _content(t: str, names: bool = False) -> frozenset:
             continue
         low = _normalise(w)
         if _ALPHA2.match(low):
-            if _short_keeps(w, low, shouting, names):
+            if _short_keeps(w, low, shouting, names) or _abbreviation(w, low, shouting, toks, k):
                 out.add(low)
             continue
         if low in STOP:
@@ -257,6 +293,112 @@ def name_words(text) -> set[str]:
     """content(), and also the short names that are grammar words too ('Mr.
     Do', 'An'): how check_draft reads a private fact and a draft (R11)."""
     return set(_content(str(text or ""), True))
+
+
+# --- check_draft reads short names in any case (D6, round 7) ---------------
+# Round 6 let a short name count only written capitalised, so 'li has hiv',
+# 'wu is bipolar' and 'ed has ms so he can't come' went to the neighbours.
+# A draft is read in any case: a name of the person a private fact is about,
+# as a whole word, with any word of that fact's sensitive content, is the
+# fact repeated.
+_DOTTED = re.compile(r"(?<![^\W\d_])(?:[^\W\d_]\.){2,}(?![^\W\d_])")
+_CALENDAR = frozenset("""january february march april may june july august september october
+    november december monday tuesday wednesday thursday friday saturday sunday janvier fevrier
+    février mars avril mai juin juillet aout août septembre octobre novembre decembre décembre
+    lundi mardi mercredi jeudi vendredi samedi dimanche""".split())
+_TITLES = frozenset("mr mrs ms dr mme mlle mx sir madam".split())
+_MEDICAL_TOO = frozenset("""surgery surgeon operating operation emergency ambulance sclerosis
+    flare triage scan nurse doctor hospital""".split())
+
+
+def _undotted(text: str) -> str:
+    """'M.S.' is 'MS', 'H.I.V.' is 'HIV'."""
+    return _DOTTED.sub(lambda m: m.group().replace(".", "") + " ", text)
+
+
+@functools.lru_cache(maxsize=1 << 15)
+def _any_case(t: str) -> frozenset:
+    out = set()
+    for w in _words(_undotted(t)):
+        if _ALPHA2.match(w):
+            if (((w in SHORT_GRAMMAR or w in STOP) and w not in _NAMES_TOO and w != "ms")
+                    or w in _UNITS or (len(w) == 1 and w.isascii())):
+                continue
+            out.add(w)
+            continue
+        if w in STOP:
+            continue
+        st = stem(w)
+        if st not in STOP and _keeps(st):
+            out.add(st)
+    return frozenset(out)
+
+
+def any_case_words(text) -> set[str]:
+    """Every word that says something, in any case — short ones too ('li',
+    'ms', 'aa'), never the grammar of a sentence (D6)."""
+    return set(_any_case(str(text or "")))
+
+
+@functools.lru_cache(maxsize=1 << 15)
+def _subject_names(t: str) -> frozenset:
+    n = unicodedata.normalize("NFKC", _undotted(t)).translate(_QUOTES)
+    sens = set().union(*_SENSE_WORDS.values())
+    out = set()
+    for m in re.finditer(r"[^\W\d_]+(?:'[^\W\d_]+)?", n):
+        w = m.group()
+        head, _, tail = w.partition("'")
+        if tail.casefold() == "s":
+            w = head                                   # Ed's
+        elif tail and len(head) == 1:
+            w = tail                                   # l'Anna
+        if not w[:1].isupper() or (len(w) > 1 and not w[1:].islower()):
+            continue                                   # a name, not 'HIV'
+        low = _normalise(w)
+        if low in _TITLES or low in _CALENDAR:
+            continue
+        if len(low) <= 2:
+            if _short_keeps(w, low, False, True):
+                out.add(low)
+            continue
+        st = stem(low)
+        if low in STOP or st in STOP or st in sens:
+            continue
+        out.add(st)
+    return frozenset(out)
+
+
+def subject_names(text) -> set[str]:
+    """The names a fact is about: words written as a name — a capital, then
+    small letters — that are not grammar, a title, a month or a day, or a
+    sensitive word ('Li has HIV' is about Li; D6)."""
+    return set(_subject_names(str(text or "")))
+
+
+@functools.lru_cache(maxsize=1 << 15)
+def _sensitive_content(t: str) -> frozenset:
+    words = _any_case(t) - _subject_names(t)
+    n = unicodedata.normalize("NFKC", _undotted(t))
+    long = re.findall(r"[^\W\d_]{3,}", n)
+    shouting = bool(long) and sum(w.isupper() for w in long) >= 0.6 * len(long)
+    sens = set().union(*_SENSE_WORDS.values())
+    picked = {w for w in words if w in sens}
+    joined = f" {_joined(t)} "
+    for cls, forms in _PHRASE_FORMS.items():
+        for p in forms:
+            if p in joined:
+                picked |= {stem(x) for x in p.split()} & words
+    if not shouting:                                   # 'MS', 'AIDS', 'RA', 'AA'
+        picked |= {_normalise(x) for x in re.findall(r"\b[^\W\d_a-z]{2,5}\b", n)
+                   if x.isupper()} & words
+    return frozenset(picked or words)
+
+
+def sensitive_content(text) -> set[str]:
+    """The words that make a private fact private: its medical, money,
+    family-secret words and the abbreviations it writes in capitals ('MS',
+    'HIV') — or, when it has none of those, every word but its names (D6)."""
+    return set(_sensitive_content(str(text or "")))
 
 
 # A few everyday words that mean the same subject, so 'booking a flight'

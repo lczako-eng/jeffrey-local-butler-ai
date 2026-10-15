@@ -3439,18 +3439,23 @@ class Representative:
                 if grounding.tag_hits([subject], body, kinds):
                     problems.append({"subject": subject, "why": (
                         f"it touches '{subject}', which his own rule keeps from this person")})
+            # read in any case, short names too (D6, round 7: 'li has hiv',
+            # 'ed has ms so he can't come', 'Hi all, Ed has M.S.')
+            dw = grounding.any_case_words(body)
             for f in self.c.data.get("facts") or []:
                 if not isinstance(f, dict):
                     continue
                 if f.get("visibility", "engines") == "engines" and not f.get("sensitivity"):
                     continue
-                # read as names too: 'Mr. Do is in rehab', 'An is pregnant'
-                # (R11, round 6)
-                fw = grounding.name_words(f.get("fact", ""))
-                shared = fw & grounding.name_words(body)
-                # two of its words, and at least half of them ('Ed has MS' from
-                # 'Ed has MS and uses a cane'; R11, round 6)
-                if len(fw) >= 2 and len(shared) >= max(2, -(-len(fw) // 2)):
+                said = f.get("fact", "")
+                fw = grounding.any_case_words(said)
+                shared = fw & dw
+                # the person it is about, by name, with a word of what makes
+                # it private ('Jo … chemo'); or two of its words and at least
+                # half of them ('Ed has MS' from 'Ed has MS and uses a cane')
+                about = grounding.subject_names(said) & dw
+                if (about and grounding.sensitive_content(said) & dw) or (
+                        len(fw) >= 2 and len(shared) >= max(2, -(-len(fw) // 2))):
                     what = " and ".join(grounding.CLASS_WORDS_PLAIN.get(k, k)
                                         for k in f.get("sensitivity") or []) or "him"
                     problems.append({"fact_id": f.get("id"), "why": (

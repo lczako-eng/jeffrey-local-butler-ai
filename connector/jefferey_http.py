@@ -472,9 +472,12 @@ def authorize_action(a: ActionAskIn) -> dict:
     single-use authorization_id, good for 30 minutes; cite it in log_action.
     A no is final: recommend instead — only the owner can raise the level.
     Moving money, gift cards, crypto, phone calls and the doors are never
-    approved as a category; a description that lets someone into his home,
-    or names moving money, gift cards, crypto or a call as him, is 'ask the
-    owner first'."""
+    approved as a category. Under any category, a description that touches
+    getting into his home — a door, gate, garage, key, lock, code, alarm,
+    intercom, entry or access, or letting, showing or welcoming anyone in —
+    comes back verdict 'ask_owner', and so does one that names moving money,
+    gift cards, crypto or a call as him: ask him, plainly; he decides
+    himself."""
     return conscience.authorize_action(a.category, a.description, a.amount,
                                        a.currency, a.recurring)
 
@@ -629,8 +632,9 @@ class DraftCheckIn(BaseModel):
 @gate("priorities.read")
 def check_draft(d: DraftCheckIn) -> dict:
     """Check a draft BEFORE showing or sending it: his rules for this person,
-    his private facts, and his safety (never when he is home, alone or away,
-    or how to get in). Fix every problem it lists."""
+    his private facts (read in any case: 'li has hiv' repeats 'Li has HIV'),
+    and his safety (never when he is home, alone or away, or how to get in).
+    Fix every problem it lists."""
     return rep.check_draft(d.text, d.audience)
 
 
@@ -751,9 +755,11 @@ def check_charge(c: ChargeIn) -> dict:
     refund. unexpected_merchant is informational (offer a dispute only if
     they say it is not theirs); needs_date: ask for the date;
     possible_card_testing / possible_scam: the next step is the bank, on the
-    number on the card. The rest: say it plainly and offer a dispute_pack —
-    but when the action says to ask him first (a charge near a membership's
-    fee that may be shopping there), ask him first."""
+    number on the card. ask_owner: a charge at the place of a membership or
+    plan that does not clearly match it, or a name made to look like one he
+    pays — nothing is claimed; ask him the 'question' plainly. The rest: say
+    it plainly and offer a dispute_pack — but when the action says to ask
+    him first, ask him first."""
     return guard.check_charge(c.merchant, c.amount, c.date, ref=c.ref)
 
 

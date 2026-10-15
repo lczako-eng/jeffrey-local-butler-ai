@@ -1,5 +1,5 @@
 """
-Frozen corpus — two-letter words in grounding (R11), repair round 6.
+Frozen corpus — two-letter words in grounding (R11), repair rounds 6 and 7.
 
 Round 4 let two-letter words count only from a short list of abbreviations,
 so names and abbreviations missing from it ('Ed', 'Jo', 'Dr Wu', 'VW', 'GM')
@@ -20,6 +20,31 @@ typed all in capitals says nothing by its capitals. check_draft still
 catches a private fact about someone with a short name, even one that is
 also a little word ('Do', 'An'), because a draft repeating it repeats the
 name and the fact together.
+
+Round 7 (D6). The convergence skeptics found check_draft passing lowercase
+drafts that repeat a short-named private fact ('li has hiv', 'wu is
+bipolar', 'ed has ms so he can't come', 'Hi all, Ed has M.S.'), and
+explain_basis losing lowercase abbreviations ('my bp', 'Is the pc ok') and
+'OR' and 'ER' ('Mom was in the OR', 'GO TO THE ER NOW'). The decision:
+
+  * check_draft reads a draft in any case. A draft that names, as a whole
+    word in any case, the person a private or health fact is about,
+    together with any word of what makes that fact private (its medical or
+    money words, the abbreviation it writes in capitals — 'MS', 'HIV' — or,
+    when it has none, its other words), is flagged; so is one that repeats
+    two of its words and at least half of them.
+  * explain_basis keeps the round-6 rule, and also accepts a closed list of
+    abbreviations: 'bp' and 'pc' in any case; 'ER' in capitals, even typed
+    all in capitals; 'OR' in capitals (the operating room — round 6 read it
+    as the little word, a row this round changes); and 'or', 'ms', 'er' in
+    small letters only beside a medical word ('the or nurse', 'an ms
+    flare'), never as the little word, the title or the hesitation.
+  * Kept by the rule as it stands: 'ED' finds Ed's fact (a capitalised
+    short word is a name); 'Mon PC est lent' also finds 'Al lent me $500'
+    (the word 'lent' is in both; nothing is read for its language); 'Oz' is
+    an ounce, so 'How is Oz?' finds nothing; 'Wu' alone does not find 'Dr Wu
+    is my heart doctor', which is private (a private fact answers only a
+    subject that names its kind — 'Dr Wu' does).
 """
 
 from __future__ import annotations
@@ -64,6 +89,12 @@ SHORT: list[tuple[str, set[str]]] = [
     ("Mr. Do is in rehab", set()), ("Ho has HIV", {"ho"}), ("Su has cancer", {"su"}),
     ("Lu", {"lu"}), ("the tv is on", set()), ("We bought a new TV in May", {"tv"}),
     ("ed's birthday", set()), ("IS HE AT HOME TODAY", set()), ("HO HAS HIV", set()),
+    # round 7 (D6): the closed list of abbreviations
+    ("my bp", {"bp"}), ("Is the pc ok", {"pc"}), ("Is my BP ok?", {"bp"}),
+    ("GO TO THE ER NOW", {"er"}), ("OR", {"or"}), ("Mom was in the OR for three hours", {"or"}),
+    ("tea or coffee", set()), ("YES OR NO", set()), ("the or nurse", {"or"}),
+    ("ms smith", set()), ("an ms flare", {"ms"}), ("the er doctor said", {"er"}),
+    ("ED HAS MS", set()), ("ED", {"ed"}), ("Mon PC est lent", {"pc"}),
 ]
 
 # explain_basis on the terminal: (facts, [(subject, facts it finds — all of
@@ -86,7 +117,10 @@ LOOKUPS: list[tuple[list[str], list[tuple[str, list[str]]]]] = [
       ("HP printer", ["The printer is an HP"]), ("GI", []),
       ("GI specialist", ["Mom sees the GI specialist"]),
       ("AA meeting", ["He goes to AA on Tuesdays"]), ("RA", ["Karen has RA in her hands"]),
-      ("is it ok to go up there", []), ("go", []), ("up", []), ("no", []), ("OR", []),
+      ("is it ok to go up there", []), ("go", []), ("up", []), ("no", []),
+      # round 6 read 'OR' as the little word; D6: in capitals it is the
+      # operating room (converge.json vc R11)
+      ("OR", ["Mom was in the OR for three hours"]),
       ("on y va", []), ("va", []), ("is he up?", []), ("ok", []), ("so", []),
       ("oh no", []), ("Is it ok?", []), ("Can we go?", []), ("au", [])]),
     # round 4 verify-c (skep/gr.py)
@@ -129,13 +163,38 @@ LOOKUPS: list[tuple[list[str], list[tuple[str, list[str]]]]] = [
      [("is it ok to go up there", []), ("TV", ["We bought a new TV in May"]),
       ("the ER", ["Mom was in the ER in March"]), ("on y va", []), ("va", []),
       ("Can we go?", [])]),
+    # round 7, the convergence skeptics (converge.json vb/vc R11, sk7/r11.py,
+    # sk6/s_r11.py)
+    (["Ed fixed the fence", "Al lent me $500", "The TV is in the den", "Jo lives in Ottawa",
+      "My PC is old", "Li is my neighbour", "We go to the lake in July",
+      "The ER at the Civic took 6 hours", "My BP was 150 over 90",
+      "Mom was in the OR for three hours", "Our cat is named Oz"],
+     [("Ed", ["Ed fixed the fence"]), ("Is Al around?", ["Al lent me $500"]),
+      ("Is it on TV?", ["The TV is in the den"]), ("Ask Jo", ["Jo lives in Ottawa"]),
+      ("ok", []), ("Is it OK?", []), ("al dente pasta", []), ("Li", ["Li is my neighbour"]),
+      ("Où est Jo?", ["Jo lives in Ottawa"]), ("ce qu'en dit Al", ["Al lent me $500"]),
+      ("Can we go?", []), ("Should I go to the ER?", ["The ER at the Civic took 6 hours"]),
+      ("my bp", ["My BP was 150 over 90"]), ("Is my BP ok?", ["My BP was 150 over 90"]),
+      ("Is the pc ok", ["My PC is old"]),
+      ("GO TO THE ER NOW", ["The ER at the Civic took 6 hours"]),
+      ("OR", ["Mom was in the OR for three hours"]),
+      ("the or nurse", ["Mom was in the OR for three hours"]),
+      ("tea or coffee", []), ("YES OR NO", []), ("Um, er, hm", []),
+      ("ED", ["Ed fixed the fence"]), ("Is Ed OK?", ["Ed fixed the fence"]),
+      ("Mon PC est lent", ["My PC is old", "Al lent me $500"]),
+      ("How is Oz?", [])]),
 ]
 
 # check_draft to 'the neighbours' with these private health facts kept
 # (skep/cd.py, p/cd2.py): (draft, caught?)
 PRIVATE = ["Ed has MS and uses a cane", "Jo is in AA", "Al takes pills for his BP",
            "Mom has RA in her hands", "Li has HIV", "Ho has HIV", "Mr. Do is in rehab",
-           "An is pregnant again", "Su has cancer"]
+           "An is pregnant again", "Su has cancer",
+           # round 7 (converge.json vb R11, sk7/r11.py, r11b.py)
+           "Jo is on chemo", "Bo had a stroke", "Ma has dementia", "Ty is in rehab",
+           "Al has AIDS", "Ed was diagnosed with MS in 2019", "Jo a le cancer", "Wu is bipolar",
+           "Karen has breast cancer", "Mike is an alcoholic", "Vu has dementia",
+           "Ma Lin has cancer"]
 DRAFTS: list[tuple[str, bool]] = [
     ("Ed has MS, so he can't come", True), ("Jo is in AA now", True), ("Mom has RA", True),
     ("Li has HIV", True), ("Al takes pills for his BP", True), ("Ho has HIV", True),
@@ -143,6 +202,23 @@ DRAFTS: list[tuple[str, bool]] = [
     ("Do you want to come for dinner on Sunday?", False),
     ("An apple pie for the bake sale", False), ("Hi Jo, see you Sunday", False),
     ("Ed and Al will bring chairs", False),
+    # round 7 (D6): in any case, the name with what makes the fact private
+    ("li has hiv", True), ("li has HIV", True), ("Li Has HIV", True), ("LI has HIV", True),
+    ("Li has hiv", True), ("wu is bipolar", True), ("jo is on chemo", True),
+    ("bo had a stroke", True), ("ty is in rehab", True), ("al has aids", True),
+    ("karen has breast cancer", True), ("mike is an alcoholic", True),
+    ("ed has ms so he can't come", True), ("Hi all, Ed has M.S.", True),
+    ("Ed's MS is worse", True), ("ED HAS MS", True), ("Jo's on chemo, pray for her", True),
+    ("Bo had a stroke last week", True), ("Ma has dementia", True),
+    ("Ty is in rehab again", True), ("Al has AIDS", True), ("Al's got AIDS", True),
+    ("Jo a le cancer, priez pour elle", True), ("JO IS ON CHEMO", True),
+    ("Mr. Wu is bipolar", True), ("jo is in aa now", True), ("mom has ra", True),
+    ("vu has dementia", True), ("ma lin has cancer", True), ("Vu has dementia", True),
+    ("We're fine, see you Sunday", False), ("Ed fixed the fence", False),
+    ("Ed can't come on Sunday", False), ("See you Sunday, Jo!", False),
+    ("The weather is nice today", False), ("Al, the boat is ready", False),
+    ("Mom says hi to everyone", False), ("Is Ty coming to the game?", False),
+    ("Li and Bo send their love", False), ("Karen, the roses look lovely", False),
 ]
 
 

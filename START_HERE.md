@@ -220,6 +220,15 @@ When an AI asks to add something to that list, it waits for you: double-click
 **`Check my charges.command`** (or type `/charges` in *Talk to JEFFEREY on
 this Mac*) and type yes or no for each one.
 
+Where you hold a membership (Costco, Amazon Prime, CAA, a gym), JEFFEREY
+counts a charge as the membership only when the name on the statement is
+clearly that membership's and the amount is the fee (or the fee with tax).
+Anything else there that looks like it might be — another price, a word like
+"renewal" or "member" in the name — he does not claim and does not wave
+through: he asks you, *"Is this your membership going up, or something you
+bought?"* A name dressed up to look like one you pay (a zero for an O, a
+strange web address) he asks about too, and warns you it may be a trick.
+
 ### Forgetting, and bringing back
 
 Ask any AI to forget something and JEFFEREY first shows it exactly what would
@@ -279,7 +288,10 @@ yes for you:
 
 Moving money, gift cards, crypto, phone calls in your voice and the doors are
 never allowed, whatever you type. Anything that repeats (a subscription) he
-always brings to you.
+always brings to you. And whatever you have allowed, anything about getting
+into your home — a door, a gate, the garage, a key, a lock, a code, the
+alarm, the intercom, or letting someone in (even the cat) — he brings to you
+first. It is your door: you decide.
 
 ### Who may see what
 

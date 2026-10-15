@@ -310,9 +310,12 @@ def authorize_action(category: str, description: str, amount: float | None = Non
     carries a single-use authorization_id, good for 30 minutes: act once,
     then cite it in log_action. A no is final: recommend instead; only the
     owner can raise the level, himself. Moving money, gift cards, crypto,
-    phone calls and the doors are never approved as a category; a
-    description that lets someone into his home, or names moving money,
-    gift cards, crypto or a call as him, is 'ask the owner first'."""
+    phone calls and the doors are never approved as a category. Under any
+    category, a description that touches getting into his home — a door,
+    gate, garage, key, lock, code, alarm, intercom, entry or access, or
+    letting, showing or welcoming anyone in — comes back verdict
+    'ask_owner', and so does one that names moving money, gift cards,
+    crypto or a call as him: ask him, plainly; he decides himself."""
     return conscience.authorize_action(category, description, amount, currency, recurring)
 
 
@@ -449,9 +452,10 @@ def draft_guidance(purpose: str, recipient: str = "") -> dict:
 @gate("priorities.read")
 def check_draft(text: str, audience: str = "") -> dict:
     """Check a draft BEFORE showing or sending it: does it touch a subject
-    his rules keep from this person, repeat one of his private facts, or
-    tell someone when he is home, alone or away, or how to get in? Fix
-    every problem it lists; never send a draft it did not pass."""
+    his rules keep from this person, repeat one of his private facts (read
+    in any case: 'li has hiv' repeats 'Li has HIV'), or tell someone when
+    he is home, alone or away, or how to get in? Fix every problem it
+    lists; never send a draft it did not pass."""
     return rep.check_draft(text, audience)
 
 
@@ -581,11 +585,13 @@ def check_charge(merchant: str, amount: float | str, date: str = "", ref: str = 
     is informational — most are ordinary purchases; offer a dispute only if
     they say it is not theirs. needs_date: ask for the date.
     possible_card_testing or possible_scam: tell them gently; the next step
-    is the bank, on the number on the back of the card. amount_increased,
-    duplicate, unauthorized_renewal, charged_after_cancel: say it plainly,
-    with the dollars at stake, and offer a dispute_pack — but when the
-    action says to ask him first (a charge near a membership's fee that may
-    be shopping there), ask him first."""
+    is the bank, on the number on the back of the card. ask_owner: a charge
+    at the place of a membership or plan that does not clearly match it, or
+    a name made to look like one he pays — nothing is claimed; ask him the
+    'question' plainly. amount_increased, duplicate, unauthorized_renewal,
+    charged_after_cancel: say it plainly, with the dollars at stake, and
+    offer a dispute_pack — but when the action says to ask him first, ask
+    him first."""
     return guard.check_charge(merchant, amount, date, ref=ref)
 
 
