@@ -1300,7 +1300,9 @@ class AfterTheFixes(DriveTest):
             pdf.chmod(0o444)
             os.symlink(pdf, d / "take-099.wav")
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(v.delete("Carol", force=True), 0)
+                # 1 since verify I-56: what a shortcut pointed to was left as it
+                # was, so the delete no longer says 'Gone.'
+                self.assertEqual(v.delete("Carol", force=True), 1)
             self.assertEqual(pdf.read_bytes(), b"%PDF-1.4 my taxes")
             self.assertEqual(pdf.stat().st_mode & 0o777, 0o444)
             d2 = v.person_dir("Dan")

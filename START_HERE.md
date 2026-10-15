@@ -146,7 +146,7 @@ in front of each):
 | Type | It means |
 |---|---|
 | `tools/photo_index.py forget <photo or folder>` | that photo never shows again |
-| `connector/reminisce.py keep-off-wall Kandahar` | never on the wall |
+| `connector/reminisce.py keep-off-wall Kandahar` | never on the wall (two words, like `Halifax 2023`, mean photos that are both; it tells you how many it hides) |
 | `connector/reminisce.py never-ask Afghanistan` | the album never asks about it |
 | `connector/reminisce.py list`, then `reopen <id>` | undo a "rather not" — only you can |
 
@@ -157,12 +157,14 @@ in front of each):
 Double-click **`Record my voice.command`**. About twenty minutes of reading
 sentences aloud, in your own room. It asks for your name: type it, it is
 never guessed. Each sitting starts with you reading one sentence saying you
-agree, ending in three words that change every time. When you carry on
-another day it asks "Are you …?" Type yes. Recordings go on the drive,
-read-only, checksummed. To delete, run `tools/voice_enrol.py --who "Your Name"
-delete` and type your name: it removes the copies on the drive and on this
-Mac, and tells you plainly what overwriting cannot reach (flash storage, Time
-Machine). Nothing is cloned or played back as you yet — that is a separate
+agree, ending in three words that change every time; type yes to keep it.
+When you carry on another day it asks "Are you …?" Type yes. Recordings go on
+the drive, read-only, checksummed. To delete, run `tools/voice_enrol.py --who
+"Your Name" delete` and type your name: it removes the copies on the drive and
+on this Mac, and tells you plainly what overwriting cannot reach (flash
+storage, Time Machine). If it lists recordings under another name marked
+"this may be yours too" (older versions used the Mac's account name), delete
+those the same way, with that name. Nothing is cloned or played back as you yet — that is a separate
 decision, made later, with the local model, and never on a phone or a door
 intercom.
 

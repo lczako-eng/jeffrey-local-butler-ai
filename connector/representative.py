@@ -289,6 +289,31 @@ employer pharmacy lien business company bank institution school provider insurer
 contractor nursing facility estate work office user username employeur
 """.split())
 PARTY_WORDS = _PEOPLE | _NOT_CURRENT | _PLACES
+# The two sides of a sale. On a bill of sale the owner IS one of them: the
+# seller when JEFFEREY sells for him (the usual case, and the default), the
+# buyer when he buys. His own side's boxes are his ('Seller name' takes his
+# name); the other side's are someone else's and never get his details
+# (I-30; selling-30: counting the seller as another party left every seller
+# box of his own bill of sale empty). Only these two sides can be chosen: no
+# caller can make a spouse's or a doctor's box his.
+_SIDE_WORDS = {"seller": frozenset("seller vendor vendeur vendeuse".split()),
+               "buyer": frozenset("buyer purchaser acheteur acheteuse".split())}
+_SIDE_NAMES = {w: side for side, ws in _SIDE_WORDS.items() for w in ws}
+_SIDE_NAMES.update({"sellers": "seller", "selling": "seller", "vendors": "seller",
+                    "buyers": "buyer", "buying": "buyer", "purchasers": "buyer"})
+_ANY_SIDE = frozenset().union(*_SIDE_WORDS.values())
+
+
+def owner_side(owner_is) -> str | None:
+    """'seller' or 'buyer' from what a caller said the owner is on this form
+    ('', 'Seller', 'the vendor', 'acheteur'); None when it is neither."""
+    toks = [t for t in _tokens(str(owner_is or "")) if t not in ("the", "le", "la", "l")]
+    if not toks:
+        return "seller"
+    sides = {_SIDE_NAMES.get(t) for t in toks}
+    return sides.pop() if len(sides) == 1 and None not in sides else None
+
+
 _PLURAL = {"children": "child", "kids": "kid", "parents": "parent", "mothers": "mother",
            "fathers": "father", "spouses": "spouse", "buyers": "buyer",
            "sellers": "seller", "dependants": "dependant", "dependents": "dependent",
@@ -299,14 +324,18 @@ _PLURAL = {"children": "child", "kids": "kid", "parents": "parent", "mothers": "
 _LONG = 12      # a tooltip longer than this many words is a description, not a label
 
 
-def parties(*texts: str, among: frozenset = PARTY_WORDS, long: bool = False) -> set[str]:
+def parties(*texts: str, among: frozenset = PARTY_WORDS, long: bool = False,
+            side: str | None = None) -> set[str]:
     """The other people (or things) these labels are about. The first text
     (a box's name) always counts; a long tooltip is a description, and only
     a short one is read for this — unless `long`, when a description that
     names another PERSON counts too (verify I-29: a box 'SIN2' whose tooltip
     said 'the social insurance number of your spouse or common-law partner'
-    got the owner's own SIN)."""
+    got the owner's own SIN). With `side` ('seller' or 'buyer'), that side
+    of a sale is the owner himself, not another party."""
     out: set[str] = set()
+    if side in _SIDE_WORDS:
+        among = among - _SIDE_WORDS[side]
     for i, t in enumerate(texts):
         toks = _tokens(t)
         words = among
@@ -381,8 +410,20 @@ FIELD_ALIASES: dict[str, list[str]] = {
 }
 
 
-def _core(label) -> str:
-    return " ".join(t for t in _tokens(label) if t not in OWNER_QUALIFIERS)
+def _core(label, side: str | None = None) -> str:
+    """A label without the words that only say it is the owner's own
+    ('your', 'home', and his side of a sale when `side` says which)."""
+    mine = _SIDE_WORDS.get(side, frozenset())
+    toks = _tokens(label)
+    drop = {i for i, t in enumerate(toks) if _PLURAL.get(t, t) in mine}
+    # ...and the French article before it ('Nom du vendeur', "Adresse de l'acheteur")
+    for i in sorted(drop):
+        j = i - 1
+        while j >= 0 and toks[j] in ("du", "de", "des", "l", "le", "la", "d"):
+            drop.add(j)
+            j -= 1
+    return " ".join(t for i, t in enumerate(toks)
+                    if i not in drop and t not in OWNER_QUALIFIERS)
 
 
 _ALIAS_INDEX: dict[str, str] = {}
@@ -1959,7 +2000,7 @@ class Representative:
         return old if (old in prof and new not in prof) else new
 
     # ---------------------------------------------------------------- forms
-    def fill_form(self, fields: list[str]) -> dict:
+    def fill_form(self, fields: list[str], owner_is: str = "") -> dict:
         """Given the labels on a form (HTML, PDF, or paper), return what
         Jefferey can fill from the user's own profile — and, just as
         importantly, what he cannot.
@@ -1968,9 +2009,12 @@ class Representative:
         box about someone else (the buyer, a spouse, the family doctor) is
         never filled with the owner's details, and a secret from the vault
         goes only into a box that asks for exactly that secret (I-29, I-30).
-        """
+        On a bill of sale the owner is the seller unless `owner_is` says he
+        is the buyer (selling-30)."""
         import access
-        profile = self.c.data.get("profile", {})
+        side = owner_side(owner_is)
+        if side is None:
+            return _no(_WHICH_SIDE, owner_is_can_be=sorted(_SIDE_WORDS))
         filled: dict[str, str] = {}
         needs_you: list[dict] = []
         from_vault: list[dict] = []
@@ -1998,12 +2042,17 @@ class Representative:
                         "why": "more than one secret in the vault could go here",
                         "or": ("ask the owner which one: "
                                + ", ".join(f"vault:{n}" for n in slots))})
-                elif parties(label, among=_PEOPLE | _NOT_CURRENT, long=True):
+                elif parties(label, among=_PEOPLE | _NOT_CURRENT, long=True, side=side):
                     needs_you.append({
                         "field": label,
                         "why": (f"asks for someone else's {kind or 'private detail'} "
-                                f"({_quoted(parties(label))}) — never fill it with the "
-                                f"owner's own; he writes it himself"),
+                                f"({_quoted(parties(label, side=side))}) — never fill it "
+                                f"with the owner's own; he writes it himself"),
+                    })
+                elif is_signing(label):
+                    needs_you.append({
+                        "field": label,
+                        "why": "his signature — only he signs, always by his own hand",
                     })
                 else:
                     needs_you.append({
@@ -2016,16 +2065,16 @@ class Representative:
                         ),
                     })
                 continue
-            key = self._normalize_field(label)
+            key = self._normalize_field(label, side)
             val = self._current(key) if key else ""
             if key and val:
                 filled[label] = val
-            elif key is None and parties(label):
+            elif key is None and parties(label, side=side):
                 needs_you.append({
                     "field": label,
                     "why": (f"this box is about someone or something other than the "
-                            f"owner ({_quoted(parties(label))}) — ask him what goes "
-                            f"here; never fill it from his own details"),
+                            f"owner ({_quoted(parties(label, side=side))}) — ask him what "
+                            f"goes here; never fill it from his own details"),
                 })
             else:
                 needs_you.append({"field": label, "why": "not in your profile yet"})
@@ -2046,12 +2095,17 @@ class Representative:
             out["vault_available"] = vault_names
         if from_vault:
             out["from_your_vault"] = from_vault
+        out.update(_side_note(side, [str(f) for f in fields]))
         return out
 
-    def pdf_form_fields(self, pdf_path: str) -> dict:
+    def pdf_form_fields(self, pdf_path: str, owner_is: str = "") -> dict:
         """Read the fillable boxes out of a PDF form. Their names are written
         by whoever made the PDF: they come back as data, never as anything to
-        obey, and a name that reads like an instruction is pointed out."""
+        obey, and a name that reads like an instruction is pointed out. On a
+        bill of sale the owner is the seller unless `owner_is` says buyer."""
+        side = owner_side(owner_is)
+        if side is None:
+            return _no(_WHICH_SIDE, owner_is_can_be=sorted(_SIDE_WORDS))
         try:
             import pypdf
         except ImportError:
@@ -2079,7 +2133,7 @@ class Representative:
                 sensitive.append({"field": name, "asks_for": (
                     " or ".join(SECRET_WORDS[k] for k in sorted(kinds)) if kinds
                     else "a private detail")})
-            if parties(*texts, long=True):
+            if parties(*texts, long=True, side=side):
                 others.append(name)
         out = {
             "path": str(p),
@@ -2100,17 +2154,25 @@ class Representative:
                 out[k] = v
         if suspicious:
             out["warning"] = _TRAP
+        out.update(_side_note(side, [t for f in fields.values() for t in f["texts"]]))
         return out
 
-    def fill_pdf(self, pdf_path: str, values: dict[str, str], out_path: str = "") -> dict:
+    def fill_pdf(self, pdf_path: str, values: dict[str, str], out_path: str = "",
+                 owner_is: str = "") -> dict:
         """Write values into a PDF form and save a NEW file in the 'Filled
         forms' folder — and nowhere else, never over anything (I-02). The
         original is never modified. A secret from the vault goes only into a
         box that asks for that secret, and every use is written down; a box
         that signs or swears for the owner needs authorize_action on
         'paperwork' (I-57); the hidden actions a form carries are taken out
-        of the copy (I-31)."""
+        of the copy (I-31). On a bill of sale the owner is the seller unless
+        `owner_is` says buyer: his details never go into the other side's
+        boxes."""
         import access
+        side = owner_side(owner_is)
+        if side is None:
+            return _no(_WHICH_SIDE + " Nothing was written.",
+                       owner_is_can_be=sorted(_SIDE_WORDS))
         try:
             import pypdf
         except ImportError:
@@ -2151,7 +2213,7 @@ class Representative:
         # spouse's box (I-30).
         mixed = sorted(k for k, h in hits.items()
                        if len({frozenset(parties(*f["texts"], among=_PEOPLE | _NOT_CURRENT,
-                                                 long=True))
+                                                 long=True, side=side))
                                for f in h}) > 1)
         if mixed:
             return _no("These names each reach more than one box on this form, for "
@@ -2182,7 +2244,8 @@ class Representative:
         theirs = sorted(k for k, v in values.items()
                         if k in hits and v.strip() and not vault.is_reference(v)
                         and grounding.normalise(v) in own
-                        and any(parties(*f["texts"], among=_PEOPLE | _NOT_CURRENT, long=True)
+                        and any(parties(*f["texts"], among=_PEOPLE | _NOT_CURRENT, long=True,
+                                        side=side)
                                 for f in hits[k]))
         if theirs:
             return _no("These boxes are about someone else, and what was handed in is the "
@@ -2999,19 +3062,21 @@ class Representative:
                 or str(field).lower().strip().replace(" ", "_"))
 
     @staticmethod
-    def _normalize_field(label: str) -> str | None:
+    def _normalize_field(label: str, side: str | None = None) -> str | None:
         """Which of the owner's own details this label asks for — by an EXACT
         match with the words real forms use, once words like 'your', 'home'
         or 'applicant's' are set aside. Never by containment (I-30: 'Buyer
         name', 'Spouse's name' and 'Name of family doctor' all got his name,
         'Electricity provider' his city and 'Statement date' his province).
         A PDF's long field name ('form1[0].Spouse[0].FirstName[0]') is read
-        by its last part — unless an earlier part names someone else."""
+        by its last part — unless an earlier part names someone else. With
+        `side`, his side of a sale is set aside too ('Seller name' is his
+        name when he is the seller)."""
         raw = str(label or "")
         term = _terminal(raw)
-        if term is not raw and parties(raw[: len(raw) - len(term)]):
+        if term is not raw and parties(raw[: len(raw) - len(term)], side=side):
             return None
-        key = _ALIAS_INDEX.get(_core(term))
+        key = _ALIAS_INDEX.get(_core(term, side))
         if key:
             return key
         # 'Date of birth (YYYY-MM-DD)', 'Postal code (A1A 1A1)', 'Telephone
@@ -3020,15 +3085,16 @@ class Representative:
         # as in 'Name (buyer)'
         hints = re.findall(r"\(([^()]*)\)|\[([^\[\]]*)\]", term)
         if hints:
-            if parties(*(a or b for a, b in hints)):
+            if parties(*(a or b for a, b in hints), side=side):
                 return None
             bare = re.sub(r"\([^()]*\)|\[[^\[\]]*\]", " ", term)
-            key = _ALIAS_INDEX.get(_core(bare))
+            key = _ALIAS_INDEX.get(_core(bare, side))
             if key:
                 return key
-        parts = [x for x in re.split(r"/|\bor\b|\bou\b", term, flags=re.I) if _core(x)]
+        parts = [x for x in re.split(r"/|\bor\b|\bou\b", term, flags=re.I)
+                 if _core(x, side)]
         if len(parts) > 1:
-            keys = {_ALIAS_INDEX.get(_core(x)) for x in parts}
+            keys = {_ALIAS_INDEX.get(_core(x, side)) for x in parts}
             if len(keys) == 1 and None not in keys:
                 return keys.pop()
         return None
@@ -3050,6 +3116,25 @@ _TICKED = frozenset({"yes", "on", "true", "1", "x", "checked", "y", "oui"})
 
 def _quoted(words) -> str:
     return ", ".join(f"'{w}'" for w in sorted(words))
+
+
+_WHICH_SIDE = ("owner_is says which side of a sale the owner is on this form: 'seller' "
+               "(the usual case) or 'buyer'. Nothing else can be chosen: a box about "
+               "anyone else is never his.")
+
+
+def _side_note(side: str, texts: list[str]) -> dict:
+    """When a form has boxes for a side of a sale: which side JEFFEREY took
+    the owner to be, and how to say the other (selling-30)."""
+    words = {_PLURAL.get(w, w) for t in texts for w in _tokens(t)}
+    if not words & _ANY_SIDE:
+        return {}
+    other = "buyer" if side == "seller" else "seller"
+    return {"owner_is": side,
+            "sides": (f"JEFFEREY took the owner to be the {side} on this form: the "
+                      f"{side}'s boxes are his, the {other}'s are someone else's and never "
+                      f"get his details. If he is the {other}, ask again with "
+                      f"owner_is='{other}'.")}
 
 
 def _no(reason: str, **extra) -> dict:

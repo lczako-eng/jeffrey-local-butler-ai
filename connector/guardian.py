@@ -81,34 +81,51 @@ QUIET = frozenset({"expected", "amount_decreased", "refund"})
 INFORMATIONAL = frozenset({"unexpected_merchant"})
 RECOVERABLE = frozenset({"charged_after_cancel", "duplicate", "amount_increased",
                          "unauthorized_renewal", "possible_card_testing"})
+# a place not in the register: claimed only when the user says it is not his
+NOT_RECOGNISED = frozenset({"unexpected_merchant", "possible_card_testing", "possible_scam"})
 
 # Canonical cadence -> (days in one period, a repeat at the same amount sooner
 # than this many days is a second bill for the same period).
 CADENCES = {
-    "weekly": (7, 4), "biweekly": (14, 9), "monthly": (30, 20),
+    "weekly": (7, 4), "biweekly": (14, 9), "semimonthly": (15, 9), "fourweekly": (28, 18),
+    "monthly": (30, 20), "every_two_months": (61, 45),
     "quarterly": (91, 70), "semiannual": (182, 150), "yearly": (365, 335),
 }
-PER_YEAR = {"weekly": 52, "biweekly": 26, "monthly": 12, "quarterly": 4,
-            "semiannual": 2, "yearly": 1}
+PER_YEAR = {"weekly": 52, "biweekly": 26, "semimonthly": 24, "fourweekly": 13,
+            "monthly": 12, "every_two_months": 6, "quarterly": 4, "semiannual": 2,
+            "yearly": 1}
 _CADENCE_SAID = {
-    "weekly": "every week", "biweekly": "every two weeks", "monthly": "monthly",
-    "quarterly": "every three months", "semiannual": "twice a year",
-    "yearly": "once a year",
+    "weekly": "every week", "biweekly": "every two weeks", "semimonthly": "twice a month",
+    "fourweekly": "every four weeks", "monthly": "monthly",
+    "every_two_months": "every two months", "quarterly": "every three months",
+    "semiannual": "twice a year", "yearly": "once a year",
 }
+# Words that mean two different things, so JEFFEREY asks instead of guessing
+# (verify I-38: 'bi-monthly' is every two months to some, twice a month to others).
+_CADENCE_TWO_WAYS = {"bimonthly", "bi monthly", "bimensuel", "bimensuelle"}
 _CADENCE_WORDS = {
     "weekly": {"weekly", "week", "every week", "per week", "a week", "wk",
                "hebdomadaire", "par semaine"},
     "biweekly": {"biweekly", "bi weekly", "every two weeks", "every 2 weeks",
-                 "fortnightly", "fortnight", "every other week"},
+                 "fortnightly", "fortnight", "every other week", "aux deux semaines",
+                 "toutes les deux semaines"},
+    "semimonthly": {"semimonthly", "semi monthly", "twice a month", "twice monthly",
+                    "two times a month", "deux fois par mois"},
+    "fourweekly": {"every 4 weeks", "every four weeks", "4 weekly", "four weekly",
+                   "every 28 days", "toutes les quatre semaines", "aux quatre semaines"},
     "monthly": {"monthly", "month", "per month", "a month", "every month", "mo",
                 "mthly", "mensuel", "mensuelle", "par mois"},
+    "every_two_months": {"every two months", "every 2 months", "every other month",
+                         "bimestriel", "bimestrielle", "aux deux mois",
+                         "tous les deux mois"},
     "quarterly": {"quarterly", "quarter", "every quarter", "every 3 months",
                   "every three months", "trimestriel", "trimestrielle"},
     "semiannual": {"semiannual", "semi annual", "semiannually", "semi annually",
                    "twice a year", "every 6 months", "every six months",
                    "half yearly", "biannual", "biannually"},
     "yearly": {"yearly", "year", "annual", "annually", "per year", "a year",
-               "every year", "yr", "annuel", "annuelle", "par an"},
+               "every year", "yr", "annuel", "annuelle", "par an", "per annum", "annum",
+               "every 12 months", "every twelve months", "par annee"},
     "once": {"once", "one time", "onetime", "one off", "oneoff", "single",
              "just once", "one", "unique", "une fois"},
     "unknown": {"unknown"},
@@ -150,6 +167,31 @@ _SCAM = re.compile(
     r"virus removal|pc repair online)\b")
 
 STRONG, WEAK = 0.9, 0.75
+HINT = 0.7                      # only ever a 'did you mean'
+
+# A statement name that only STARTS with a registered name ('COSTCO WHOLESALE'
+# for 'Costco Membership', 'ROGERS CENTRE' for 'Rogers', 'APPLE STORE' for
+# 'APPLE.COM/BILL') is the same agreement only when what follows is not
+# another line of business, and the amount is near the agreed one (verify
+# I-36: grocery runs became price rises, card tests and duplicates, and a
+# $308 dispute pack). Otherwise it is a 'did you mean', never a match.
+_OTHER_BUSINESS = frozenset("""
+wholesale store stores shop shoppe boutique outlet depot mart market marche
+supermarket grocery groceries epicerie centre center arena stadium field park
+theatre theater cinema cineplex ticket tickets concession concessions cafe coffee
+restaurant resto bar grill pub kitchen bakery deli pizza sushi pharmacy pharmacie
+drug drugs gas fuel station essence carwash wash parking hotel inn motel resort
+travel tours airport duty bank insurance financial rewards gift gifts golf ski
+sports optical dental clinic salon spa food foods liquor beer wine catering
+""".split())
+_PRICE_BAND = (0.5, 2.0)        # a new price, not a different purchase
+
+
+def _extra(q: tuple[str, ...], r: tuple[str, ...]) -> tuple[str, ...]:
+    """The words a statement name adds after a registered name it starts with."""
+    if len(r) < len(q) and q[:len(r)] == r:
+        return q[len(r):]
+    return ()
 
 _MONTHS = {
     "jan": 1, "january": 1, "janvier": 1, "janv": 1,
@@ -450,6 +492,24 @@ def _parse_date(value: Any, today: _dt.date,
     return best.isoformat(), None, False
 
 
+def _other_reading(value: Any) -> str | None:
+    """The day-first reading of a date like '11/10/2026' (month-first is
+    the one _parse_date gives), or None."""
+    m = re.fullmatch(r"\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\s*", str(value or ""))
+    if not m:
+        return None
+    try:
+        return _dt.date(int(m[3]), int(m[2]), int(m[1])).isoformat()
+    except ValueError:
+        return None
+
+
+def _ref(value: Any) -> str:
+    """A statement line's reference, written one way: 'A1', 'a1 ' and
+    'A-1' are one reference (verify I-37)."""
+    return re.sub(r"[\s\-_.#/]+", "", _fold(value or "")).strip()
+
+
 def _norm_cadence(value: Any) -> tuple[str, bool]:
     s = re.sub(r"[^a-z0-9 ]+", " ", _fold(value)).strip()
     s = re.sub(r"\s+", " ", s)
@@ -491,6 +551,42 @@ def _days(a: str, b: str) -> int:
     return (_dt.date.fromisoformat(a) - _dt.date.fromisoformat(b)).days
 
 
+_MONTH_NAMES = ("January February March April May June July August September October "
+                "November December").split()
+
+
+def _spoken(iso: str) -> str:
+    """'2026-10-11' as people say it: '11 October 2026'."""
+    try:
+        d = _dt.date.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return str(iso)
+    return f"{d.day} {_MONTH_NAMES[d.month - 1]} {d.year}"
+
+
+# A one-time agreement is charged when it is made: a first charge seen more
+# than this many days later is, almost always, a renewal (verify I-38).
+_ONCE_DAYS = 25
+
+# A charge kept by the first version, whose date may be the day it was asked
+# about (verify I-37): it never decides an accusation on its own.
+_OLD_DATE = ("This {amt} from {name} rests on a charge an older version of JEFFEREY kept "
+             "with the date {d}; that version wrote down the day it was asked when no "
+             "date was given, so I can't be sure it {what}. What date is printed on the "
+             "statement?")
+
+
+def _agreed_on(entry: dict) -> str | None:
+    """The day he agreed to an entry: when it was registered (or, for one
+    made before this was kept, when it was last changed)."""
+    for v in (entry.get("agreed_on"), str(entry.get("updated") or "")[:10]):
+        try:
+            return _dt.date.fromisoformat(v).isoformat()
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 # ===================================================================== who
 def _owner_hands() -> bool:
     """True only when the owner's own hands are on this call: a command he
@@ -528,7 +624,8 @@ _ACTIONS = {
     "unexpected_merchant": (
         "Mention it calmly as a purchase from a place that is not in the register "
         "and ask whether they recognize it. Do not call it fraud and do not offer "
-        "a dispute unless they say it is not theirs."),
+        "a dispute unless they say it is not theirs; then call dispute_pack with "
+        "not_mine=true."),
     "needs_date": "Ask the user for the date, then check the charge again with it.",
     "alarm": (
         "Tell the user plainly and gently. If they do not recognize it, the next "
@@ -572,10 +669,44 @@ class Guardian:
         Nothing is dropped: replaced values are kept beside the new ones."""
         reg = self.c.data.setdefault("expected_charges", [])
         today = self._today()
+        old = [e for e in reg if e.get("v") != 2]
         for i, e in enumerate(reg):
             if e.get("v") != 2:
                 self._upgrade_entry(e, i, today)
+        if old:
+            self._settle_old_cancellations(reg, old)
         return reg
+
+    @staticmethod
+    def _settle_old_cancellations(reg: list[dict], old: list[dict]) -> None:
+        """The old code filed a cancellation under a name nothing else had
+        ('Netflix subscription'), next to the agreed 'Netflix'. Read the way
+        names are read now, both are Netflix, and the agreed one won, so a
+        charge after the cancellation was 'as agreed. Quiet.' (verify I-36).
+        Such a cancellation now belongs to its entry: if it was said after
+        the entry was last agreed (or nobody knows when), the entry is
+        cancelled from that date; if he agreed again later, it is kept as
+        history. The old entry stays in the file, marked as merged."""
+        for s in old:
+            if (s.get("active", True) or s.get("amount_known", True)
+                    or s.get("merged_into")):
+                continue
+            twins = [e for e in reg if e is not s and e.get("key") == s.get("key")
+                     and e.get("active", True) and not e.get("merged_into")]
+            if len(twins) != 1:
+                continue
+            e = twins[0]
+            said = {"cancelled_on": s.get("cancelled_on"),
+                    "said": s.get("cancelled_on_said"), "from_entry": s.get("id")}
+            if str(s.get("updated") or "") >= str(e.get("updated") or ""):
+                e["active"] = False
+                e["cancelled_on"] = s.get("cancelled_on")
+                if s.get("cancelled_on_said"):
+                    e["cancelled_on_said"] = s["cancelled_on_said"]
+                e["cancellation_from"] = s.get("id")
+            else:
+                e.setdefault("past_cancellations", []).append(said)
+            s["merged_into"] = e["id"]
 
     @staticmethod
     def _upgrade_entry(e: dict, i: int, today: _dt.date) -> None:
@@ -641,6 +772,11 @@ class Guardian:
         if said and iso != said:
             r.setdefault("date_said", said)
         r["date"] = iso if not err else None
+        if r["date"] and "seen" not in r:
+            # The first version wrote the day it was ASKED when no date was
+            # given, and did not say so: this date may not be the day of the
+            # charge, so it never decides an accusation alone (verify I-37).
+            r["date_uncertain"] = True
         try:
             amt = float(r.get("amount"))
             if not math.isfinite(amt):
@@ -658,19 +794,49 @@ class Guardian:
         return _forms(e.get("merchant", "")) + tuple(
             tuple(a.split()) for a in e.get("aliases", []) if a)
 
-    def _ranked(self, merchant: Any) -> list[tuple[float, dict]]:
+    def _ranked(self, merchant: Any, amount: float | None = None) -> list[tuple[float, dict]]:
+        """Register entries this name may be, with how surely. A name that
+        only starts with an entry's name, then names another business or a
+        far-off amount, or that names a gift card or 'tech support' when the
+        entry does not, counts as a 'did you mean' only (verify I-36)."""
         q = _forms(merchant)
+        scam = bool(_SCAM.search(_fold(merchant)))
         out = []
         for e in self._entries():
-            best = max((_score(qf, rf) for qf in q for rf in self._entry_forms(e)),
-                       default=0.0)
-            if best >= WEAK:
-                out.append((best, e))
+            if e.get("merged_into"):
+                continue
+            best, extra = 0.0, ()
+            for qf in q:
+                for rf in self._entry_forms(e):
+                    s = _score(qf, rf)
+                    x = _extra(qf, rf) if s >= STRONG else ()
+                    if s > best or (s == best and extra and not x):
+                        best, extra = s, x
+            if best < WEAK:
+                continue
+            if self._only_a_likeness(e, extra, amount, scam):
+                best = HINT          # a 'did you mean', never matched, whatever the amount
+            out.append((best, e))
         return out
+
+    @staticmethod
+    def _only_a_likeness(e: dict, extra: tuple[str, ...], amount: float | None,
+                         scam: bool) -> bool:
+        if scam and not _SCAM.search(_fold(e.get("merchant", ""))):
+            return True                  # 'NETFLIX GIFT CARD', 'NETFLIX TECH SUPPORT'
+        if not extra:
+            return False
+        if set(extra) & _OTHER_BUSINESS:
+            return True                  # 'COSTCO WHOLESALE', 'ROGERS CENTRE'
+        reg = e.get("amount") or 0.0
+        if amount is None or not e.get("amount_known", True) or reg <= 0:
+            return False
+        ratio = abs(amount) / reg
+        return not (_PRICE_BAND[0] <= ratio <= _PRICE_BAND[1])
 
     def _match(self, merchant: Any, amount: float | None) -> tuple[dict | None, dict | None]:
         """(the register entry this line is, a 'did you mean' hint)."""
-        ranked = self._ranked(merchant)
+        ranked = self._ranked(merchant, amount)
         strong = [(s, e) for s, e in ranked if s >= STRONG]
 
         def gap(e):
@@ -684,8 +850,9 @@ class Guardian:
             return min(tied, key=lambda e: (gap(e), not e.get("active", True))), None
         weak = sorted(((s, e) for s, e in ranked if s < STRONG), key=lambda x: -x[0])
         if weak and amount is not None:
-            agree = [e for _, e in weak
-                     if e.get("amount_known", True) and _amounts_agree(e["amount"], abs(amount))]
+            agree = [e for s, e in weak
+                     if s >= WEAK and e.get("amount_known", True)
+                     and _amounts_agree(e["amount"], abs(amount))]
             if agree:
                 return min(agree, key=gap), None
         return None, (weak[0][1] if weak else None)
@@ -693,6 +860,8 @@ class Guardian:
     def _registration_target(self, key: str) -> dict | None:
         compact = key.replace(" ", "")
         for e in self._entries():
+            if e.get("merged_into"):
+                continue
             if e["key"] == key or e["key"].replace(" ", "") == compact or key in e.get("aliases", []):
                 return e
         return None
@@ -754,7 +923,13 @@ class Guardian:
         cad, cad_ok = _norm_cadence(cadence)
         auth, auth_ok = _parse_bool(authorized_recurring)
         warnings = []
-        if not cad_ok:
+        two_ways = re.sub(r"[^a-z ]+", " ", _fold(cadence)).split()
+        if not cad_ok and " ".join(two_ways) in _CADENCE_TWO_WAYS:
+            warnings.append(f"'{cadence}' can mean every two months or twice a month, so I "
+                            f"did not guess and will not check how often it is charged. "
+                            f"Ask which, then add it again as 'every two months' or "
+                            f"'twice a month'.")
+        elif not cad_ok:
             warnings.append(f"I did not understand how often ('{cadence}'), so I will not "
                             f"check how often it is charged.")
         if not auth_ok:
@@ -796,7 +971,12 @@ class Guardian:
         cache: dict[tuple, str] = {}
         hist = []
         for r in self._charges():
-            if r.get("unreadable") or r["amount"] <= 0:
+            # a card test, a scam payment or a second bill is not what this
+            # place 'usually charges' (verify I-47: a $1 test made $145 look
+            # like a typo, ten times the usual)
+            if (r.get("unreadable") or r["amount"] < 2.00
+                    or r.get("verdict") in ("possible_card_testing", "possible_scam",
+                                            "duplicate")):
                 continue
             k = (r["merchant"], r["amount"])
             if k not in cache:
@@ -829,7 +1009,8 @@ class Guardian:
                           amount=change["amount"], cadence=change["cadence"],
                           authorized_recurring=change["authorized_recurring"],
                           note=change["note"] or target.get("note", ""), active=True,
-                          amount_known=True, updated=now)
+                          amount_known=True, updated=now,
+                          agreed_on=self._today().isoformat())
             entry = target
         else:
             entry = {
@@ -839,6 +1020,9 @@ class Guardian:
                 "authorized_recurring": change["authorized_recurring"],
                 "note": change["note"], "active": True, "cancelled_on": None,
                 "amount_known": True, "aliases": [], "updated": now, "v": 2,
+                # the day he said it: a one-time agreement's charge comes then,
+                # so one long after is a renewal (verify I-38)
+                "agreed_on": self._today().isoformat(),
             }
             self.c.data["expected_charges"].append(entry)
         if not log:
@@ -891,6 +1075,25 @@ class Guardian:
                                 f"'{merchant}'. Did you mean {best['merchant']}?",
                         "tell_the_user": f"Ask: did you mean {best['merchant']}? Then "
                                          f"record the cancellation under that name."}
+            was = entry.get("cancelled_on") if entry is not None else None
+            if (was and not entry.get("active", True) and iso > was
+                    and not self.owner_present()):
+                # A later date would make the charges in between look normal:
+                # quieter because an AI asked (verify I-47: 2026-08-01 moved
+                # to 2027-12-31 dropped a $45.18 dispute to $0). It waits.
+                p = self._propose("cancel", {"merchant": entry["merchant"],
+                                             "cancelled_on": iso, "was": was,
+                                             "said": str(on or "").strip()}, entry, [])
+                self.c._save()
+                out = self._proposal_result(p, None)
+                out.update(marked_cancelled=0, cancelled_on=was,
+                           matched_to=entry["merchant"])
+                out["note"] = (f"{entry['merchant']} is already on file as cancelled on "
+                               f"{was}. A later date would make JEFFEREY quieter about the "
+                               f"charges in between, so it waits for the owner to confirm "
+                               f"it on his own Mac. Until then, any charge after {was} is "
+                               f"still flagged.")
+                return out
             if entry is None:
                 # Never registered, but the user says they cancelled it — keep it
                 # anyway, so a charge that shows up later is caught. Asked for
@@ -971,7 +1174,8 @@ class Guardian:
         who = _client()
         p = {"id": _ident("p-", f"{kind}|{change}|{time.time_ns()}"),
              "kind": kind, "change": change, "target": target["id"] if target else None,
-             "asked_by": who, "asked_on": _stamp(), "status": "waiting", "why": why}
+             "asked_by": who, "asked_on": _stamp(), "asked_day": self._today().isoformat(),
+             "status": "waiting", "why": why}
         props.append(p)
         self._log(f"Charge register: {who} asked to {self._describe(p)}",
                   "proposed, waiting for the owner", change.get("amount"), client=who)
@@ -982,6 +1186,9 @@ class Guardian:
         ch = p["change"]
         if p["kind"] == "alias":
             return f"treat '{ch['descriptor']}' as {ch['merchant']}"
+        if p["kind"] == "cancel":
+            return (f"move the day {ch['merchant']} was cancelled from {ch['was']} to "
+                    f"{ch['cancelled_on']}")
         return (f"add {ch['merchant']} at {_m(ch['amount'])} "
                 f"{_CADENCE_SAID.get(ch['cadence'], ch['cadence'])}"
                 f"{'' if ch['authorized_recurring'] else ', with no automatic renewal'}")
@@ -1007,7 +1214,7 @@ class Guardian:
         def first_up(s: str) -> str:          # 'add PAYPAL *X …' keeps its capitals
             return s[:1].upper() + s[1:]
         return [{"id": p["id"], "what": first_up(self._describe(p)) + ".",
-                 "asked_by": p["asked_by"], "asked_on": p["asked_on"][:10],
+                 "kind": p["kind"], "asked_by": p["asked_by"], "asked_on": p["asked_on"][:10],
                  "why": list(p.get("why", []))}
                 for p in self.c.data.get("charge_proposals", [])
                 if p.get("status") == "waiting"]
@@ -1025,12 +1232,27 @@ class Guardian:
                       if x["id"] == proposal_id and x.get("status") == "waiting"), None)
             if p is None:
                 return {"error": "That change is not waiting any more."}
+            target = next((e for e in self._entries() if e["id"] == p.get("target")), None)
             if p["kind"] == "alias":
                 self._apply_alias(p["change"], log=False)
                 note = f"'{p['change']['descriptor']}' now counts as {p['change']['merchant']}."
+            elif p["kind"] == "cancel":
+                if target is None:
+                    return {"error": "That entry is no longer in the register."}
+                target.update(active=False, cancelled_on=p["change"]["cancelled_on"],
+                              updated=_stamp())
+                if p["change"].get("said") and p["change"]["said"] != p["change"]["cancelled_on"]:
+                    target["cancelled_on_said"] = p["change"]["said"]
+                else:
+                    target.pop("cancelled_on_said", None)
+                note = (f"{target['merchant']} is on file as cancelled on "
+                        f"{target['cancelled_on']}.")
             else:
-                target = next((e for e in self._entries() if e["id"] == p.get("target")), None)
                 entry = self._apply_expect(p["change"], target, by="the owner", log=False)
+                # the agreement dates from when he said it, not from today
+                asked = p.get("asked_day")
+                if asked and asked < entry.get("agreed_on", asked):
+                    entry["agreed_on"] = asked
                 note = (f"{entry['merchant']} {_m(entry['amount'])} "
                         f"{_CADENCE_SAID.get(entry['cadence'], entry['cadence'])} "
                         f"is in your register.")
@@ -1108,11 +1330,22 @@ class Guardian:
             return run
         results, errors = run["results"], run["errors"]
         flagged = [r for r in results if r["verdict"] not in QUIET]
-        flagged.sort(key=lambda r: r["verdict"] in INFORMATIONAL)   # alarms first
         attention = [r for r in flagged if r["verdict"] not in INFORMATIONAL]
         info = [r for r in flagged if r["verdict"] in INFORMATIONAL]
         refunds = [r for r in results if r["verdict"] == "refund"]
-        total = round(sum(r["recoverable"] for r in flagged), 2)
+        # What is at stake, less what the same merchant already refunded on
+        # this statement (verify I-39: '$95.00 at stake' beside its $95 refund)
+        claim: dict[str, float] = {}
+        back: dict[str, float] = {}
+        for r, g in zip(results, run.get("groups") or [None] * len(results)):
+            if r["verdict"] == "refund":
+                back[g] = back.get(g, 0.0) - r["amount"]
+            elif r["verdict"] not in QUIET:
+                claim[g] = claim.get(g, 0.0) + r["recoverable"]
+        gross = round(sum(claim.values()), 2)
+        total = round(sum(max(0.0, c - back.get(g, 0.0)) for g, c in claim.items()), 2)
+        netted = round(gross - total, 2)
+        flagged.sort(key=lambda r: r["verdict"] in INFORMATIONAL)   # alarms first
         annual = round(sum(
             r["recoverable"] * (PER_YEAR.get(r["cadence"], 1)
                                 if r["verdict"] == "amount_increased" and r["authorized_on_file"]
@@ -1130,8 +1363,16 @@ class Guardian:
         if not n and not errors:
             parts.append("There were no charges in that statement.")
         elif attention:
+            if netted and not total:
+                stake = (f"the same place already refunded {_m(netted)}, so nothing is left "
+                         f"at stake")
+            elif netted:
+                stake = (f"{_m(total)} at stake, after {_m(netted)} the same places already "
+                         f"refunded")
+            else:
+                stake = f"{_m(total)} at stake"
             parts.append(f"{lead}{len(attention)} of {n} charges need your attention "
-                         f"({_m(total)} at stake).")
+                         f"({stake}).")
         elif n:
             parts.append(lead + ("everything matches what you agreed to." if lead else
                                  "Everything on this statement matches what you agreed to.")
@@ -1178,16 +1419,31 @@ class Guardian:
         if err:
             return None, f"{merchant}: {err}"
         said = raw.get("date")
+        alt = None
         if said is None or not str(said).strip():
             iso = None
         else:
-            iso, derr, _amb = _parse_date(said, today)
+            iso, derr, amb = _parse_date(said, today)
             if derr:
                 return None, f"{merchant}: {derr}"
-        ref = str(raw.get("ref") or raw.get("reference") or raw.get("line_id") or "").strip()
-        return {"merchant": str(merchant), "amount": amt, "date": iso,
+            # '11/10/2026' is 10 November to some and 11 October to others
+            # (verify I-39). A statement lists charges already made, so a
+            # reading in the future is not the one; when both are past, the
+            # other is kept, and a verdict that depends on which is a question.
+            alt = _other_reading(said) if amb else None
+            soon = (today + _dt.timedelta(days=2)).isoformat()
+            if iso > soon and alt and alt <= soon:
+                iso, alt = alt, None
+            elif iso > soon:
+                return None, (f"{merchant}: '{str(said).strip()}' is a date in the future, and "
+                              f"a statement only lists charges already made; please check "
+                              f"the date")
+            elif alt and alt > soon:
+                alt = None
+        return {"merchant": str(merchant), "amount": amt, "date": iso, "date_alt": alt,
                 "date_said": str(said).strip() if said is not None else "",
-                "ref": ref, "cents": int(round(amt * 100))}, None
+                "ref": _ref(raw.get("ref") or raw.get("reference") or raw.get("line_id")),
+                "cents": int(round(amt * 100)), "uncertain": False}, None
 
     def _check(self, lines: list, record: bool) -> dict:
         today = self._today()
@@ -1219,16 +1475,22 @@ class Guardian:
             touched = {line["group"] for line in parsed}
             stored = self._charges()
             members: dict[str, list] = {g: [] for g in touched}
+            given = {(line["group"], line["cents"], line["date"]) for line in parsed
+                     if line["date"] is not None}
+            confirmed = False
             for idx, rec in enumerate(stored):
                 if rec.get("unreadable"):
                     continue
                 g = group(rec["merchant"], rec["amount"])[0]
                 if g in members:
-                    members[g].append({"rec": rec, "merchant": rec["merchant"],
-                                       "amount": rec["amount"], "date": rec.get("date"),
-                                       "seq": rec.get("seq", 1), "ref": rec.get("ref", ""),
-                                       "cents": int(round(rec["amount"] * 100)),
-                                       "order": idx})
+                    cents = int(round(rec["amount"] * 100))
+                    if (keep and rec.get("date_uncertain")
+                            and (g, cents, rec.get("date")) in given):
+                        # the date has now been given for this very charge
+                        rec.pop("date_uncertain", None)
+                        rec["date_confirmed"] = _stamp()
+                        confirmed = True
+                    members[g].append(self._item(rec, idx))
             base = len(stored)
             for j, line in enumerate(parsed):
                 line["order"] = base + j
@@ -1261,6 +1523,8 @@ class Guardian:
                         rec["ref"] = line["ref"]
                     if line["date_said"] and line["date_said"] != line["date"]:
                         rec["date_said"] = line["date_said"]
+                    if line.get("date_alt"):
+                        rec["date_alt"] = line["date_alt"]
                     stored.append(rec)
                     kept = changed = True
                 results.append(self._result(line, v, already, kept))
@@ -1278,26 +1542,54 @@ class Guardian:
                                 it["rec"]["verdict"] = v["verdict"]
                                 it["rec"]["recoverable"] = round(v["recover"], 2)
                                 changed = True
-                if changed:
+                if changed or confirmed:
                     self.c._save()
             return {"results": results, "errors": errors,
+                    "groups": [line["group"] for line in parsed],
                     "recorded": sum(1 for r in results if r.get("kept"))}
 
         return self._transaction(run)
+
+    @staticmethod
+    def _item(rec: dict, idx: int) -> dict:
+        """A stored charge, the way it is judged beside new ones."""
+        return {"rec": rec, "merchant": rec["merchant"], "amount": rec["amount"],
+                "date": rec.get("date"), "seq": rec.get("seq", 1), "ref": _ref(rec.get("ref")),
+                "cents": int(round(rec["amount"] * 100)), "order": idx,
+                "date_alt": rec.get("date_alt"), "date_said": rec.get("date_said", ""),
+                "uncertain": bool(rec.get("date_uncertain"))}
 
     def _evaluate(self, entry: dict | None, items: list[dict]) -> tuple[dict, dict]:
         """Judge every charge of one merchant in date order. A charge seen
         again (same amount, date and line) is the same charge: it gets its
         twin's verdict and never counts twice."""
-        canon: dict[tuple, dict] = {}
+        # Within one amount and day, the charges are told apart by reference
+        # when they have one and by place in the statement when they do not;
+        # the same charge seen once with its reference and once without is
+        # still one charge (verify I-37: it became a 'duplicate' and an
+        # $18.63 claim). A line without a reference is the n-th charge of
+        # that day; a reference never seen before is the first charge of the
+        # day that has none yet.
+        buckets: dict[tuple, list[dict]] = {}
         twin_of: dict[int, dict] = {}
         uniq = []
         for it in sorted(items, key=lambda x: x["order"]):
-            ident = (it["cents"], it["date"], ("r", it["ref"]) if it["ref"] else ("s", it["seq"]))
-            if ident in canon:
-                twin_of[id(it)] = canon[ident]
+            charges = buckets.setdefault((it["cents"], it["date"]), [])
+            ref = _ref(it.get("ref"))
+            twin = None
+            if ref:
+                # ...an earlier check's charge, never another line of this statement
+                twin = next((c for c in charges if ref in c["_refs"]), None) or \
+                    next((c for c in charges if not c["_refs"] and "rec" in c), None)
+                if twin is not None:
+                    twin["_refs"].add(ref)
+            elif len(charges) >= it["seq"]:
+                twin = charges[it["seq"] - 1]
+            if twin is not None:
+                twin_of[id(it)] = twin
                 continue
-            canon[ident] = it
+            it["_refs"] = {ref} if ref else set()
+            charges.append(it)
             uniq.append(it)
         timeline = sorted(uniq, key=lambda x: (x["date"] is None, x["date"] or "",
                                                x["seq"], x["order"]))
@@ -1362,6 +1654,17 @@ class Guardian:
                 return V("needs_date", 0.5, 0.0,
                          f"{name} was cancelled on {c_on}. This {_m(amt)} has no date, so I "
                          f"can't tell whether it came before or after.", False)
+            alt = it.get("date_alt")
+            if alt and min(d, alt) <= c_on < max(d, alt):
+                return V("needs_date", 0.5, 0.0,
+                         f"'{it.get('date_said') or d}' could be {_spoken(d)} or "
+                         f"{_spoken(alt)}. You cancelled {name} on {_spoken(c_on)}, so "
+                         f"which one it is decides whether this {_m(amt)} came after. "
+                         f"Which day is it?", False)
+            if d > c_on and it.get("uncertain"):
+                return V("needs_date", 0.5, 0.0, _OLD_DATE.format(
+                    name=name, amt=_m(amt), d=d, what=f"came after {c_on}, the day you "
+                                                      f"cancelled"), False)
             if d > c_on:
                 return V("charged_after_cancel", 1.0, amt,
                          f"You cancelled {name} on {c_on} and they charged {_m(amt)} anyway "
@@ -1389,27 +1692,59 @@ class Guardian:
                          f"{_m(amt)} to tell whether it is that one charge or a renewal "
                          f"you never agreed to.", False)
             last = prior[-1]
+            if it.get("uncertain") or last.get("uncertain"):
+                return V("needs_date", 0.5, 0.0, _OLD_DATE.format(
+                    name=name, amt=_m(amt), d=last["date"] if last.get("uncertain") else d,
+                    what="is a second charge after the one you agreed to"), False)
             return V("unauthorized_renewal", 1.0, amt,
                      f"You agreed to pay {name} once ({_m(reg)}) and did not agree to "
                      f"automatic renewal. This {_m(amt)} on {d} is another charge after "
                      f"the one on {last['date']} — a renewal you never authorized.", False)
+        agreed = _agreed_on(entry)
+        if once and not prior and d is not None and agreed and _days(d, agreed) > _ONCE_DAYS:
+            # The first charge JEFFEREY sees came long after he agreed to pay
+            # once: almost always the renewal (verify I-38: a same-price
+            # renewal a year later was 'as agreed. Quiet.'). He is asked first,
+            # in case this is the one payment, charged late.
+            v = V("unauthorized_renewal", 1.0, amt,
+                  f"You agreed on {agreed} to pay {name} once ({_m(reg)}) and did not agree "
+                  f"to automatic renewal. This {_m(amt)} on {d} came {_days(d, agreed)} days "
+                  f"later, and no earlier charge from {name} is on file. If you already paid "
+                  f"when you agreed, this is a renewal you never authorized.", False)
+            v["ask_first"] = agreed
+            return v
         if d is not None and prior and (cad in CADENCES or cad == "unknown"):
             min_gap = CADENCES[cad][1] if cad in CADENCES else 1
+            # A plan billed every three months or longer is billed once in its
+            # period, whatever the amount: a second charge inside it is a
+            # second bill, not a price change (verify I-38: $59.99 against a
+            # yearly $119.99 was 'less than expected. Nothing to do').
+            long = cad in CADENCES and CADENCES[cad][0] >= 91
             # measured from the last charge that was itself accepted: an extra
             # bill must not push the next real renewal into looking early
-            same = [p for p in prior if _same_amount(p["amount"], amt)
+            same = [p for p in prior if (long or _same_amount(p["amount"], amt))
                     and p.get("_verdict") not in ("duplicate", "possible_card_testing")]
             if same:
                 p = same[-1]
                 gap = _days(d, p["date"])
                 if gap < min_gap:
-                    if gap == 0:
+                    if it.get("uncertain") or p.get("uncertain"):
+                        return V("needs_date", 0.5, 0.0, _OLD_DATE.format(
+                            name=name, amt=_m(amt), d=p["date"] if p.get("uncertain") else d,
+                            what="is a second bill for the same period"), False)
+                    alike = _same_amount(p["amount"], amt)
+                    if gap == 0 and alike:
                         text = f"{name} charged {_m(amt)} twice on {d}."
+                    elif gap == 0:
+                        text = (f"{name} charged {_m(p['amount'])} and {_m(amt)} on the same "
+                                f"day, {d}, but it is billed {_CADENCE_SAID.get(cad, cad)}.")
                     else:
                         text = (f"{name} is billed {_CADENCE_SAID.get(cad, cad)}, but it "
                                 f"charged {_m(amt)} on {d}, only {gap} day"
                                 f"{'' if gap == 1 else 's'} after the {_m(p['amount'])} on "
-                                f"{p['date']}.")
+                                f"{p['date']}." + ("" if alike else
+                                                   " That is a second bill inside the same "
+                                                   "period."))
                     return V("duplicate", 0.9, amt, text + before, True)
         if amt > reg + 0.01:
             delta = amt - reg
@@ -1470,16 +1805,22 @@ class Guardian:
         }
         if hint is not None and entry is None:
             out["possible_match"] = hint["merchant"]
-            out["action"] += (f" If they say it is their {hint['merchant']}, the owner can "
-                              f"confirm that this name belongs to it.")
+            out["action"] += (f" If they say it is their {hint['merchant']}, call "
+                              f"name_for_charge with this name and '{hint['merchant']}': it "
+                              f"waits for the owner to confirm, then this name counts as "
+                              f"{hint['merchant']}.")
         return out
 
     # -------------------------------------------------------------- dispute
-    def dispute_pack(self, merchant: str) -> dict:
+    def dispute_pack(self, merchant: str, not_mine: Any = False) -> dict:
         """Everything needed to get the money back, assembled — so the user
         isn't the one digging through statements at 11pm. It claims only what
         is recoverable, takes refunds off, and words the demand by what
-        actually happened."""
+        actually happened. `not_mine`: the user says charges from a place
+        that is not in his register are not his (verify regression: such a
+        charge could no longer get a pack); they are claimed in full, and the
+        way back is the bank, never a letter to that place."""
+        not_mine, _ok = _parse_bool(not_mine) if not isinstance(not_mine, bool) else (not_mine, True)
         key = _norm(merchant)
         empty = {"merchant": merchant, "what_was_authorized": None, "charges_in_dispute": [],
                  "amount_in_dispute": 0.0, "full_history": []}
@@ -1497,10 +1838,7 @@ class Guardian:
             if k not in cache:
                 cache[k] = self._group(rec["merchant"], rec["amount"])[0]
             if cache[k] == target:
-                items.append({"rec": rec, "merchant": rec["merchant"], "amount": rec["amount"],
-                              "date": rec.get("date"), "seq": rec.get("seq", 1),
-                              "ref": rec.get("ref", ""),
-                              "cents": int(round(rec["amount"] * 100)), "order": idx})
+                items.append(self._item(rec, idx))
         if not items and entry is None and hint is not None:
             return dict(empty, what_was_authorized="nothing on file — no agreement recorded",
                         how_to_use=f"Nothing is on file under '{merchant}'. Ask whether they "
@@ -1521,7 +1859,17 @@ class Guardian:
                 refunds.append(row)
             elif v["verdict"] in RECOVERABLE and v["recover"] > 0:
                 disputed.append(dict(row, what_happened=v["detail"],
-                                     authorized_on_file=v["authorized"]))
+                                     authorized_on_file=v["authorized"],
+                                     **({"ask_first": v["ask_first"]} if v.get("ask_first")
+                                        else {})))
+            elif (not_mine and entry is None and v["verdict"] in NOT_RECOGNISED
+                  and it["amount"] > 0):
+                row["recoverable"] = it["amount"]
+                disputed.append(dict(row, verdict="not_recognised",
+                                     what_happened=(f"{_m(it['amount'])} at '{it['merchant']}'"
+                                                    f"{' on ' + it['date'] if it['date'] else ''}"
+                                                    f", which the user says is not theirs."),
+                                     authorized_on_file=False))
         claimed = sum(r["recoverable"] for r in disputed)
         refunded = round(sum(-r["amount"] for r in refunds), 2)
         amount = round(max(0.0, claimed - refunded), 2)
@@ -1559,6 +1907,9 @@ class Guardian:
         if not disputed:
             text = (f"Nothing from {name} is in dispute: every charge on file is as agreed, "
                     f"or is waiting for an answer from the user. There is no letter to write.")
+            if entry is None:
+                text += (f" If the user says a charge from {name} is not theirs, call "
+                         f"dispute_pack again with not_mine=true.")
             if refunded:
                 text += f" {name} has refunded {_m(refunded)}."
             return text
@@ -1574,9 +1925,23 @@ class Guardian:
             return ", ".join(r["date"] or "no date" for r in rows)
 
         parts = []
-        letter = [v for v in by if v != "possible_card_testing"]
+        bank = ("possible_card_testing", "not_recognised")
+        letter = [v for v in by if v not in bank]
         ask = round(max(0.0, sum(r["recoverable"] for r in disputed
-                                 if r["verdict"] != "possible_card_testing") - refunded), 2)
+                                 if r["verdict"] not in bank) - refunded), 2)
+        if "not_recognised" in by:
+            parts.append(f"The user says the charges from {name} "
+                         f"({dates(by['not_recognised'])}, "
+                         f"{_m(sum(r['recoverable'] for r in by['not_recognised']))} in all) are "
+                         f"not theirs. Do not write to {name}: the next step is to call the "
+                         f"bank using the number on the back of the card, say these charges "
+                         f"are not theirs, and ask for them back and for a new card. Calling "
+                         f"is an Act: authorize_action first, with no amount, then log_action.")
+        first = sorted({r["ask_first"] for r in disputed if r.get("ask_first")})
+        if first:
+            parts.append(f"Before writing anything, ask the user whether they already paid "
+                         f"{name} once when they agreed (on {first[0]}). If this charge was "
+                         f"that one payment, there is nothing to dispute.")
         if "possible_card_testing" in by:
             parts.append(f"The tiny charges ({dates(by['possible_card_testing'])}) look like "
                          f"card fraud, not a billing mistake. Do not write to {name} about "
@@ -1702,8 +2067,10 @@ def review_at_the_keyboard(g: "Guardian", input_fn=input, out=print) -> int:
         out(f"     asked by {p['asked_by']} on {p['asked_on']}")
         for w in p["why"]:
             out("     Please check: " + w)
-        if answers.ask_yes_no("  Add this to your list? Type yes or no, then press "
-                              "return: ", input_fn=input_fn, out=out):
+        q = ("  Add this to your list?" if p.get("kind") == "expect"
+             else "  Make this change?")
+        if answers.ask_yes_no(q + " Type yes or no, then press return: ",
+                              input_fn=input_fn, out=out):
             with access.owner_console():          # his own hands, this one change
                 r = g.confirm_change(p["id"])
             out("     Done. " + str(r.get("note") or r.get("error") or ""))

@@ -139,14 +139,37 @@ def _drive_name() -> str | None:
     return home.marker().get("name") or r.name
 
 
+def _conf_path() -> Path:
+    """Where the chosen folder is remembered: on the Self-Cloud drive when
+    the life is on one — so another Mac it is plugged into keeps nothing of
+    it (verify I-61) — and in this Mac's ~/.jefferey otherwise."""
+    d = home.data()
+    return (d / "wall.conf") if d else CONF
+
+
 def _remembered() -> dict:
-    if not CONF.exists():
-        return {}
-    try:
-        conf = json.loads(CONF.read_text())
-        return conf if isinstance(conf, dict) else {}
-    except Exception:
-        return {}
+    """The remembered folder: the drive's note first, then the one an older
+    version kept in this Mac's home folder (still read)."""
+    for p in dict.fromkeys((_conf_path(), CONF)):
+        try:
+            conf = json.loads(p.read_text())
+        except Exception:
+            continue
+        if isinstance(conf, dict):
+            return conf
+    return {}
+
+
+def _volume(path: str) -> Path | None:
+    """The drive a path lives on ('/Volumes/Self Cloud/library' →
+    '/Volumes/Self Cloud'), or None for a folder on this Mac."""
+    parts = Path(path).parts
+    for base in home.MOUNT_BASES:
+        b = Path(base).parts
+        depth = len(b) + (2 if base in home._PER_USER else 1)
+        if parts[:len(b)] == b and len(parts) >= depth:
+            return Path(*parts[:depth])
+    return None
 
 
 def _remembered_folder(conf: dict) -> Path | None:
@@ -168,10 +191,21 @@ def ask_folder() -> Path:
     if folder:
         return folder
 
-    default = Path.home() / "Pictures"
+    # On the drive, the photographs belong in its own 'library' folder; this
+    # Mac's Pictures may be someone else's (verify I-61: on another Mac,
+    # pressing return read that Mac's pictures onto the drive).
+    r = home.root()
+    if r:
+        default = r / "library" if (r / "library").is_dir() else None
+    else:
+        default = Path.home() / "Pictures"
     say(f"\n  Where are your photographs?")
-    say(f"  {D}Drag the folder into this window and press return — or just press"
-        f"\n   return for {default}.{O}\n")
+    if default:
+        say(f"  {D}Drag the folder into this window and press return — or just press"
+            f"\n   return for {default}.{O}\n")
+    else:
+        say(f"  {D}Drag the folder into this window and press return. (Or copy them"
+            f"\n   into the 'library' folder on the Self-Cloud drive first.){O}\n")
     for attempt in range(ASK_LIMIT):
         try:
             typed = input("  folder: ")
@@ -181,6 +215,11 @@ def ask_folder() -> Path:
             sys.exit(1)
         plain = unescape(typed)
         folder = Path(plain).expanduser() if plain else default
+        if folder is None:
+            bad("No folder was given.")
+            say(f"  {D}Drag the folder of photographs into this window, then press "
+                f"return.{O}\n")
+            continue
         if folder.name.lower().endswith((".photoslibrary", ".photolibrary")):
             explain_photos_library([folder])
             say(f"\n  {D}Drag a folder of exported photographs in, then press return.{O}\n")
@@ -198,7 +237,6 @@ def ask_folder() -> Path:
         bad("That still isn't a folder I can find. Nothing was read.")
         say(f"  {D}Double-click 'Show me my life' again when you're ready.{O}")
         sys.exit(1)
-    r = home.root()
     saved = {"photos": str(folder)}
     if r:
         try:                                 # remembered relative to the drive,
@@ -206,9 +244,13 @@ def ask_folder() -> Path:
         except ValueError:                   # so a renamed drive still finds it
             pass
         saved["drive"] = _drive_name()
-    CONF.parent.mkdir(parents=True, exist_ok=True)
-    CONF.write_text(json.dumps(saved, indent=2))
-    ok(f"Remembered. Change it later by deleting {CONF}")
+    where = _conf_path()
+    try:
+        home._write_private(where, json.dumps(saved, indent=2).encode("utf-8"))
+    except OSError:
+        warn("I could not remember this folder for next time; I will ask again.")
+        return folder
+    ok(f"Remembered. Change it later by deleting {where}")
     return folder
 
 
@@ -217,8 +259,18 @@ def drive_missing() -> str | None:
     Reading them again into this Mac's home folder would split the life in
     two, so say so instead."""
     conf = _remembered()
-    if conf.get("drive") and not home.root() and not os.environ.get("SELFCLOUD_INDEX"):
+    if home.root() or os.environ.get("SELFCLOUD_INDEX"):
+        return None
+    if conf.get("drive"):
         return conf["drive"]
+    # An older version remembered only the folder: one on a drive that is
+    # not plugged in now is still the drive's (verify X-01: it fell back to
+    # this Mac's Pictures and began a second index on the laptop).
+    vol = _volume(conf.get("photos") or "") if conf.get("photos") else None
+    if vol is not None and not vol.is_dir():
+        return vol.name
+    if conf.get("photos_on_drive") is not None:
+        return "Self-Cloud"
     return None
 
 

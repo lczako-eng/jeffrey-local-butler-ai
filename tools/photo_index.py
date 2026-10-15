@@ -261,6 +261,17 @@ class PhotoIndex:
                 return self.anchor / r
         return None
 
+    def away(self, path: str | None, rel: str | None = None) -> bool:
+        """Is the original away for now rather than deleted: kept in iCloud
+        with only a placeholder on this Mac ('Optimize Mac Storage'), or on
+        a drive that is not plugged in? Its cached copy for the wall is kept
+        and shown (verify regression: such photos vanished from the wall
+        until downloaded again)."""
+        cands = [Path(path)] if path else []
+        if rel:
+            cands.append(self.anchor / rel)
+        return any(offloaded(c) or unplugged(c) for c in cands)
+
     def where(self, sha: str) -> Path | None:
         """Where this photo can be reached now, or None — None also when it
         is marked missing or was forgotten."""
@@ -463,6 +474,30 @@ def sha256(path: Path, chunk: int = 1 << 20) -> str:
         while block := fh.read(chunk):
             h.update(block)
     return h.hexdigest()
+
+
+def offloaded(p: Path) -> bool:
+    """Only a cloud placeholder of this photo is on the Mac: the older
+    '.name.icloud' file beside it, or a 'dataless' file (macOS keeps the
+    name and fetches the bytes when it is opened)."""
+    p = Path(p)
+    try:
+        if (p.parent / f".{p.name}.icloud").exists():
+            return True
+        return bool(getattr(os.stat(p), "st_flags", 0) & 0x40000000)   # SF_DATALESS
+    except OSError:
+        return False
+
+
+def unplugged(p: Path) -> bool:
+    """The photo lives on a drive that is not plugged in now."""
+    parts = Path(p).parts
+    for base in home.MOUNT_BASES:
+        b = Path(base).parts
+        depth = len(b) + (2 if base in home._PER_USER else 1)
+        if parts[:len(b)] == b and len(parts) > depth:
+            return not Path(*parts[:depth]).is_dir()
+    return False
 
 
 def is_bundle(p: Path) -> bool:
@@ -672,6 +707,8 @@ def reconcile(idx: PhotoIndex, source: Path, seen: dict[str, Path],
             continue
         if idx.locate(path, rel) is not None:
             continue                             # still there, just not read this time
+        if idx.away(path, rel):
+            continue                             # in iCloud for now, or its drive is out
         idx.db.execute("UPDATE photos SET missing_since=? WHERE sha256=?", (now, sha))
         idx.drop_thumb(sha)
         gone += 1

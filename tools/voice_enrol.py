@@ -22,9 +22,12 @@ The safeguards from FOUNDER_DIRECTIONS §1 are in the code, not just the docs:
   4. EVERY SITTING BEGINS WITH CONSENT, IN THE PERSON'S OWN VOICE: "I am ___,
      it is ___, and I am recording my own voice for my own Self-Cloud, to be
      used only as I direct. Today's words are ___." The three words are new
-     every time, so an old recording (a voicemail, a video) cannot stand in
-     for the person. A silent or steady-noise take is refused. Consent counts
-     only while its recording is there and matches its checksum.
+     every time, so an old recording (a voicemail, a video) does not have
+     them. JEFFEREY cannot yet hear WHICH words were said (there is no speech
+     recognition on the machine), so the manifest says the words were shown,
+     never that they were checked. A silent take, or one steady sound (even
+     after a pause), is refused. Consent counts only while its recording is
+     there and matches its checksum.
   5. ONE FOLDER, ONE PERSON. Carrying on an existing set shows whose it is and
      when they agreed, and asks "are you that person?" (pressing return is
      not yes). A voice that sounds clearly different from the one already
@@ -86,8 +89,14 @@ SOUND_RMS = 0.005          # a slice louder than this has something in it
 MIN_SOUND_SECONDS = 0.3    # any take: at least this much sound, or it was silence
 MIN_CONSENT_SECONDS = 4.0  # the consent sentence cannot be read faster than this
 MIN_CONSENT_SPEECH = 2.0   # ...and at least this much of it must be speech
+MIN_CONSENT_BURSTS = 6     # ...in at least this many separate rises: speech comes in
+                           # syllables, a held tone (even after a pause) does not
 MAX_TRIES = 5              # unusable takes in a row before giving up for now
-VOICE_DIFFERS = 1.5        # pitch ratio beyond which a voice "sounds different"
+# Pitch ratio beyond which a voice "sounds different" and the speaker must
+# say "it is me". A tripwire, not proof of who is speaking: two people of
+# similar pitch are not told apart (verify I-54: 150 Hz against 110 Hz, 1.36,
+# passed at 1.5; one person's pitch moves far less than that between days).
+VOICE_DIFFERS = 1.3
 
 NAME_MAX_CHARS = 60
 NAME_MAX_WORDS = 6
@@ -243,7 +252,35 @@ def clean_name(who: str) -> str:
         raise Refused("A name can only have letters, spaces, hyphens (-), "
                       "apostrophes (') and dots (.). Please type just the name. "
                       "Nothing was recorded.")
+    if _reads_like_a_sentence(name):
+        raise Refused("That reads like a sentence, not a name. Please type just the "
+                      "name of the person who will be speaking. Nothing was recorded.")
     return name
+
+
+# A dot belongs after an initial ('J. R. Smith') or a short title ('Dr.',
+# 'Jr.'), never at the end of a sentence (verify I-54: 'Bob. I do not
+# consent' and 'Nobody. I refuse' went into the consent sentence).
+_TITLES = frozenset("dr mr mrs ms mme mlle m jr sr st ste rev fr sgt col capt lt".split())
+# Words no name is made of, that turn the consent into something else:
+# 'I', 'me', 'not', 'refuse', 'consent', in English and French.
+_NOT_NAME = frozenset("""i me my myself not never nobody noone refuse refuses refused
+    refusing consent consents consenting agree agrees disagree withdraw dont don't
+    doesnt doesn't cannot can't won't without unless nor je moi pas jamais personne
+    refuse refuser refusé consens accepte""".split())
+
+
+def _reads_like_a_sentence(name: str) -> bool:
+    for w in name.split():
+        if w.strip(".").replace("’", "'").casefold() in _NOT_NAME:
+            return True
+        # every piece a dot ends is an initial or a title: 'J.', 'J.R.',
+        # 'Dr.', 'St.-Jean' — never 'Bob.' or 'Bob.I'
+        for piece in w.split(".")[:-1]:
+            p = piece.strip("-'’").casefold()
+            if len(p) > 1 and p not in _TITLES:
+                return True
+    return False
 
 
 def slug(who: str) -> str:
@@ -562,6 +599,28 @@ def speech_seconds(samples, rate: int = RATE) -> float:
     return float((lv > max(SOUND_RMS, 2 * floor)).sum() * FRAME_SECONDS)
 
 
+def bursts(samples, rate: int = RATE) -> int:
+    """How many times the sound rises clearly after dipping: one per syllable
+    or word for someone speaking, one for a held tone or a hum — however much
+    silence comes before it (verify I-54: a second of silence first made a
+    steady tone count as speech)."""
+    import numpy as np
+    lv = _frame_levels(samples, rate)
+    snd = lv[lv > SOUND_RMS]
+    if snd.size == 0:
+        return 0
+    top = float(np.percentile(snd, 90))
+    hi, lo = 0.5 * top, 0.25 * top
+    n, low = 0, True
+    for x in lv:
+        if low and x > hi:
+            n += 1
+            low = False
+        elif x < lo:
+            low = True
+    return n
+
+
 def take_problem(samples, rate: int = RATE, consent: bool = False) -> str | None:
     """None if the take can be kept; otherwise the plain reason it cannot."""
     secs = len(samples) / rate
@@ -574,7 +633,8 @@ def take_problem(samples, rate: int = RATE, consent: bool = False) -> str | None
         if secs < MIN_CONSENT_SECONDS:
             return ("That was too short to be the whole sentence. Please read all "
                     "of it aloud, including today's words.")
-        if speech_seconds(samples, rate) < MIN_CONSENT_SPEECH:
+        if (speech_seconds(samples, rate) < MIN_CONSENT_SPEECH
+                or bursts(samples, rate) < MIN_CONSENT_BURSTS):
             return ("That did not sound like someone speaking (it was one steady "
                     "sound), so it was not kept. Please read the sentence aloud "
                     "yourself.")
@@ -667,45 +727,113 @@ def _place(root: Path) -> str:
     return "in the voice folder"
 
 
+def _usual_roots() -> list[Path]:
+    """The folder in use now, the one set by SELFCLOUD_VOICE, every Self-Cloud
+    drive plugged in, and this computer's own home folder."""
+    out = [VOICE_ROOT]
+    if os.environ.get("SELFCLOUD_VOICE"):
+        out.append(Path(os.environ["SELFCLOUD_VOICE"]).expanduser())
+    with contextlib.suppress(Exception):
+        out += [dr / home.NAMESPACE / "voice" for dr in home.all_drives(any_marker=True)]
+    with contextlib.suppress(RuntimeError, KeyError):
+        out.append(Path.home() / ".selfcloud" / "voice")
+    return out
+
+
 def all_roots() -> list[Path]:
-    """Every place a voice may have been recorded: the folder in use now, the
-    one set by SELFCLOUD_VOICE, every Self-Cloud drive plugged in, and this
-    computer's own home folder (where recordings go when no drive is in)."""
+    """Every place a voice may have been recorded: the usual places, and
+    every folder chosen by hand that this Mac remembers."""
     if _ROOTS is not None:
         return [Path(r) for r in _ROOTS]
     out: list[Path] = []
     seen: set[str] = set()
-
-    def add(p: Path) -> None:
+    for p in _usual_roots() + _remembered_places():
         keys = {os.path.abspath(p), os.path.realpath(p)}
         if keys & seen:
-            return
+            continue
         seen.update(keys)
         out.append(Path(p))
-
-    add(VOICE_ROOT)
-    if os.environ.get("SELFCLOUD_VOICE"):
-        add(Path(os.environ["SELFCLOUD_VOICE"]).expanduser())
-    drives: list[Path] = []
-    with contextlib.suppress(Exception):
-        drives = home.all_drives(any_marker=True)
-    for dr in drives:
-        add(dr / home.NAMESPACE / "voice")
-    with contextlib.suppress(RuntimeError, KeyError):
-        add(Path.home() / ".selfcloud" / "voice")
     return out
 
 
+def _inside(path, folder) -> bool:
+    rp, top = os.path.realpath(path), os.path.realpath(folder)
+    return rp == top or rp.startswith(top.rstrip(os.sep) + os.sep)
+
+
+_CODE = Path(__file__).resolve().parent.parent      # JEFFEREY's own folder
+
+
 def _test_place(*paths: Path) -> bool:
-    """True only for the self-test, and only inside the temporary folder."""
+    """True only for the self-test, only inside the temporary folder, and
+    never inside JEFFEREY's own folder — wherever that folder happens to be
+    (verify regression: a copy of JEFFEREY kept under /tmp made its own
+    folder count as 'temporary')."""
     if not _SELFTEST:
         return False
-    tmp = os.path.realpath(tempfile.gettempdir())
-    for p in paths or (VOICE_ROOT,):
-        rp = os.path.realpath(p)
-        if not (rp == tmp or rp.startswith(tmp + os.sep)):
-            return False
-    return True
+    tmp = tempfile.gettempdir()
+    return all(_inside(p, tmp) and not _inside(p, _CODE) for p in paths or (VOICE_ROOT,))
+
+
+# Folders a cloud service copies off the machine. A voice is never recorded
+# into one, whatever shortcut leads there (verify I-55).
+_SYNCED = ("Library/Mobile Documents", "Library/CloudStorage", "iCloud Drive",
+           "Dropbox", "Google Drive", "OneDrive", "Box", "pCloud Drive")
+
+
+def _anchor(root: Path) -> Path | None:
+    """The real place a voice folder hangs from: the Self-Cloud drive it is
+    on, or the home folder; None for a folder chosen by hand elsewhere."""
+    here = os.path.abspath(root)
+    places: list[Path] = []
+    with contextlib.suppress(Exception):
+        places += home.all_drives(any_marker=True)
+    with contextlib.suppress(RuntimeError, KeyError):
+        places.append(Path.home())
+    for p in places:
+        top = os.path.abspath(p)
+        if here.startswith(top.rstrip(os.sep) + os.sep):
+            return Path(top)
+    return None
+
+
+def check_place(root: Path) -> None:
+    """Refused unless the voice folder really is where the screen will say
+    it is (verify I-55: a shortcut at .selfcloud or .selfcloud/jefferey on a
+    drive, or at ~/.selfcloud, sent every take into an iCloud folder while
+    the screen said 'on the Self-Cloud drive ... nothing here leaves this
+    machine'). No folder between the drive (or the home folder) and the
+    voice folder may be a shortcut; for a folder chosen by hand, none below
+    the system's own top-level folders; and never inside a folder a cloud
+    service copies away."""
+    here = Path(os.path.abspath(root))
+    top = _anchor(here)
+    if top is not None:
+        steps = [top.joinpath(*here.parts[len(top.parts):i + 1])
+                 for i in range(len(top.parts), len(here.parts))]
+    else:
+        # /tmp or /var on a Mac are the system's own shortcuts: allowed
+        steps = [Path(*here.parts[:i + 1]) for i in range(2, len(here.parts))]
+    for p in steps:
+        try:
+            st = os.lstat(p)
+        except FileNotFoundError:
+            break                     # not made yet: nothing to follow
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            raise Refused(f"The folder {p} is a shortcut to {_link_target(p)}, so "
+                          "JEFFEREY will not record a voice through it: the "
+                          "recordings could end up somewhere else. Nothing was "
+                          "recorded. Please ask someone you trust to look at it.")
+    real = os.path.realpath(here)
+    with contextlib.suppress(RuntimeError, KeyError):
+        h = os.path.realpath(Path.home())
+        for s in _SYNCED:
+            if _inside(real, os.path.join(h, s)):
+                raise Refused(f"{root} is inside a folder that a cloud service "
+                              "copies off this computer, so JEFFEREY will not "
+                              "record a voice there. Nothing was recorded.")
 
 
 @contextlib.contextmanager
@@ -824,12 +952,82 @@ def start(who: str, limit: int = len(PHRASES), recorder=record_until_enter,
         return 2
 
 
+def _legacy_name(who: str) -> str | None:
+    """The name of a set already recorded under exactly this name by an
+    older version — the Mac's account name the old launcher used ('laszlo2',
+    'l_czako') — so its owner can carry on instead of starting a second set
+    (verify regression: the set was kept but could not be continued). A new
+    set never gets such a name."""
+    tidy = " ".join(unicodedata.normalize("NFC", who or "").split())
+    if (not tidy or len(tidy) > NAME_MAX_CHARS or len(tidy.split()) > NAME_MAX_WORDS
+            or not tidy[0].isalnum() or _reads_like_a_sentence(tidy.replace(".", " "))
+            or not all(c.isalnum() or c in " _-.'" for c in tidy)):
+        return None
+    for s in _slugs(tidy):
+        p = VOICE_ROOT / s
+        if _is_link(p) or not p.is_dir():
+            continue
+        try:
+            man = load_manifest(p)
+        except Refused:
+            continue
+        if man and _norm(man.get("person") or "") == _norm(tidy):
+            return man["person"]
+    return None
+
+
+def places_path() -> Path:
+    """Where this Mac remembers voice folders chosen by hand (SELFCLOUD_VOICE),
+    so `delete` finds them later even when that setting is gone."""
+    return home.owner_dir() / "voice-places.json"
+
+
+def _remembered_places() -> list[Path]:
+    try:
+        fd = os.open(places_path(), os.O_RDONLY | _NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            got = json.loads(fh.read(1 << 20).decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return []
+    return [Path(p) for p in (got.get("places") if isinstance(got, dict) else []) or []
+            if isinstance(p, str) and os.path.isabs(p)]
+
+
+def _remember_place(root: Path) -> None:
+    """Note a voice folder that is not one of the usual places (verify I-56:
+    a set recorded under a custom SELFCLOUD_VOICE was left behind by a later
+    delete that said 'Gone.')."""
+    if _ROOTS is not None:
+        return                        # the self-test's folders are its own
+    usual: set[str] = set()
+    with contextlib.suppress(Exception):
+        usual |= {os.path.abspath(dr / home.NAMESPACE / "voice")
+                  for dr in home.all_drives(any_marker=True)}
+    with contextlib.suppress(RuntimeError, KeyError):
+        usual.add(os.path.abspath(Path.home() / ".selfcloud" / "voice"))
+    here = os.path.abspath(root)
+    known = [str(p) for p in _remembered_places()]
+    if here in usual or here in known:
+        return
+    with contextlib.suppress(OSError):
+        home._write_private(places_path(), json.dumps(
+            {"places": known + [here]}, indent=1).encode("utf-8"))
+
+
 def _start(who, limit, recorder, quiet, ask, interactive) -> int:
     say = (lambda *a, **k: None) if quiet else print
-    name = clean_name(who)
+    try:
+        name = clean_name(who)
+    except Refused:
+        name = _legacy_name(who)
+        if not name:
+            raise
     d = person_dir(name)
+    check_place(VOICE_ROOT)
     VOICE_ROOT.parent.mkdir(parents=True, exist_ok=True)
+    check_place(VOICE_ROOT)
     _secure_dir(VOICE_ROOT, create=True)
+    _remember_place(VOICE_ROOT)
     created = not os.path.lexists(d)
     _secure_dir(d, create=True)
 
@@ -971,7 +1169,7 @@ def _start(who, limit, recorder, quiet, ask, interactive) -> int:
         words = challenge_words()
         text = consent_sentence(person, words)
         say("  First, in your own voice, say that you agree. The last three words")
-        say("  are new every time, so an old recording can never stand in for you.")
+        say("  are new every time, so an old recording does not have them.")
         got, samples = capture(text, "CONSENT — read this exactly, out loud", consent=True)
         if got != "kept":
             return give_up("No consent recording, so nothing else is recorded. "
@@ -990,12 +1188,15 @@ def _start(who, limit, recorder, quiet, ask, interactive) -> int:
                 return give_up("Stopped. The new recording was not kept. If you are "
                                "someone else, please run this again with your own "
                                "name, so your voice is kept separately.")
+        # words_checked: the words were SHOWN; nothing on this machine can yet
+        # hear which words were said, and the list never claims it did
         entry = commit(samples, text, "CONSENT", kind="consent",
-                       challenge=" ".join(words),
+                       challenge=" ".join(words), words_checked=False,
                        voice_hz=round(hz, 1) if hz else None,
                        compared_with=ref_file, voice_differs=differs)
         man["consents"].append({"file": entry["file"], "sha256": entry["sha256"],
                                 "at": entry["recorded_at"], "challenge": entry["challenge"],
+                                "words_checked": False,
                                 "voice_hz": entry["voice_hz"], "voice_differs": differs})
         if not man.get("consent"):
             man["consent"] = entry["file"]
@@ -1173,36 +1374,51 @@ def _overwrite(fd: int, size: int) -> None:
         fcntl.fcntl(fd, fcntl.F_FULLFSYNC)       # macOS: past the drive's cache
 
 
-def _shred_file(p: Path, known: set[str], res: dict) -> None:
+# Inside a folder being deleted, every step goes through the open folder
+# itself (a descriptor), never through its path again: swapping the folder
+# for a shortcut half way through cannot send the deletion somewhere else
+# (verify I-55: a path-based walk overwrote and removed an outside will.txt).
+_AT = os.open in os.supports_dir_fd and os.unlink in os.supports_dir_fd
+
+
+def _readlink_at(name: str, dfd: int) -> str:
     try:
-        fd = os.open(p, os.O_RDONLY | _NOFOLLOW | _NONBLOCK)
+        return os.readlink(name, dir_fd=dfd)
+    except (OSError, NotImplementedError, TypeError):
+        return "somewhere else"
+
+
+def _shred_file(dfd: int, name: str, p: Path, known: set[str], res: dict) -> None:
+    """One file, opened through its folder `dfd` without following a link."""
+    try:
+        fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _NONBLOCK, dir_fd=dfd)
     except OSError as exc:
         if exc.errno in (errno.ELOOP, errno.EMLINK):   # became a shortcut
-            res["links"].append((p, _link_target(p)))
+            res["links"].append((p, _readlink_at(name, dfd)))
         else:
             res["unwiped"].append(p)
         with contextlib.suppress(OSError):
-            os.unlink(p)
+            os.unlink(name, dir_fd=dfd)
         return
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
-            os.unlink(p)
+            os.unlink(name, dir_fd=dfd)
             return
         if st.st_nlink > 1 and _hash_fd(fd) not in known:
             # Another name elsewhere points at these same bytes, and they are
             # not one of the recordings: overwriting would damage that other
             # file. Remove this name only, and say so.
             res["shared"].append(p)
-            os.unlink(p)
+            os.unlink(name, dir_fd=dfd)
             return
         with contextlib.suppress(OSError):
             os.fchmod(fd, 0o600)          # through the open file, never a path
         try:
-            wfd = os.open(p, os.O_WRONLY | _NOFOLLOW | _NONBLOCK)
+            wfd = os.open(name, os.O_WRONLY | _NOFOLLOW | _NONBLOCK, dir_fd=dfd)
         except OSError:
             res["unwiped"].append(p)
-            os.unlink(p)
+            os.unlink(name, dir_fd=dfd)
             return
         try:
             wst = os.fstat(wfd)
@@ -1212,7 +1428,7 @@ def _shred_file(p: Path, known: set[str], res: dict) -> None:
             _overwrite(wfd, wst.st_size)
         finally:
             os.close(wfd)
-        os.unlink(p)
+        os.unlink(name, dir_fd=dfd)
         res["wiped"] += 1
     except OSError as exc:
         res["failed"].append((p, exc.strerror or "it could not be removed"))
@@ -1220,36 +1436,67 @@ def _shred_file(p: Path, known: set[str], res: dict) -> None:
         os.close(fd)
 
 
-def _shred(path: Path, known: set[str], res: dict) -> None:
-    """Overwrite and remove everything at `path`, following no shortcut."""
+def _shred_at(dfd: int, name: str, p: Path, known: set[str], res: dict) -> None:
+    """Overwrite and remove the entry `name` of the open folder `dfd`."""
     try:
-        st = os.lstat(path)
+        st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
     except FileNotFoundError:
         return
+    except OSError:
+        res["failed"].append((p, "it could not be looked at"))
+        return
     if stat.S_ISLNK(st.st_mode):
-        res["links"].append((path, _link_target(path)))
+        res["links"].append((p, _readlink_at(name, dfd)))
         with contextlib.suppress(OSError):
-            os.unlink(path)           # the shortcut itself, never what it points to
+            os.unlink(name, dir_fd=dfd)   # the shortcut itself, never what it points to
         return
     if stat.S_ISDIR(st.st_mode):
         try:
-            with os.scandir(path) as it:
-                names = sorted(e.name for e in it)
+            sub = os.open(name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW, dir_fd=dfd)
         except OSError:
-            res["failed"].append((path, "the folder could not be opened"))
+            res["failed"].append((p, "the folder could not be opened"))
             return
-        for nm in names:
-            _shred(path / nm, known, res)
         try:
-            os.rmdir(path)
+            sst = os.fstat(sub)
+            if (sst.st_dev, sst.st_ino) != (st.st_dev, st.st_ino):
+                res["failed"].append((p, "it changed while being deleted"))
+                return
+            for nm in sorted(os.listdir(sub)):
+                _shred_at(sub, nm, p / nm, known, res)
         except OSError:
-            res["failed"].append((path, "the folder could not be removed"))
+            res["failed"].append((p, "the folder could not be opened"))
+            return
+        finally:
+            os.close(sub)
+        try:
+            os.rmdir(name, dir_fd=dfd)
+        except OSError:
+            res["failed"].append((p, "the folder could not be removed"))
         return
     if stat.S_ISREG(st.st_mode):
-        _shred_file(path, known, res)
+        _shred_file(dfd, name, p, known, res)
         return
     with contextlib.suppress(OSError):
-        os.unlink(path)               # a pipe or a device entry: no data in it
+        os.unlink(name, dir_fd=dfd)   # a pipe or a device entry: no data in it
+
+
+def _shred(path: Path, known: set[str], res: dict) -> None:
+    """Overwrite and remove everything at `path`, following no shortcut."""
+    path = Path(os.path.abspath(path))
+    if not _AT:                       # no descriptor calls here: refuse, never guess
+        res["failed"].append((path, "this computer cannot delete it safely"))
+        return
+    try:
+        pfd = os.open(path.parent, os.O_RDONLY | _DIRECTORY)
+    except FileNotFoundError:
+        return
+    except OSError:
+        res["failed"].append((path, "its folder could not be opened"))
+        return
+    try:
+        _shred_at(pfd, path.name, path, known, res)
+    finally:
+        os.close(pfd)
 
 
 def _find(slugs: list[str], roots: list[Path]) -> tuple[list[Path], list[tuple[Path, str]]]:
@@ -1275,11 +1522,87 @@ def _find(slugs: list[str], roots: list[Path]) -> tuple[list[Path], list[tuple[P
     return found, blocked
 
 
+def _whose(p: Path) -> str | None:
+    """The name a set of recordings was made under, from its own list; None
+    for a shortcut or a folder whose list cannot be read."""
+    if _is_link(p):
+        return None
+    try:
+        return (load_manifest(p) or {}).get("person") or None
+    except (Refused, OSError):
+        return None
+
+
+def _count(p: Path) -> int:
+    try:
+        return len(load_manifest(p).get("takes", [])) if not _is_link(p) else 0
+    except (Refused, OSError):
+        return 0
+
+
+def _record_deletion(root: Path, raw: str, p: Path, res: dict, complete: bool) -> None:
+    """A line in the voice folder saying a voice was deleted, when, and how
+    completely (voice-35: nothing recorded that it happened). It keeps no
+    voice and not the name itself, only a fingerprint of it, so it can show
+    a voice was deleted without keeping whose."""
+    line = json.dumps({
+        "deleted_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "name_fingerprint": hashlib.sha256(_norm(raw).encode("utf-8")).hexdigest(),
+        "folder": p.name, "files_overwritten": res["wiped"], "complete": complete,
+    }) + "\n"
+    with contextlib.suppress(OSError):
+        if _is_link(root):
+            return
+        fd = os.open(root / "deletions.jsonl",
+                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | _NOFOLLOW, 0o600)
+        try:
+            os.write(fd, line.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def _account_name() -> str:
+    with contextlib.suppress(Exception):
+        import getpass
+        return slug(getpass.getuser())
+    return ""
+
+
+def _still_kept(roots: list[Path], raw: str) -> None:
+    """Every other voice still kept, by name, and which of them may be this
+    person's too (verify I-56: an older set under the Mac's account name,
+    'laszlo', stayed while the screen said 'Gone.')."""
+    left = [(r, p, man) for r in roots for p, man in _people_in(r)]
+    if not left:
+        return
+    mine = set(_norm(raw).replace("-", " ").split())
+    acct = _account_name()
+    print("\n  Still kept here, under other names (not deleted):")
+    maybe = []
+    for r, p, man in left:
+        person = (man or {}).get("person") or p.name
+        n = len((man or {}).get("takes", []))
+        words = set(_norm(person).replace("-", " ").replace("_", " ").split())
+        flag = bool(words & mine) or (acct and p.name == acct)
+        if flag:
+            maybe.append(person)
+        print(f"    · {person} — {n} recordings, {_place(r)} ({p})"
+              + ("   <- this may be yours too" if flag else ""))
+    if maybe:
+        print(_wrap("A set marked 'this may be yours too' shares a name with yours, "
+                    "or with this computer's account (older versions of JEFFEREY "
+                    "named recordings that way). If it is your voice, delete it too, "
+                    "by the name shown: run this again and type that name.", "  "))
+
+
 def delete(who: str, force: bool = False) -> int:
     """Real deletion, in every place, by the person at the keyboard.
 
     `force` skips the typed confirmation; only the self-test may use it, and
     only inside a temporary folder. --yes on the command line is refused.
+    A set made under a name that only looks the same to the computer
+    ('Mary-Ann' for 'Mary Ann') is someone else's and is never deleted.
     """
     raw = " ".join((who or "").split())
     slugs = _slugs(who or "")
@@ -1292,8 +1615,27 @@ def delete(who: str, force: bool = False) -> int:
               "person has to be at the keyboard and type the name. Nothing was "
               "deleted.")
         return 2
-    found, blocked = _find(slugs, roots)
+    everything, blocked = _find(slugs, roots)
+    found, others = [], []
+    for p in everything:
+        person = _whose(p)
+        if person is not None and _norm(person) != _norm(raw):
+            others.append((p, person))          # a look-alike name: someone else's
+        else:
+            found.append(p)
+
+    def tell_others() -> None:
+        for p, person in others:
+            print("\n" + _wrap(f"The recordings in {p} belong to {person}, whose name "
+                               f"only looks the same to the computer as {raw}. They "
+                               f"were NOT deleted. To delete them, type that name "
+                               f"exactly as it is written: {person}"))
+
     if not found and not blocked:
+        if others:
+            tell_others()
+            print()
+            return 1
         print(f"\n  There is nothing recorded for {raw}. JEFFEREY looked:")
         for r in roots:
             print(f"    · {_place(r)} ({r})")
@@ -1306,9 +1648,13 @@ def delete(who: str, force: bool = False) -> int:
             return 2
         print(f"\n  Recordings of {raw}'s voice were found:")
         for p in found:
-            print(f"    · {_place(p.parent)} ({p})")
+            person = _whose(p)
+            who_line = (f"{person} — {_count(p)} recordings" if person else
+                        "a folder whose list of recordings cannot be read")
+            print(f"    · {who_line}, {_place(p.parent)} ({p})")
         for r, target in blocked:
             print(f"    · behind a shortcut at {r}, which points to {target}")
+        tell_others()
         try:
             ans = input(f"\n  Delete every recording of {raw}'s voice, permanently? "
                         "This cannot be undone.\n  Type the name to confirm: ")
@@ -1317,6 +1663,8 @@ def delete(who: str, force: bool = False) -> int:
         if _norm(ans) != _norm(raw):
             print("  Not deleted.\n")
             return 1
+    elif others:
+        tell_others()
 
     complete = True
     for p in found:
@@ -1335,18 +1683,24 @@ def delete(who: str, force: bool = False) -> int:
             print(_wrap(f"This was a shortcut to {_link_target_text(res)}. JEFFEREY "
                         "removed the shortcut but did not follow it, so anything there "
                         "is untouched. Please look there with someone you trust.", "    "))
+            _record_deletion(p.parent, raw, p, res, False)
             continue
+        here_complete = True
         print(f"\n  {where}:")
         print(f"    {res['wiped']} files overwritten, then removed.")
         inner = res["links"]
         if inner:
+            # What a shortcut pointed to may be a copy of the voice: it was
+            # not touched, so this is not 'Gone' (verify I-56).
+            here_complete = False
             print(_wrap(f"{len(inner)} shortcut{'s' if len(inner) > 1 else ''} removed "
                         "without being followed, so what they pointed to was not "
-                        "touched:", "    "))
+                        "touched. If that is a copy of the voice, it is still there. "
+                        "Please look there with someone you trust:", "    "))
             for lp, t in inner:
                 print(f"      {lp.name} → {t}")
         if res["shared"]:
-            complete = False
+            here_complete = False
             print(_wrap(f"{len(res['shared'])} file(s) also had another name elsewhere "
                         "on this drive and were not among the recordings, so they were "
                         "removed from here but not overwritten (the other copy was "
@@ -1354,14 +1708,16 @@ def delete(who: str, force: bool = False) -> int:
             for sp in res["shared"]:
                 print(f"      {sp.name}")
         if res["unwiped"]:
-            complete = False
+            here_complete = False
             print(_wrap(f"{len(res['unwiped'])} file(s) could not be overwritten, "
                         "only removed: " + ", ".join(u.name for u in res["unwiped"]),
                         "    "))
         if res["failed"]:
-            complete = False
+            here_complete = False
             for fp, why in res["failed"]:
                 print(f"    could not finish with {fp}: {why}")
+        complete = complete and here_complete
+        _record_deletion(p.parent, raw, p, res, here_complete)
     for r, target in blocked:
         complete = False
         print("\n" + _wrap(f"The voice folder at {r} is a shortcut to {target}. "
@@ -1370,11 +1726,12 @@ def delete(who: str, force: bool = False) -> int:
 
     if complete:
         print("\n" + _wrap(f"Gone. Every recording of {raw}'s voice that JEFFEREY "
-                           "could find was overwritten, then removed, with its list "
-                           "of recordings."))
+                           "could find under that name was overwritten, then removed, "
+                           "with its list of recordings."))
     else:
         print("\n" + _wrap("Not everything could be removed: see above. Everything "
                            "else is gone."))
+    _still_kept(roots, raw)
     print("\n  Please note:\n" +
           _wrap(f"If {raw}'s voice was ever recorded onto a Self-Cloud drive that is "
                 "not plugged in now, those recordings are still on it. Plug it in "
@@ -1480,13 +1837,20 @@ def selftest() -> int:
 
             # real deletion: files gone, folder gone, and a shortcut planted in
             # the folder is removed without the file it points to being touched
+            # — and, since that file may be a copy of the voice, it is not
+            # called 'Gone' (rc 1; it was 0 before verify I-56)
             outside = td / "keep.txt"
             outside.write_text("the owner's own file")
             os.symlink(outside, d / "take-099.wav")
             files = [d / t["file"] for t in man["takes"]]
-            assert delete("Test Person", force=True) == 0
+            with contextlib.redirect_stdout(open(os.devnull, "w")):
+                assert delete("Test Person", force=True) == 1
             assert not d.exists() and not any(f.exists() for f in files)
             assert outside.read_text() == "the owner's own file"
+            # a look-alike name never deletes someone else's set
+            with contextlib.redirect_stdout(open(os.devnull, "w")):
+                assert delete("Second-Person", force=True) == 1
+            assert person_dir("Second Person").exists()
 
         # outside the self-test, a fake microphone and --yes are refused
         assert start("Test Person", limit=0, recorder=fake, quiet=True) == 2

@@ -1085,5 +1085,199 @@ class X01IndexLocation(Temp):
         self.assertFalse(where.exists())
 
 
+
+# ======================================================================
+# After the fixes: the skeptics' and regression hunters' reproductions
+# against the first round (verify I-15, I-33, I-53, I-61, X-01 and the
+# regressions). Each failed on 35e4e9b, unless marked as a guard.
+# ======================================================================
+class AfterTheFixes(WallCase):
+
+    # ------------------------------------------------------- verify I-15
+    def test_an_old_memorys_photos_move_to_its_moment_when_the_file_is_read(self):
+        # no photo index at all: the move used to wait for an album tool
+        old = {"_rev": 2, "facts": [], "priorities": [], "goals": [], "corrections": [],
+               "permissions": {}, "actions": [], "observations": [], "opportunities": [],
+               "memories": [{"text": "We walked over the Chain Bridge.",
+                             "tags": ["Hungary", "2011", "moment:hungary-20111010"],
+                             "photos": [TRIPPING_SHA, sha_of("b")], "visibility": "private"}]}
+        f = self.tmp / "conscience.json"
+        f.write_text(json.dumps(old))
+        c = Conscience(f)
+        self.assertNotIn("photos", c.data["memories"][0])
+        m = c.data["album"]["moments"]["hungary-20111010"]
+        self.assertEqual(set(m["shas"]), {TRIPPING_SHA, sha_of("b")})
+        self.assertEqual(m["status"], "told")
+        self.assertIn("photos", json.loads(f.read_text())["memories"][0],
+                      "reading must not write")
+        p, left = run_child(self.tmp, """
+            import asyncio, json, sys
+            sys.path.insert(0, "connector")
+            import jefferey_mcp as m
+            t = asyncio.run(m.mcp.call_tool("who_am_i", {})).content[0].text
+            m.life.add_memory("A second story.")          # a real save
+            print("RESULT " + json.dumps({"text": t}))
+        """, JEFFEREY_CLIENT="jefferey", SELFCLOUD_INDEX=str(self.tmp / "no-index"))
+        r = result_of(p)
+        self.assertNotIn('"refused"', r["text"])
+        self.assertNotIn(TRIPPING_SHA, r["text"])
+        disk = json.loads(f.read_text())
+        self.assertNotIn("photos", disk["memories"][0])
+        self.assertIn(TRIPPING_SHA, disk["album"]["moments"]["hungary-20111010"]["shas"])
+
+    # ------------------------------------------------------- verify I-33
+    def test_a_rule_about_mum_closes_the_moment_of_her_funeral(self):
+        idx, c, life, rem = self.album(
+            trip("bud", "Hungary", "Budapest", (10, 11, 12), year=2019, month=2)
+            + trip("cub", "Cuba", "Varadero", (1, 2, 3), year=2016, month=7), deep=True)
+        life.add_person("Ilona", "mum", notes="died February 2019, funeral in Budapest")
+        ConscienceRules(c).set_rule("reaction", "mother", "Don't bring up Mum's funeral.")
+        first = rem.next_prompt()
+        self.assertEqual(first["moment_id"], "cuba-20160701")
+        rem.record(first["moment_id"], "We swam every day at Varadero.")
+        self.assertIsNone(rem.next_prompt()["moment_id"])
+        self.assertIsNone(rem.next_prompt(owner_opened=True)["moment_id"])
+
+    def test_rather_not_and_only_if_i_bring_it_up_close_a_moment(self):
+        for words in ("I'd rather not talk about Afghanistan. Only if I bring it up myself.",
+                      "Je préfère ne pas en parler."):
+            sub = self.tmp / f"r{len(words)}"
+            sub.mkdir()
+            add_rows(sub / "idx", trip("afg", "Afghanistan", "Kandahar", (3, 4, 5))
+                     + trip("cub", "Cuba", "Varadero", (1, 2, 3), year=2016, month=7))
+            c = Conscience(sub / "conscience.json")
+            life = Life(c)
+            trusted(c, life, deep=True)
+            rem = Reminisce(c, life, sub / "idx")
+            ConscienceRules(c).set_rule("reaction", "afghanistan", words)
+            rem.record(rem.next_prompt()["moment_id"], "Varadero was lovely.")
+            self.assertIsNone(rem.next_prompt()["moment_id"], words)
+
+    # ------------------------------------------------------- regression
+    def test_the_owners_own_sitting_is_never_told_to_wait_a_week(self):
+        idx, c, life, rem = self.album(trip("cub", "Cuba", "Varadero", (1, 2, 3), year=2016))
+        self.assertEqual(rem.next_prompt()["moment_id"], "cuba-20161001")   # an engine asked
+        self.assertIsNone(rem.next_prompt()["moment_id"])                    # it rests for engines
+        self.assertEqual(rem.next_prompt(owner_opened=True)["moment_id"], "cuba-20161001")
+
+    # ------------------------------------------------------- verify I-53
+    def test_two_word_entries_work_and_the_owner_is_told_the_truth(self):
+        today = dt.date.today()
+        rows = []
+        for i in range(3):
+            f = jpeg(self.tmp / "pix" / f"h{i}.jpg", (10, 200, 10 * i))
+            rows.append((sha_of(f"h{i}"), f, f"2023-{today:%m-%d}T1{i}:00:00", "Canada",
+                         "Halifax"))
+        f = jpeg(self.tmp / "pix" / "ny.jpg", (200, 10, 10))
+        rows.append((sha_of("ny"), f, f"2019-{today:%m-%d}T10:00:00", "United States",
+                     "New York City"))
+        add_rows(self.tmp / "idx", rows)
+        c = Conscience(self.tmp / "conscience.json")
+        rem = Reminisce(c, Life(c), self.tmp / "idx")
+        r = rem.keep_out("never_on_the_wall", "Halifax 2023, New York, Nova Scotia")
+        self.assertEqual(r["matching"], {"Halifax 2023": 3, "New York": 1, "Nova Scotia": 0})
+        lines = " ".join(reminisce._kept_out_lines("never_on_the_wall",
+                                                  "Halifax 2023, New York, Nova Scotia", r))
+        self.assertIn("'Halifax 2023' (photographs that are both) — 3 photographs", lines)
+        self.assertIn("nothing in the photographs matches it yet", lines)
+        self.start(self.tmp / "idx")
+        st, d = self.get_json("/on-this-day")
+        self.assertEqual(d["hits"], [])
+        for q in ("Halifax", "New York"):
+            st, d = self.get_json("/search?q=" + up.quote(q))
+            self.assertEqual(d["hits"], [], q)
+
+    # ------------------------------------------------- verify I-61, X-01
+    def test_on_another_mac_return_never_reads_that_macs_pictures(self):
+        drive = mark_drive(self.tmp / "Volumes" / "Self Cloud")
+        jpeg(self.tmp / "home" / "Pictures" / "not-his.jpg")
+        code = """
+            import json, sys
+            sys.path.insert(0, "tools")
+            import go
+            print("RESULT " + json.dumps(str(go.ask_folder())))
+        """
+        p, left = run_child(self.tmp, code, stdin="\n" * 6, SELFCLOUD_ROOT=str(drive),
+                            SELFCLOUD_INDEX=None)
+        self.assertNotEqual(p.returncode, 0, "it took this Mac's Pictures")
+        self.assertIn("No folder was given", p.stdout)
+        (drive / "library").mkdir()
+        p, left = run_child(self.tmp, code, stdin="\n", SELFCLOUD_ROOT=str(drive),
+                            SELFCLOUD_INDEX=None)
+        self.assertEqual(result_of(p), str(drive / "library"))
+        self.assertTrue((drive / ".selfcloud" / "jefferey" / "wall.conf").is_file())
+        self.assertEqual([x for x in left if "wall.conf" in x], [],
+                         "the folder was remembered on the other Mac")
+
+    def test_an_old_remembered_folder_on_an_unplugged_drive_is_the_drive(self):
+        (self.tmp / "home" / ".jefferey").mkdir(parents=True)
+        (self.tmp / "home" / ".jefferey" / "wall.conf").write_text(json.dumps(
+            {"photos": "/Volumes/Self Cloud/library"}))           # no 'drive': older code
+        jpeg(self.tmp / "home" / "Pictures" / "a.jpg")
+        p, left = run_child(self.tmp, """
+            import sys
+            sys.path.insert(0, "tools")
+            import go
+            sys.exit(go.main([]))
+        """, stdin="\n" * 6, SELFCLOUD_INDEX=None)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("'Self Cloud', and it isn't plugged in", p.stdout)
+        self.assertFalse(any("photo-index" in x for x in left), "began a laptop index")
+
+    def test_the_make_drive_window_undoes_every_escape(self):
+        # guard: fixed by the drive package (provision_drive --interactive)
+        import provision_drive as pd
+        self.assertEqual(pd._clean_path("/Volumes/Laszlo\\'s\\ Drive\\ \\(2\\) "),
+                         "/Volumes/Laszlo's Drive (2)")
+        self.assertEqual(pd._clean_path("'/Volumes/Self Cloud'"), "/Volumes/Self Cloud")
+
+    # ------------------------------------------------------- regressions
+    def test_a_photo_kept_in_icloud_stays_on_the_wall(self):
+        pics = self.pictures(4)
+        build(self.tmp / "idx", self.tmp / "pix")
+        self.start(self.tmp / "idx")
+        idx = PhotoIndex(self.tmp / "idx", create=False)
+        shas = [r[0] for r in idx.db.execute("SELECT sha256 FROM photos ORDER BY path")]
+        for s in shas:
+            self.assertEqual(self.get(f"/thumb/{s}")[0], 200)
+        # 'Optimize Mac Storage': the first is only a placeholder now; the
+        # second was deleted
+        os.unlink(pics[0])
+        (pics[0].parent / f".{pics[0].name}.icloud").write_bytes(b"bplist00")
+        os.unlink(pics[1])
+        build(self.tmp / "idx", self.tmp / "pix")
+        self.wall.STATE.pop("hidden", None)
+        miss = dict(idx.db.execute("SELECT path, missing_since FROM photos"))
+        self.assertIsNone(miss[str(pics[0])], "a photo in iCloud was called deleted")
+        self.assertIsNotNone(miss[str(pics[1])])
+        by_path = dict(idx.db.execute("SELECT path, sha256 FROM photos"))
+        self.assertEqual(self.get(f"/thumb/{by_path[str(pics[0])]}")[0], 200)
+        self.assertEqual(self.get(f"/thumb/{by_path[str(pics[1])]}")[0], 404)
+        st, d = self.get_json("/search?q=2016")
+        shown = {h["sha256"] for h in d["hits"]}
+        self.assertIn(by_path[str(pics[0])], shown)
+        self.assertNotIn(by_path[str(pics[1])], shown)
+
+    def test_a_drive_pulled_while_the_wall_is_up_is_said_plainly(self):
+        # guard: fixed in 35e4e9b
+        self.pictures(2)
+        build(self.tmp / "idx", self.tmp / "pix")
+        wall = self.start(self.tmp / "idx")
+        os.rename(self.tmp / "idx", self.tmp / "idx-away")         # the drive went
+        with mock.patch.object(wall, "search", side_effect=sqlite3.OperationalError(
+                "disk I/O error")):
+            st, d = self.get_json("/search?q=2016")
+        self.assertEqual((st, d["error"]), (503, wall.UNREACHABLE))
+
+    def test_the_owners_steps_and_the_rules_say_what_the_album_does_now(self):
+        # guard: docs updated in 35e4e9b
+        start = (REPO / "START_HERE.md").read_text()
+        for w in ("keep-off-wall", "never-ask", "reopen", "phone or the TV",
+                  "only where the browser understands speech"):
+            self.assertIn(w, start, w)
+        rules = (REPO / "connector" / "directives.md").read_text()
+        for w in ("skip_story", "Not yet", "Rather not"):
+            self.assertIn(w, rules, w)
+
 if __name__ == "__main__":
     unittest.main()

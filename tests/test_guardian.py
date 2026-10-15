@@ -32,6 +32,9 @@ from guardian import Guardian            # noqa: E402
 
 PY = sys.executable
 TODAY = dt.date(2026, 10, 14)
+# A statement never lists a charge from the future (verify I-39), so a test
+# that checks charges dated after TODAY runs on this later day instead.
+LATER = dt.date(2027, 12, 31)
 
 
 # ---------------------------------------------------------------- helpers
@@ -78,9 +81,10 @@ class Temp(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def guard(self, owner: bool = True, name: str = "conscience.json") -> Guardian:
+    def guard(self, owner: bool = True, name: str = "conscience.json",
+              today: dt.date = TODAY) -> Guardian:
         c = Conscience(self.tmp / name)
-        return Guardian(c, owner_present=lambda: owner, today=lambda: TODAY)
+        return Guardian(c, owner_present=lambda: owner, today=lambda: today)
 
     def child(self, code: str, **env) -> dict:
         p = subprocess.run([PY, "-c", PRELUDE + textwrap.dedent(code)], cwd=REPO,
@@ -188,7 +192,11 @@ class I36Matching(Temp):
         self.assertEqual(r["verdict"], "unexpected_merchant")
         self.assertEqual(r["recoverable"], 0.0)
         self.assertLess(r["severity"], 0.5)
-        self.assertNotIn("dispute_pack", r["action"])
+        # Changed after verify (regression): the action now says what to do
+        # if the user says it is not theirs (dispute_pack with not_mine) —
+        # never to offer a dispute before that.
+        self.assertIn("unless they say it is not theirs; then call dispute_pack",
+                      r["action"])
         st = g.review_statement([{"merchant": "SQ *JOES COFFEE TORONTO ON",
                                   "amount": 4.75, "date": "2026-10-06"}])
         self.assertEqual(st["recoverable_total"], 0.0)
@@ -342,7 +350,7 @@ class I37Idempotent(Temp):
 
     def test_cadence_windows_not_calendar_months(self):
         # money-15: Sep 30 / Oct 1 missed; money-17: weekly called duplicate
-        g = self.guard()
+        g = self.guard(today=LATER)
         g.expect_charge("GoodLife Fitness", 59.99)
         self.assertEqual(g.check_charge("GoodLife Fitness", 59.99, "2026-09-30")["verdict"],
                          "expected")
@@ -440,7 +448,7 @@ class I37Idempotent(Temp):
 class I38Cadence(Temp):
     def test_a_one_time_purchase_that_renews_is_flagged(self):
         # money-19: the GoDaddy renewal was 'as agreed. Quiet.'
-        g = self.guard()
+        g = self.guard(today=LATER)
         g.expect_charge("GoDaddy", 21.99, cadence="once", authorized_recurring=False)
         got = [g.check_charge("GODADDY.COM 480-505-8855", 21.99, d)["verdict"]
                for d in ("2025-10-10", "2026-10-10", "2026-11-10")]
@@ -451,7 +459,7 @@ class I38Cadence(Temp):
 
     def test_a_yearly_plan_billed_every_month_is_flagged(self):
         # money-18
-        g = self.guard()
+        g = self.guard(today=LATER)
         g.expect_charge("Norton 360", 119.99, "yearly")
         got = [g.check_charge("Norton 360", 119.99, d)["verdict"]
                for d in ("2026-08-14", "2026-09-14", "2026-10-14")]
@@ -461,7 +469,7 @@ class I38Cadence(Temp):
 
     def test_cadence_words_are_understood(self):
         # money-11: 'Monthly' understated the yearly cost twelvefold
-        g = self.guard()
+        g = self.guard(today=LATER)
         g.expect_charge("Netflix", 16.49, cadence="Monthly")
         r = g.check_charge("Netflix", 18.99, "2026-10-03")
         self.assertIn("$30.00 a year", r["what_happened"])
@@ -500,7 +508,7 @@ class I39DatesAndDisputes(Temp):
 
     def test_end_of_period_cancellation(self):
         # money-21
-        g = self.guard()
+        g = self.guard(today=LATER)
         g.expect_charge("SiriusXM", 14.69)
         g.mark_cancelled("SiriusXM", "2026-10-31")
         self.assertEqual(g.check_charge("SiriusXM", 14.69, "2026-10-15")["verdict"], "expected")
@@ -563,7 +571,7 @@ class I39DatesAndDisputes(Temp):
 
     def test_a_double_bill_that_was_refunded_nets_to_nothing(self):
         # money-26: the pack still demanded $95
-        g = self.guard()
+        g = self.guard(today=LATER)
         g.expect_charge("Rogers", 95.0)
         g.review_statement([{"merchant": "Rogers", "amount": 95.0, "date": "2026-10-15"},
                             {"merchant": "Rogers", "amount": 95.0, "date": "2026-10-15"},
@@ -584,7 +592,7 @@ class I39DatesAndDisputes(Temp):
         self.assertNotIn("not authorized", p["how_to_use"])
 
     def test_card_testing_goes_to_the_bank_not_into_the_letter(self):
-        g = self.guard()
+        g = self.guard(today=LATER)
         g.expect_charge("Rogers", 95.0)
         g.check_charge("Rogers", 95.0, "2026-09-15")
         g.check_charge("Rogers", 105.0, "2026-10-15")
@@ -668,7 +676,7 @@ class I47Register(Temp):
 
     def test_card_testing_charges_are_flagged(self):
         # money-09: $1.00 and $0.50 on a $95 bill were 'Nothing to do.'
-        g = self.guard()
+        g = self.guard(today=LATER)
         g.expect_charge("Rogers", 95.0)
         for amt, d in ((1.00, "2026-10-09"), (0.50, "2026-10-10")):
             r = g.check_charge("ROGERS", amt, d)
@@ -775,7 +783,7 @@ class OldStores(Temp):
     def test_an_old_store_is_read_upgraded_and_nothing_is_lost(self):
         p = self.write_old()
         before = p.read_bytes()
-        g = Guardian(Conscience(p), owner_present=lambda: True, today=lambda: TODAY)
+        g = Guardian(Conscience(p), owner_present=lambda: True, today=lambda: LATER)
         self.assertEqual(p.read_bytes(), before, "starting must not write")
         reg = g.expected_charges()
         self.assertEqual(len(reg), 3)
@@ -823,6 +831,361 @@ class OldStores(Temp):
             ident = guardian._ident("c-", str(i))
             self.assertFalse(any(ch.isdigit() for ch in ident[2:]), ident)
 
+
+
+# ======================================================================
+# After the fixes: the skeptics' and regression hunters' reproductions
+# against the first round (verify I-36, I-37, I-38, I-39, I-47 and the
+# regressions). Each failed on 35e4e9b.
+# ======================================================================
+class AfterTheFixes(Temp):
+
+    # ------------------------------------------------------- verify I-36
+    def test_a_name_that_only_starts_with_an_agreement_is_not_that_agreement(self):
+        g = self.guard()
+        g.expect_charge("Costco Membership", 65.00, "yearly")
+        for amt, d in ((142.33, "2026-09-03"), (12.50, "2026-09-10"), (142.33, "2026-09-20")):
+            r = g.check_charge("COSTCO WHOLESALE W539 OTTAWA ON", amt, d)
+            self.assertEqual(r["verdict"], "unexpected_merchant", (amt, d, r))
+            self.assertEqual(r["recoverable"], 0.0)
+            self.assertEqual(r["possible_match"], "Costco Membership")
+        self.assertEqual(g.dispute_pack("Costco Membership")["amount_in_dispute"], 0.0)
+        g.expect_charge("Rogers", 95.00)
+        for name, amt in (("ROGERS CENTRE CONCESSION", 12.25), ("ROGERS CENTRE", 95.05)):
+            self.assertEqual(g.check_charge(name, amt, "2026-09-05")["verdict"],
+                             "unexpected_merchant", name)
+        self.assertEqual(g.check_charge("ROGERS WIRELESS", 95.00, "2026-09-10")["verdict"],
+                         "expected", "the real bill became a 'duplicate'")
+        g.expect_charge("APPLE.COM/BILL", 3.99)
+        r = g.check_charge("APPLE STORE R123 RIDEAU", 1299.00, "2026-09-05")
+        self.assertEqual(r["verdict"], "unexpected_merchant")
+        self.assertNotIn("a year", r["what_happened"])
+        # ...while a real price rise under a longer statement name is still caught
+        g.expect_charge("Netflix", 18.63)
+        r = g.check_charge("NETFLIX LOS GATOS", 20.99, "2026-09-03")
+        self.assertEqual((r["verdict"], r["matched_to"]), ("amount_increased", "Netflix"))
+
+    def test_a_gift_card_or_tech_support_under_a_known_name_is_a_scam_sign(self):
+        g = self.guard()
+        g.expect_charge("Netflix", 18.63)
+        for name in ("NETFLIX GIFT CARD 7-ELEVEN", "NETFLIX TECH SUPPORT"):
+            r = g.check_charge(name, 199.0, "2026-09-05")
+            self.assertEqual(r["verdict"], "possible_scam", name)
+            self.assertNotIn("unauthorized", g.dispute_pack("Netflix")["how_to_use"])
+
+    def test_a_near_miss_points_to_the_tool_that_names_it(self):
+        g = self.guard()
+        g.expect_charge("Netflix", 18.63)
+        r = g.check_charge("NETFLX DIGITAL", 18.63 * 3, "2026-09-05")
+        if r.get("possible_match"):
+            self.assertIn("name_for_charge", r["action"])
+        r = g.check_charge("NETFLIX LOS GATOS", 400.0, "2026-09-06")
+        self.assertEqual(r["possible_match"], "Netflix")
+        self.assertIn("name_for_charge", r["action"])
+
+    def test_an_old_cancellation_filed_under_another_name_arms_its_entry(self):
+        def store(stray_updated):
+            return {"_rev": 3, "facts": [], "priorities": [], "goals": [], "corrections": [],
+                    "permissions": {}, "actions": [], "observations": [], "opportunities": [],
+                    "expected_charges": [
+                        {"key": "netflix", "merchant": "Netflix", "amount": 18.63,
+                         "cadence": "monthly", "authorized_recurring": True, "note": "",
+                         "active": True, "cancelled_on": None,
+                         "updated": "2026-06-01T10:00:00+0000"},
+                        {"key": "netflix subscription", "merchant": "Netflix subscription",
+                         "amount": 0.0, "cadence": "unknown", "authorized_recurring": False,
+                         "note": "cancelled by the user", "active": False,
+                         "cancelled_on": "2026-09-15", "updated": stray_updated}],
+                    "charges_seen": []}
+        p = self.tmp / "conscience.json"
+        p.write_text(json.dumps(store("2026-09-15T10:00:00+0000")))
+        g = Guardian(Conscience(p), owner_present=lambda: True, today=lambda: TODAY)
+        r = g.check_charge("NETFLIX.COM", 18.63, "2026-10-03")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("charged_after_cancel", 18.63))
+        self.assertEqual(g.check_charge("NETFLIX.COM", 18.63, "2026-09-03")["verdict"],
+                         "expected")
+        reg = json.loads(p.read_text())["expected_charges"]
+        self.assertEqual(len(reg), 2, "nothing is dropped")
+        self.assertEqual(reg[1]["merged_into"], reg[0]["id"])
+        # agreed again AFTER that cancellation: it is history, and he is not accused
+        p.write_text(json.dumps(store("2026-01-01T10:00:00+0000")))
+        g = Guardian(Conscience(p), owner_present=lambda: True, today=lambda: TODAY)
+        self.assertEqual(g.check_charge("NETFLIX.COM", 18.63, "2026-10-03")["verdict"],
+                         "expected")
+        self.assertEqual(g.expected_charges()[0]["past_cancellations"][0]["cancelled_on"],
+                         "2026-09-15")
+
+    # ------------------------------------------------------- verify I-37
+    def test_the_same_charge_with_and_without_its_reference_is_one_charge(self):
+        r = self.child("""
+            os.environ["JEFFEREY_CLIENT"] = "jefferey"
+            import access
+            import jefferey_mcp as m
+            with access.owner_console():
+                m.guard.expect_charge("Netflix", 18.63)
+            async def go():
+                c = lambda n, a: m.mcp.call_tool(n, a)
+                first = unpack(await c("review_statement", {"charges": [
+                    {"merchant": "NETFLIX.COM", "amount": 18.63, "date": "2026-10-03",
+                     "reference": "A1"}]}))
+                plain = unpack(await c("check_charge", {"merchant": "Netflix", "amount": 18.63,
+                                                        "date": "2026-10-03"}))
+                spaced = unpack(await c("check_charge", {"merchant": "Netflix", "amount": 18.63,
+                                                         "date": "2026-10-03", "ref": "a1 "}))
+                resent = unpack(await c("review_statement", {"charges": [
+                    {"merchant": "NETFLIX.COM", "amount": 18.63, "date": "2026-10-03"}]}))
+                pack = unpack(await c("dispute_pack", {"merchant": "Netflix"}))
+                second = unpack(await c("review_statement", {"charges": [
+                    {"merchant": "NETFLIX.COM", "amount": 18.63, "date": "2026-10-03",
+                     "reference": "A1"},
+                    {"merchant": "NETFLIX.COM", "amount": 18.63, "date": "2026-10-03",
+                     "reference": "B7"}]}))
+                return first, plain, spaced, resent, pack, second
+            first, plain, spaced, resent, pack, second = asyncio.run(go())
+            out(plain=plain["verdict"], spaced=spaced["verdict"], resent=resent["summary"],
+                pack=pack["amount_in_dispute"],
+                second=[f["verdict"] for f in second["flagged"]])
+        """)
+        self.assertEqual((r["plain"], r["spaced"]), ("expected", "expected"))
+        self.assertNotIn("attention", r["resent"])
+        self.assertEqual(r["pack"], 0.0)
+        self.assertEqual(r["second"], ["duplicate"], "a real second bill is still found")
+
+    def test_a_dateless_check_kept_by_the_first_version_never_makes_a_duplicate(self):
+        p = self.tmp / "conscience.json"
+        p.write_text(json.dumps({
+            "_rev": 3, "facts": [], "priorities": [], "goals": [], "corrections": [],
+            "permissions": {}, "actions": [], "observations": [], "opportunities": [],
+            "expected_charges": [{"key": "netflix", "merchant": "Netflix", "amount": 18.63,
+                                  "cadence": "monthly", "authorized_recurring": True,
+                                  "note": "", "active": True, "cancelled_on": None}],
+            # the old code stamped the dateless check with the day it was asked
+            "charges_seen": [
+                {"key": "netflix", "merchant": "Netflix", "amount": 18.63,
+                 "date": "2026-10-03", "verdict": "expected"},
+                {"key": "netflix", "merchant": "Netflix", "amount": 18.63,
+                 "date": "2026-10-05", "verdict": "duplicate"}]}))
+        g = Guardian(Conscience(p), owner_present=lambda: True, today=lambda: TODAY)
+        pack = g.dispute_pack("Netflix")
+        self.assertEqual(pack["amount_in_dispute"], 0.0)
+        self.assertEqual([h["verdict"] for h in pack["full_history"]],
+                         ["expected", "needs_date"])
+        # the owner reads the real date off the statement: it is the same charge
+        r = g.check_charge("Netflix", 18.63, "2026-10-03")
+        self.assertEqual(r["verdict"], "expected")
+        self.assertTrue(r["already_on_file"])
+
+    def test_a_line_of_text_or_an_amount_with_a_dollar_sign_on_every_surface(self):
+        r = self.child("""
+            os.environ["JEFFEREY_CLIENT"] = "jefferey"
+            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:" + "tok-jefferey-" + "a" * 36
+            import jefferey_mcp as m, jefferey_chat as jc
+            from fastapi.testclient import TestClient
+            import jefferey_http as jh
+            H = {"Authorization": "Bearer tok-jefferey-" + "a" * 36}
+            mc = unpack(asyncio.run(m.mcp.call_tool("review_statement",
+                                                    {"charges": ["NETFLIX 18.63"]})))
+            t = jc.dispatch_tool("review_statement", {"charges": ["NETFLIX 18.63"]})
+            h = TestClient(jh.app).post("/charges/check", headers=H, json={
+                "merchant": "Netflix", "amount": "$18.63", "date": "2026-10-03"}).json()
+            out(mcp=mc.get("errors"), term=t.get("errors"), http=h.get("amount"))
+        """)
+        self.assertEqual(r["mcp"][0]["line"], 1)
+        self.assertEqual(r["term"][0]["line"], 1)
+        self.assertEqual(r["http"], 18.63)
+
+    # ------------------------------------------------------- verify I-38
+    def test_a_one_time_agreement_first_charged_a_year_later_is_a_renewal(self):
+        days = iter([TODAY, dt.date(2027, 10, 12), dt.date(2027, 10, 12)])
+        now = [TODAY]
+        g = Guardian(Conscience(self.tmp / "c.json"), owner_present=lambda: True,
+                     today=lambda: now[0])
+        g.expect_charge("GoDaddy", 21.99, cadence="once", authorized_recurring=False)
+        self.assertEqual(g.check_charge("GODADDY.COM 480-505-8855", 21.99, "2026-10-10")
+                         ["verdict"], "expected", "the one payment, made when he agreed")
+        g2 = Guardian(Conscience(self.tmp / "c2.json"), owner_present=lambda: True,
+                      today=lambda: now[0])
+        g2.expect_charge("GoDaddy", 21.99, cadence="once", authorized_recurring=False)
+        now[0] = dt.date(2027, 10, 12)
+        r = g2.check_charge("GODADDY.COM 480-505-8855", 21.99, "2027-10-10")
+        self.assertEqual((r["verdict"], r["recoverable"]), ("unauthorized_renewal", 21.99))
+        p = g2.dispute_pack("GoDaddy")
+        self.assertIn("Before writing anything, ask the user whether they already paid",
+                      p["how_to_use"])
+        del days
+
+    def test_a_long_plan_billed_again_at_another_price_is_a_second_bill(self):
+        g = self.guard()
+        g.expect_charge("Norton", 119.99, "yearly")
+        self.assertEqual(g.check_charge("NORTON", 119.99, "2026-03-01")["verdict"], "expected")
+        for amt, d in ((59.99, "2026-06-01"), (129.99, "2026-08-01")):
+            r = g.check_charge("NORTON", amt, d)
+            self.assertEqual((r["verdict"], r["recoverable"]), ("duplicate", amt), amt)
+            self.assertIn("second bill", r["what_happened"])
+        # a monthly plan is still allowed a new price
+        g.expect_charge("Spotify", 12.42)
+        g.check_charge("Spotify", 12.42, "2026-08-05")
+        self.assertEqual(g.check_charge("Spotify", 13.42, "2026-09-05")["verdict"],
+                         "amount_increased")
+
+    def test_more_ways_of_saying_how_often(self):
+        g = self.guard()
+        for said, want in (("every 4 weeks", "fourweekly"), ("semi-monthly", "semimonthly"),
+                           ("per annum", "yearly"), ("every two months", "every_two_months"),
+                           ("twice a month", "semimonthly"), ("aux deux semaines", "biweekly")):
+            r = g.expect_charge("Shop " + said, 10.0, said)
+            self.assertEqual(r["cadence"], want, said)
+        r = g.expect_charge("Paper", 10.0, "bi-monthly")
+        self.assertEqual(r["cadence"], "unknown")
+        self.assertIn("every two months or twice a month", r["note"])
+
+    # ------------------------------------------------------- verify I-39
+    def test_an_ambiguous_or_future_charge_date_never_accuses(self):
+        g = self.guard()
+        g.expect_charge("Crave", 22.59)
+        g.mark_cancelled("Crave", "2026-10-12")
+        # read month-first, 11/10/2026 is November (the future): it is 11 October
+        r = g.check_charge("Crave", 22.59, "11/10/2026")
+        self.assertEqual((r["verdict"], r["date"]), ("expected", "2026-10-11"))
+        r = g.check_charge("Crave", 22.59, "2026-12-25")
+        self.assertEqual(r["verdict"], "could_not_check")
+        self.assertIn("future", r["what_happened"])
+        # both readings past, on either side of the cancellation: a question
+        g = self.guard(today=LATER, name="c2.json")
+        g.expect_charge("Crave", 22.59)
+        g.mark_cancelled("Crave", "2026-07-01")
+        r = g.check_charge("Crave", 22.59, "10/05/2026")     # 5 October or 10 May
+        self.assertEqual((r["verdict"], r["recoverable"]), ("needs_date", 0.0))
+        self.assertIn("5 October 2026", r["what_happened"])
+        self.assertEqual(g.dispute_pack("Crave")["amount_in_dispute"], 0.0)
+
+    def test_a_refund_on_the_same_statement_comes_off_what_is_at_stake(self):
+        g = self.guard()
+        g.expect_charge("Rogers", 95.00)
+        st = g.review_statement([
+            {"merchant": "ROGERS", "amount": 95.00, "date": "2026-09-01"},
+            {"merchant": "ROGERS", "amount": 95.00, "date": "2026-09-02"},
+            {"merchant": "ROGERS", "amount": -95.00, "date": "2026-09-10"}])
+        self.assertEqual(st["recoverable_total"], 0.0)
+        self.assertNotIn("$95.00 at stake", st["summary"])
+        self.assertIn("already refunded $95.00", st["summary"])
+
+    # ------------------------------------------------------- verify I-47
+    def test_an_ai_cannot_move_a_cancellation_later(self):
+        owner = self.guard()
+        owner.expect_charge("Crave", 22.59)
+        owner.mark_cancelled("Crave", "2026-08-01")
+        owner.check_charge("Crave", 22.59, "2026-08-15")
+        owner.check_charge("Crave", 22.59, "2026-09-15")
+        self.assertEqual(owner.dispute_pack("Crave")["amount_in_dispute"], 45.18)
+        ai = Guardian(owner.c, owner_present=lambda: False, today=lambda: TODAY)
+        r = ai.mark_cancelled("Crave", "2027-12-31")
+        self.assertEqual((r["marked_cancelled"], r["status"]), (0, "waiting_for_owner"))
+        self.assertEqual(owner.dispute_pack("Crave")["amount_in_dispute"], 45.18)
+        # an earlier date makes JEFFEREY more watchful: at once
+        self.assertEqual(ai.mark_cancelled("Crave", "2026-07-15")["marked_cancelled"], 1)
+        # the owner, at his keyboard, may confirm the later date himself
+        asked = []
+
+        def typed(prompt):
+            asked.append(prompt)
+            return "yes"
+        guardian.review_at_the_keyboard(owner, input_fn=typed, out=lambda *a: None)
+        self.assertTrue(any("Make this change?" in q for q in asked), asked)
+        self.assertEqual(next(e for e in owner.expected_charges()
+                              if e["merchant"] == "Crave")["cancelled_on"], "2027-12-31")
+
+    def test_a_card_test_is_not_what_a_place_usually_charges(self):
+        g = self.guard()
+        g.check_charge("ROGERS", 1.00, "2026-09-01")
+        r = g.expect_charge("Rogers", 145.00)
+        self.assertEqual(r.get("status"), "registered", r)
+
+    def test_an_engine_on_the_terminal_only_asks(self):
+        r = self.child("""
+            os.environ["JEFFEREY_OWNER_CONSOLE"] = "1"
+            import jefferey_chat as jc
+            out(r=jc.dispatch_tool("expect_charge", {"merchant": "PAYPAL *TECHSUPPORT PRO",
+                                                     "amount": 499, "cadence": "yearly"}),
+                waiting=jc.dispatch_tool("charge_changes_waiting", {}))
+        """)
+        self.assertEqual(r["r"]["status"], "waiting_for_owner")
+        self.assertEqual(r["waiting"][0]["what"],
+                         "Add PAYPAL *TECHSUPPORT PRO at $499.00 once a year.")
+
+    # ------------------------------------------------------- regressions
+    def test_a_charge_he_says_is_not_his_gets_a_pack_over_http(self):
+        r = self.child("""
+            os.environ["JEFFEREY_HTTP_TOKENS"] = "jefferey:" + "tok-jefferey-" + "a" * 36
+            from fastapi.testclient import TestClient
+            import jefferey_http as jh
+            c = TestClient(jh.app)
+            H = {"Authorization": "Bearer tok-jefferey-" + "a" * 36}
+            v = c.post("/charges/check", headers=H, json={
+                "merchant": "QWX ONLINE SVCS 855-555-0100", "amount": 349,
+                "date": "2026-09-05"}).json()
+            plain = c.get("/charges/dispute", headers=H,
+                          params={"merchant": "QWX ONLINE SVCS"}).json()
+            mine = c.get("/charges/dispute", headers=H,
+                         params={"merchant": "QWX ONLINE SVCS", "not_mine": "true"}).json()
+            out(v=v["verdict"], plain=plain, mine=mine)
+        """)
+        self.assertEqual(r["v"], "unexpected_merchant")
+        self.assertEqual(r["plain"]["amount_in_dispute"], 0.0)
+        self.assertIn("not_mine=true", r["plain"]["how_to_use"])
+        self.assertEqual(r["mine"]["amount_in_dispute"], 349.0)
+        self.assertIn("call the bank", r["mine"]["how_to_use"])
+        self.assertNotIn("draft_guidance", r["mine"]["how_to_use"])
+
+    def test_the_brief_says_changes_wait_and_nothing_is_withheld(self):
+        r = self.child("""
+            os.environ["JEFFEREY_CLIENT"] = "jefferey"
+            import jefferey_mcp as m
+            async def go():
+                c = lambda n, a: m.mcp.call_tool(n, a)
+                await c("expect_charge", {"merchant": "Netflix", "amount": 18.63})
+                await c("review_statement", {"charges": [
+                    {"merchant": "NETFLIX.COM", "amount": 18.63, "date": "2026-10-03"},
+                    {"merchant": "NETFLIX.COM", "amount": -18.63, "date": "2026-10-04"},
+                    {"merchant": "X", "amount": "oops", "date": "2026-10-04"}]})
+                await c("check_charge", {"merchant": "NETFLX", "amount": 18.63,
+                                         "date": "2026-10-03"})
+                await c("mark_cancelled", {"merchant": "Netflix", "on": "2026-10-01"})
+                await c("dispute_pack", {"merchant": "Netflix"})
+                await c("charge_changes_waiting", {})
+                return unpack(await c("daily_brief", {}))
+            brief = asyncio.run(go())
+            log = [json.loads(l) for l in open(os.environ["JEFFEREY_EGRESS"])]
+            out(brief=brief.get("charges_waiting_for_owner"),
+                withheld=sorted({(e["tool"], w) for e in log for w in e.get("withheld") or []}))
+        """)
+        self.assertEqual(r["brief"]["count"], 1)
+        self.assertIn("Check my charges", r["brief"]["how"])
+        self.assertEqual(r["withheld"], [])
+
+    def test_the_rules_and_the_traces_say_what_really_happened(self):
+        directives = (REPO / "connector" / "directives.md").read_text()
+        for v in ("expected", "amount_decreased", "refund", "unexpected_merchant",
+                  "needs_date", "possible_card_testing", "possible_scam", "amount_increased",
+                  "duplicate", "unauthorized_renewal", "charged_after_cancel", "not_mine",
+                  "name_for_charge"):
+            self.assertTrue(f"`{v}" in directives, f"directive 13 does not name {v}")
+        r = self.child("""
+            import jefferey_chat as jc
+            T = jc._TRACE
+            out(waiting=T["expect_charge"]({"merchant": "Netflix", "amount": 250},
+                                           {"status": "waiting_for_owner"}),
+                none=T["mark_cancelled"]({"merchant": "Netflx", "on": ""},
+                                         {"marked_cancelled": 0, "cancelled_on": None}),
+                later=T["mark_cancelled"]({"merchant": "Crave", "on": "2027-12-31"},
+                                          {"status": "waiting_for_owner", "merchant": "Crave",
+                                           "marked_cancelled": 0}))
+        """)
+        self.assertIn("waiting for you", r["waiting"])
+        self.assertNotIn("registered", r["waiting"])
+        self.assertNotIn("None", r["none"])
+        self.assertIn("NOT recorded", r["none"])
+        self.assertIn("waiting for you", r["later"])
 
 if __name__ == "__main__":
     unittest.main()

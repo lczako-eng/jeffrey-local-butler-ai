@@ -156,19 +156,21 @@ RELEASE: dict[str, frozenset[str]] = {
     "set_profile_field": FORGET | {"stored", "field", "value"},
     "forget_profile_field": FORGET | {"removed"},
     # from_your_vault: "your SIN will go into box X", read to the owner first
+    # owner_is / sides: which side of a sale he was taken to be (selling-30)
     "fill_form": frozenset({"filled", "needs_you", "coverage", "vault_available",
-                            "from_your_vault"}),
+                            "from_your_vault", "owner_is", "sides", "owner_is_can_be"}),
     # fill_pdf: the filled copy's location, never the values written into it;
     # which secret went into which box by NAME (I-02), what was taken out of
     # the copy (I-31) and which boxes were signed under an approval (I-57)
     "fill_pdf": frozenset({"written", "saved_in", "fields_set", "filled_from_vault",
                            "original_untouched", "fields", "references", "available",
                            "secrets_used", "not_on_this_form", "removed_from_copy",
-                           "signed", "wrong_boxes"}),
+                           "signed", "wrong_boxes", "owner_is_can_be"}),
     # field names are the PDF author's words: data, never instructions (I-31)
     "pdf_form_fields": frozenset({"path", "fields", "count", "field_names_are",
                                   "described", "sensitive", "for_someone_else",
-                                  "signing", "suspicious", "warning"}),
+                                  "signing", "suspicious", "warning", "owner_is",
+                                  "sides", "owner_is_can_be"}),
     # who wrote each line and through which door (I-45); an approval's id is
     # given only to the connection that asked for it, never in the log view
     "action_log": frozenset({"category", "description", "amount", "currency",
@@ -186,7 +188,7 @@ RELEASE: dict[str, frozenset[str]] = {
                               "recent_actions", "recent_observations",
                               "corrections_learned_from", "notices",
                               "held_back", "waiting_for_owner", "more_goals",
-                              "more_notices"}),
+                              "more_notices", "charges_waiting_for_owner"}),
     "orb_state": frozenset({"mood"}),
     # goals and the opportunity engine
     "add_goal": frozenset({"id", "goal", "added", "active"}),
@@ -218,8 +220,9 @@ RELEASE: dict[str, frozenset[str]] = {
     "expect_charge": frozenset({"key", "merchant", "amount", "cadence",
                                 "authorized_recurring", "active",
                                 "cancelled_on", "updated", "status", "proposal"}),
+    # a later date asked for by an AI waits for the owner (verify I-47)
     "mark_cancelled": frozenset({"merchant", "marked_cancelled", "cancelled_on",
-                                 "matched_to", "possible_match"}),
+                                 "matched_to", "possible_match", "status", "proposal"}),
     "check_charge": frozenset({"merchant", "amount", "date", "cadence", "verdict",
                                "severity", "what_happened", "recoverable",
                                "authorized_on_file", "action", "matched_to",
@@ -237,7 +240,8 @@ RELEASE: dict[str, frozenset[str]] = {
                                "full_history", "how_to_use", "refunds_received",
                                "chargeback_deadline_estimate"}),
     # what waits for the owner, and withdrawing it; confirming is not a tool
-    "charge_changes_waiting": frozenset({"id", "what", "asked_by", "asked_on", "why"}),
+    "charge_changes_waiting": frozenset({"id", "what", "kind", "asked_by", "asked_on",
+                                         "why"}),
     "decline_charge_change": frozenset({"merchant", "status"}),
     "name_for_charge": frozenset({"merchant", "status", "proposal"}),
     # the representative reading their mail

@@ -378,10 +378,17 @@ class TheAlbum(Child):
             out({"who": mcp_call(m, "who_am_i"), "story": mcp_call(m, "tell_story"),
                  "disk": json.load(open(os.environ["JEFFEREY_CONSCIENCE_PATH"]))})
         """, JEFFEREY_CLIENT="jefferey")
-        self.assertEqual(r["who"]["moments"][0]["photos"], 5)
-        self.assertEqual(r["story"]["moments"][0]["photos"], 5)
+        # Changed after verify I-15: the old list now moves to the album's
+        # record of the moment as the file is read (it waited for an album
+        # tool and a reachable index), so the memory carries no photos at
+        # all, like every memory kept since — and nothing is dropped.
+        for k in ("who", "story"):
+            self.assertNotIn("photos", r[k]["moments"][0])
         self.assertNotIn(shas[0], json.dumps([r["who"], r["story"]]))
-        self.assertEqual(r["disk"]["memories"][0]["photos"], shas, "nothing dropped on disk")
+        disk = r["disk"]
+        kept = (disk["memories"][0].get("photos")
+                or disk.get("album", {}).get("moments", {}).get("cuba-2016", {}).get("shas"))
+        self.assertEqual(sorted(kept), sorted(shas), "nothing dropped on disk")
 
     def test_the_album_follows_the_drive_plugged_in_after_it_started(self):
         r = self.py(_album_setup("""

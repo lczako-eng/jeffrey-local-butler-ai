@@ -443,11 +443,15 @@ class NeverThroughAShortcut(VoiceCase):
         target, body = self.outside()
         d = ve.person_dir("Carol")
         os.symlink(target, d / "take-099.wav")
-        self.assertEqual(self.delete("Carol"), 0)
+        # Changed by verify I-56: this said 'Gone.' with rc 0, although what
+        # the shortcut pointed to may be a copy of the voice and was left.
+        self.assertEqual(self.delete("Carol"), 1)
         self.assertEqual(target.read_bytes(), body)
         self.assertEqual(mode(target), 0o444)
         self.assertFalse(os.path.lexists(d))
         self.assertIn("without being followed", self.last)
+        self.assertIn("it is still there", self.last)
+        self.assertNotIn("Gone.", self.last)
 
     def test_delete_does_not_follow_a_linked_person_folder(self):
         o = self.tmp / "elsewhere"
@@ -636,6 +640,205 @@ class DeletionSearchesEveryPlace(unittest.TestCase):
         self.assertFalse(self.on_drive.exists())
         self.assertIn("Gone.", text)
         self.assertIn("flash storage", text)
+
+
+# ----------------------------------------------------- after the fixes
+# The skeptics' and regression hunters' reproductions against the first
+# round of fixes (verify I-54, I-55, I-56 and the regressions).
+CHILD2 = textwrap.dedent("""
+    import os, sys
+    sys.path.insert(0, %r)
+    import numpy as np
+    import voice_enrol as ve
+    ve._SELFTEST = True
+    def speech(rate):
+        t = np.arange(int(rate * 4.5)) / rate
+        syll = ((t %% 0.35) < 0.25) & (t > 0.3)
+        return (0.3 * np.sin(2 * np.pi * 220 * t) * syll).astype("float32")
+    who = os.environ.get("VE_WHO", "Erin")
+    if sys.argv[1] == "record":
+        rc = ve.start(who, 2, recorder=speech, quiet=True)
+    else:
+        rc = ve.delete(who, force=True)
+    print("RC", rc)
+""") % str(REPO / "tools")
+
+
+def steady_after_silence(hz: float = 110.0, gap: bool = False):
+    t = np.arange(RATE * 6) / RATE
+    a = (0.3 * np.sin(2 * np.pi * hz * t)).astype("float32")
+    a[:RATE] = 0                       # a second of silence first
+    if gap:
+        a[int(RATE * 3):int(RATE * 4)] = 0
+    return a
+
+
+class AfterTheFixes(VoiceCase):
+
+    def child(self, what: str, **env) -> str:
+        script = self.tmp / "child2.py"
+        script.write_text(CHILD2)
+        p = subprocess.run([PY, str(script), what], env=child_env(self.tmp, **env),
+                           capture_output=True, text=True, timeout=120)
+        return " ".join((p.stdout + p.stderr).split())
+
+    # ------------------------------------------------------- verify I-54
+    def test_a_sentence_never_passes_as_a_name(self):
+        for bad in ("Bob. I do not consent", "Nobody. I refuse", "Bob. Not me. Refuse",
+                    "Bob I do not consent", "Bob.I refuse", "Je ne consens pas"):
+            self.assertEqual(self.enrol(who=bad), 2, bad)
+        self.assertFalse(self.root.exists() and any(self.root.iterdir()))
+        for good in ("J. R. Smith", "Dr. Ana Silva", "Jean-Luc St.-Pierre",
+                     "Mary O'Brien", "László Czakó", "Anh Do"):
+            self.assertEqual(ve.clean_name(good), good)
+
+    def test_one_steady_sound_after_a_pause_is_not_someone_agreeing(self):
+        for gap in (False, True):
+            self.assertNotEqual(self.enrol(recorder=lambda r: steady_after_silence(gap=gap)),
+                                0, gap)
+            self.assertFalse(ve.person_dir("Laszlo").exists())
+        self.assertEqual(self.enrol(), 0)        # syllables still pass
+
+    def test_the_list_never_claims_the_words_were_heard(self):
+        self.assertEqual(self.enrol(), 0)
+        man = self.manifest()
+        self.assertIs(man["consents"][0]["words_checked"], False)
+        self.assertIs(man["takes"][0]["words_checked"], False)
+
+    def test_a_voice_a_little_different_must_still_say_it_is_them(self):
+        # 150 Hz against 110 Hz (1.36) joined the set on a typed yes
+        self.assertEqual(self.enrol("Laszlo", recorder=mic(110)), 0)
+        n = len(self.manifest()["takes"])
+        self.assertEqual(self.enrol("Laszlo", recorder=mic(150), ask=YES), 1)
+        self.assertEqual(len(self.manifest()["takes"]), n)
+
+    def test_the_selftest_gate_does_not_depend_on_where_the_code_is(self):
+        # regression: with the checkout under /tmp, a folder inside it counted
+        # as 'temporary' and a fake microphone was accepted there
+        saved = ve._CODE
+        ve._CODE = self.tmp                       # as if JEFFEREY lived here
+        try:
+            self.assertEqual(self.enrol(), 2)
+            self.assertFalse(ve.person_dir("Laszlo").exists())
+        finally:
+            ve._CODE = saved
+        self.assertEqual(self.enrol(), 0)
+
+    # ------------------------------------------------------- verify I-55
+    def test_a_shortcut_above_the_voice_folder_is_never_followed(self):
+        cloud = self.tmp / "home" / "Library" / "Mobile Documents" / "stash"
+        cloud.mkdir(parents=True)
+        drive = self.tmp / "drive"
+        drive.mkdir()
+        os.symlink(cloud, drive / ".selfcloud")
+        root = drive / ".selfcloud" / "jefferey" / "voice"
+        with ve.selftest_mode(root, roots=[root]):
+            self.assertEqual(self.enrol(), 2)
+        self.assertIn("shortcut", self.last)
+        self.assertEqual(list(cloud.rglob("*")), [], "the voice went into the cloud folder")
+
+    def test_a_shortcut_at_the_macs_own_voice_folder_is_never_followed(self):
+        home = self.tmp / "home"
+        cloud = home / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "stash"
+        cloud.mkdir(parents=True)
+        os.symlink(cloud, home / ".selfcloud")
+        out = self.child("record")
+        self.assertIn("RC 2", out)
+        self.assertIn("shortcut", out)
+        self.assertEqual(list(cloud.rglob("*")), [], "the voice went into iCloud")
+
+    def test_deletion_walks_the_open_folder_not_its_path(self):
+        # verify I-55 (4): the folder swapped for a shortcut between the look
+        # and the listing sent the deletion to an outside will.txt
+        self.assertEqual(self.enrol("Carol"), 0)
+        d = ve.person_dir("Carol")
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (outside / "will.txt").write_text("my will")
+        real_scandir, real_listdir = os.scandir, os.listdir
+        swapped = []
+
+        def swap(arg):
+            if not swapped and (arg == d or arg == str(d) or isinstance(arg, int)):
+                swapped.append(1)
+                os.rename(d, self.tmp / "moved")
+                os.symlink(outside, d)
+
+        def scandir(arg=".", *a):
+            swap(arg)
+            return real_scandir(arg, *a)
+
+        def listdir(arg=".", *a):
+            swap(arg)
+            return real_listdir(arg, *a)
+        os.scandir, os.listdir = scandir, listdir
+        try:
+            self.delete("Carol")
+        finally:
+            os.scandir, os.listdir = real_scandir, real_listdir
+        self.assertTrue(swapped)
+        self.assertEqual((outside / "will.txt").read_text(), "my will")
+
+    # ------------------------------------------------------- verify I-56
+    def test_a_look_alike_name_never_deletes_someone_elses_set(self):
+        self.assertEqual(self.enrol("Mary-Ann", recorder=mic(200)), 0)
+        self.assertEqual(self.delete("Mary Ann"), 1)
+        self.assertTrue((ve.person_dir("Mary-Ann") / "manifest.json").exists())
+        self.assertIn("belong to Mary-Ann", self.last)
+        self.assertIn("NOT deleted", self.last)
+        self.assertEqual(self.delete("Mary-Ann"), 0)
+        self.assertFalse(ve.person_dir("Mary-Ann").exists())
+
+    def test_an_older_set_under_another_name_is_named_after_gone(self):
+        # the old launcher recorded under the Mac's account name ('laszlo')
+        self.assertEqual(self.enrol("laszlo"), 0)
+        self.assertEqual(self.enrol("Laszlo Czako"), 0)
+        self.assertEqual(self.delete("Laszlo Czako"), 0)
+        self.assertIn("Still kept here", self.last)
+        self.assertIn("laszlo — ", self.last)
+        self.assertIn("this may be yours too", self.last)
+        self.assertTrue(ve.person_dir("laszlo").exists())
+
+    def test_an_old_set_under_the_macs_account_name_can_be_carried_on(self):
+        # regression: start refused 'laszlo2', so the voice split in two
+        d = self.root / "laszlo2"
+        d.mkdir(parents=True)
+        take = d / "take-001.wav"
+        with wave.open(str(take), "wb") as w:
+            w.setnchannels(1), w.setsampwidth(2), w.setframerate(RATE)
+            w.writeframes((speech() * 32767).astype("<i2").tobytes())
+        digest = hashlib.sha256(take.read_bytes()).hexdigest()
+        (d / "manifest.json").write_text(json.dumps({
+            "person": "laszlo2", "consent": "take-001.wav", "rate": RATE,
+            "takes": [{"n": 1, "file": "take-001.wav", "phrase": "I consent",
+                       "sha256": digest, "seconds": 4.5, "rms": 0.2}]}))
+        self.assertEqual(self.enrol("laszlo2", ask=YES), 0, self.last)
+        man = json.loads((d / "manifest.json").read_text())
+        self.assertEqual(len(man["consents"]), 2)
+        self.assertTrue(man["takes"][1]["phrase"].startswith("I am laszlo2. It is "))
+        # ...but no NEW set gets a name like that
+        self.assertEqual(self.enrol("laszlo3"), 2)
+
+    def test_a_folder_chosen_by_hand_is_remembered_and_deleted_later(self):
+        custom = self.tmp / "custom-voice"
+        out = self.child("record", SELFCLOUD_VOICE=str(custom))
+        self.assertIn("RC 0", out)
+        self.assertTrue(list((custom / "erin").glob("take-*.wav")))
+        out = self.child("delete", SELFCLOUD_VOICE=None)
+        self.assertIn("RC 0", out)
+        self.assertFalse((custom / "erin").exists(), "the hand-chosen folder was left")
+        self.assertIn(str(custom / "erin"), out)
+
+    def test_a_deletion_is_recorded_without_keeping_the_name(self):
+        self.assertEqual(self.enrol(), 0)
+        self.assertEqual(self.delete(), 0)
+        lines = (self.root / "deletions.jsonl").read_text().splitlines()
+        rec = json.loads(lines[-1])
+        self.assertEqual(rec["name_fingerprint"], hashlib.sha256(b"laszlo").hexdigest())
+        self.assertTrue(rec["complete"])
+        self.assertGreater(rec["files_overwritten"], 0)
+        self.assertNotIn("aszlo", "\n".join(lines).replace(rec["folder"], ""))
+        self.assertEqual(mode(self.root / "deletions.jsonl"), 0o600)
 
 
 if __name__ == "__main__":

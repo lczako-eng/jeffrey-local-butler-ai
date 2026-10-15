@@ -630,6 +630,7 @@ def check_draft(d: DraftCheckIn) -> dict:
 
 class FormIn(BaseModel):
     fields: list[str]
+    owner_is: str = ""
 
 
 @door(app.post("/forms/fill", operation_id="fill_form"))
@@ -638,8 +639,9 @@ def fill_form(f: FormIn) -> dict:
     """Given a form's field labels, return what Jefferey can fill from the
     user's own profile and exactly what he cannot. He never guesses, never
     fills a box about someone else with the owner's details, and never fills
-    sensitive identifiers — those go back to the user."""
-    return rep.fill_form(f.fields)
+    sensitive identifiers — those go back to the user. On a bill of sale he
+    is the seller; pass owner_is='buyer' when he is buying."""
+    return rep.fill_form(f.fields, f.owner_is)
 
 
 @door(app.get("/vault", operation_id="vault_status"))
@@ -790,9 +792,11 @@ def name_for_charge(a: AliasIn) -> dict:
 
 @door(app.get("/charges/dispute", operation_id="dispute_pack"))
 @gate("money.read")
-def dispute_pack(merchant: str) -> dict:
-    """Everything needed to get money back from one merchant."""
-    return guard.dispute_pack(merchant)
+def dispute_pack(merchant: str, not_mine: bool = False) -> dict:
+    """Everything needed to get money back from one merchant. not_mine=true
+    when the user says charges from a place not in their register are not
+    theirs."""
+    return guard.dispute_pack(merchant, not_mine)
 
 
 # ---------------------------------------------------------------- life layer

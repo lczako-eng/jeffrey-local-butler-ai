@@ -112,8 +112,25 @@ _DEATH = re.compile(
     r"\b(died|dies|passed away|passed on|passing|funeral|death|deceased|"
     r"buried|memorial|killed|lost (him|her|them)|late (wife|husband|mother|"
     r"father|mum|mom|dad|son|daughter|brother|sister|partner|friend))\b", re.I)
+# How people say "don't raise this": never/don't, and the gentler ways —
+# "I'd rather not talk about it", "only if I bring it up myself", in English
+# and French (verify I-33: 'rather not … only if I bring it up' did not close
+# the moment, and his words were handed to the engine to decide).
 _PROHIBIT = re.compile(
-    r"\b(never|don'?t|do not|not to|avoid|stop|unless i|no questions?)\b", re.I)
+    r"\b(never|don'?t|do not|not to|avoid|stop|unless i|no questions?|rather not|"
+    r"prefer not|not talk|only if i|only when i|leave (?:it|that|this)|not ready|"
+    r"off[- ]limits|keep (?:it |that )?away|won'?t talk|ne (?:pas|jamais)|jamais|"
+    r"sauf si|pas de questions?|pr[eé]f[eè]re (?:ne )?pas)\b", re.I)
+# The words one person may be called by, so a rule about 'Mum' meets the
+# mother he recorded (verify I-33: rules met only her name, never 'mum').
+_KIN = [frozenset(g.split()) for g in (
+    "mum mom mother mama mamma mommy mummy maman mere anya anyu",
+    "dad father papa daddy pop pere apa apu",
+    "wife husband spouse partner",
+    "son", "daughter", "brother", "sister",
+    "grandmother grandma granny gran nan nana oma nagymama mamie",
+    "grandfather grandpa granddad grandad opa nagypapa papi",
+    "aunt auntie tante", "uncle oncle", "friend", "cousin")]
 _MONTHS = {m.lower(): i for i, m in enumerate(
     ("January February March April May June July August September October "
      "November December").split(), 1)}
@@ -143,15 +160,53 @@ def _label(country: str, start: str, end: str, places: list[str]) -> str:
     return f"{where} · {when}"
 
 
+def _kin_words(relationship: str) -> set[str]:
+    """'mum' -> every word for a mother: mum, mother, mom, maman, anya…"""
+    words = set(re.findall(r"[a-zà-ÿ]+", str(relationship or "").lower()))
+    out = set(words)
+    for g in _KIN:
+        if words & g:
+            out |= g
+    return out
+
+
+def _phrase_tokens(text: str) -> set[str]:
+    return set(re.findall(r"[\w']+", str(text or "").lower()))
+
+
+def matches_any(entries, tags: set[str]) -> bool:
+    """Does any of the owner's entries ('Kandahar', 'Nova Scotia', 'Halifax
+    2023') name this moment or photo? A one-word entry is one of its words;
+    an entry of several words needs all of them (verify I-53: 'Halifax 2023'
+    and 'Nova Scotia' matched nothing, and the owner was told 'Done')."""
+    words: set[str] = set()
+    for t in tags:
+        words |= _phrase_tokens(t)
+    low = {str(t).strip().lower() for t in tags}
+    for e in entries:
+        e = str(e).strip().lower()
+        if not e:
+            continue
+        if e in low:
+            return True
+        toks = _phrase_tokens(e)
+        if toks and toks <= words:
+            return True
+    return False
+
+
 def _losses(people: list[dict]) -> list[tuple[str, int, int | None]]:
     """(name, year, month or None) for each loss the owner recorded about a
-    person: 'died February 2019, funeral in Budapest'."""
+    person: 'died February 2019, funeral in Budapest'. The name carries the
+    relationship's words too ('Ilona mum mother …')."""
     out = []
     for p in people or []:
         text = " ".join(str(p.get(k, "")) for k in
                         ("notes", "important_dates", "relationship"))
         if not _DEATH.search(text):
             continue
+        p = dict(p, name=" ".join([str(p.get("name", "")),
+                                   *sorted(_kin_words(p.get("relationship", "")))]).strip())
         found = False
         for m in re.finditer(r"\b([A-Za-z]{3,9})\.?\s+(19\d\d|20\d\d)\b", text):
             mon = _MONTHS.get(m.group(1).lower())
@@ -516,15 +571,14 @@ class Reminisce:
             if r.get("kind") != "reaction":
                 continue
             rt = {str(t).strip().lower() for t in r.get("tags", []) if str(t).strip()}
-            if not rt or not (rt & tags):
+            if not rt or not matches_any(rt, tags):
                 continue
             text = str(r.get("instruction", "")).strip()
             (stop if _PROHIBIT.search(text) else say).append(text)
         return stop, say
 
     def _kept_out(self, tags: set[str], key: str) -> bool:
-        words = {str(w).strip().lower() for w in self._album().get(key, []) if str(w).strip()}
-        return bool(words & tags)
+        return matches_any(self._album().get(key, []), tags)
 
     def _trust(self) -> dict:
         from interview import Interview
@@ -556,6 +610,7 @@ class Reminisce:
         album = self._album()
         told_any = any(m.get("status") == "told" for m in album["moments"].values())
         gentle, hard, closed, resting = [], [], 0, 0
+        later_gentle, later_hard = [], []        # offered recently: the owner's fallback
         now = dt.datetime.now(dt.timezone.utc)
         for mid, label, country, places, start, end, count, asked_at in self.db.execute(
                 "SELECT id, label, country, places, start, end, count, asked_at "
@@ -566,12 +621,17 @@ class Reminisce:
             if stop or self._kept_out(tags, "never_ask"):
                 closed += 1
                 continue
-            if _asked_within(asked_at, now, REST_DAYS):
-                resting += 1
-                continue
             item = {"id": mid, "label": label, "country": country, "start": start,
                     "end": end, "count": count, "asked_at": asked_at,
                     "why": why, "say": say}
+            if _asked_within(asked_at, now, REST_DAYS):
+                # The rest is for engines. The owner sitting down with his own
+                # album gets a moment offered recently only when nothing else
+                # is left — never 'come back in a week' (verify regression).
+                resting += 1
+                if owner_opened:
+                    (later_hard if why else later_gentle).append(item)
+                continue
             (hard if why else gentle).append(item)
 
         def order(m):
@@ -585,6 +645,8 @@ class Reminisce:
             deep = owner_opened or (trust or self._trust())["max_depth"] >= HARD_AT_DEPTH
             if owner_opened or (deep and told_any):
                 pick = min(hard, key=order)
+        if pick is None and owner_opened and (later_gentle or later_hard):
+            pick = min(later_gentle or later_hard, key=order)
         if pick is None:
             told = sum(1 for m in album["moments"].values() if m.get("status") == "told")
             if resting and not hard:
@@ -805,12 +867,37 @@ class Reminisce:
         if which not in ("never_ask", "never_on_the_wall"):
             raise ValueError(which)
         lst = self._album()[which]
-        added = [w.strip() for w in words.split(",")
-                 if w.strip() and w.strip().lower() not in {x.lower() for x in lst}]
+        added = [" ".join(w.split()) for w in words.split(",")
+                 if w.strip() and " ".join(w.split()).lower() not in {x.lower() for x in lst}]
         lst.extend(added)
         if added:
             self.c._save()
-        return {which: list(lst), "added": added}
+        return {which: list(lst), "added": added,
+                "matching": {w: self.matching(which, w) for w in added}}
+
+    def matching(self, which: str, entry: str) -> int | None:
+        """How many photographs ('never_on_the_wall') or moments ('never_ask')
+        an entry names now — so the owner is told what it really does, not
+        just 'Done'. None when the photographs cannot be reached."""
+        if not self.available:
+            return None
+        try:
+            if which == "never_ask":
+                return sum(1 for m in self._compute() if matches_any(
+                    [entry], self.tags_for(m["country"], m["places"], m["from"], m["to"])[0]))
+            n = 0
+            for place, country, taken in self.db.execute(
+                    "SELECT place, country, taken_at FROM photos WHERE missing_since IS NULL"):
+                tags = {str(t).lower() for t in (place, country) if t}
+                if taken:
+                    try:
+                        tags = self.tags_for(country, [place] if place else [], taken[:10])[0]
+                    except ValueError:
+                        pass
+                n += matches_any([entry], tags)
+            return n
+        except (sqlite3.Error, OSError):
+            return None
 
     # -------------------------------------------------- what the wall hides
     def hidden(self) -> dict:
@@ -1025,6 +1112,33 @@ def selftest() -> int:
     return 0
 
 
+def _kept_out_lines(key: str, words: str, r: dict) -> list[str]:
+    """What the owner is told after never-ask / keep-off-wall: for each
+    subject, what it does now — never a 'Done' for something that matches
+    nothing (verify I-53)."""
+    what = "asked about in the album" if key == "never_ask" else "shown on the wall"
+    unit = "moment" if key == "never_ask" else "photograph"
+    lines = []
+    asked = [" ".join(w.split()) for w in words.split(",") if w.strip()]
+    for w in asked:
+        if w not in r["added"]:
+            lines.append(f"'{w}' was already on the list: it is not {what}.")
+            continue
+        n = r["matching"].get(w)
+        both = " (photographs that are both)" if len(w.split()) > 1 else ""
+        if n is None:
+            lines.append(f"'{w}' is on the list{both}. The photographs can't be reached "
+                         f"right now, so I can't say yet how many it covers.")
+        elif n == 0:
+            lines.append(f"'{w}' is on the list, but nothing in the photographs matches it "
+                         f"yet. Check the spelling; anything that matches later will not be "
+                         f"{what}.")
+        else:
+            lines.append(f"Done: '{w}'{both} — {n} {unit}{'' if n == 1 else 's'} will not be "
+                         f"{what}.")
+    return lines
+
+
 def _owner_cli(argv: list[str]) -> int:
     from conscience import Conscience, StoreProblem
     from life import Life
@@ -1048,8 +1162,10 @@ def _owner_cli(argv: list[str]) -> int:
             return 1
         key = "never_ask" if argv[0] == "never-ask" else "never_on_the_wall"
         r = rem.keep_out(key, words)
-        what = "asked about in the album" if key == "never_ask" else "shown on the wall"
-        print(f"\n  Done. These will not be {what}: {', '.join(r[key])}\n")
+        print()
+        for line in _kept_out_lines(key, words, r):
+            print(f"  {line}")
+        print()
         return 0
     if argv and argv[0] == "reopen" and len(argv) > 1:
         r = rem.reopen(argv[1])

@@ -1118,6 +1118,54 @@ class Conscience:
         except Exception:
             pass
         self._migrate_who_said_what()
+        self._migrate_album_photos()
+
+    def _migrate_album_photos(self) -> None:
+        """An older album pinned each story's photographs inside the memory
+        itself — a list of fingerprints, read out by who_am_i and tell_story
+        (I-15). They belong with the album's record of that moment, where
+        reminisce.py keeps them. That move used to wait for an album tool to
+        run with the photo index plugged in (verify I-15: without the index,
+        it never happened); now it happens as the memory file is read.
+        Nothing is lost: the fingerprints stay with the moment, the memory
+        keeps the moment's id. A memory with photographs but no moment is
+        left as it is (it goes out as a count)."""
+        mems = [m for m in self.data.get("memories") or []
+                if isinstance(m, dict) and isinstance(m.get("photos"), list)]
+        if not mems:
+            return
+        album = self.data.get("album")
+        if not isinstance(album, dict):
+            album = self.data["album"] = {}
+        moments = album.get("moments")
+        if not isinstance(moments, dict):
+            moments = album["moments"] = {}
+        for k in ("never_ask", "never_on_the_wall"):
+            if not isinstance(album.get(k), list):
+                album[k] = []
+        told: dict[str, int] = {}
+        for mem in self.data.get("memories") or []:
+            if isinstance(mem, dict):
+                for t in mem.get("tags") or []:
+                    if str(t).startswith("moment:"):
+                        told[str(t).split(":", 1)[1]] = told.get(str(t).split(":", 1)[1], 0) + 1
+        for mem in mems:
+            tag = next((str(t) for t in mem.get("tags") or [] if str(t).startswith("moment:")),
+                       None)
+            if not tag:
+                continue
+            mid = tag.split(":", 1)[1]
+            m = moments.get(mid) if isinstance(moments.get(mid), dict) else {}
+            m["shas"] = sorted(set(m.get("shas") or []) | {str(s) for s in mem["photos"]})
+            if m.get("status") != "declined":          # 'rather not' stays final
+                m["status"] = "told"
+            m["stories"] = max(int(m.get("stories") or 0), told.get(mid, 1))
+            for k, empty in (("label", ""), ("country", ""), ("places", []), ("from", ""),
+                             ("to", "")):
+                m.setdefault(k, empty)
+            m.setdefault("at", time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+            moments[mid] = m
+            del mem["photos"]
 
     def _migrate_who_said_what(self) -> None:
         """October 2026 (I-10, I-11, I-25, I-48): facts learn what kind of
@@ -3010,6 +3058,16 @@ class Conscience:
                 out["waiting_for_owner"] = {"count": waiting, "how": (
                     "Things an AI wrote down that he has not confirmed, or asked to "
                     "share. He sees them with /pending in 'Talk to JEFFEREY on this Mac'.")}
+            # changes to his list of agreed payments an AI asked for (verify
+            # I-47: nothing showed they waited, so they waited forever)
+            charges = sum(1 for p in self.data.get("charge_proposals") or []
+                          if isinstance(p, dict) and p.get("status") == "waiting")
+            if charges:
+                out["charges_waiting_for_owner"] = {"count": charges, "how": (
+                    "Changes to his list of agreed payments that an AI asked for. Only "
+                    "he says yes or no to each: he double-clicks 'Check my charges' on "
+                    "his Mac, or types /charges in 'Talk to JEFFEREY on this Mac'. "
+                    "Until then, those charges are still pointed out to him.")}
         return out
 
     # ------------------------------------------------------------ views

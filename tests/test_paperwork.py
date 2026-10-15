@@ -1149,5 +1149,89 @@ class AfterTheFixes(PaperworkTest):
         self.assertIn("sent nowhere", line)
 
 
+# ============================================================== selling-30
+class TheOwnersSideOfASale(PaperworkTest):
+    """Regression (selling-30): the I-30 fix counted 'seller' and 'vendor' as
+    someone else, so a bill of sale for the owner's own car came back with
+    every seller box empty and his signature called 'someone else's'. He is
+    the seller unless the caller says he is the buyer; the other side's boxes
+    never get his details, and no other party can be chosen."""
+
+    SELLER = ["Seller full name", "Seller address", "Seller's name", "Vendor name",
+              "Nom du vendeur", "Name (seller)"]
+    BUYER = ["Buyer name", "Buyer address", "Nom de l'acheteur", "Purchaser name"]
+
+    def test_his_bill_of_sale_fills_the_seller_boxes_on_the_terminal(self):
+        r = self.py("""
+            import jefferey_chat as jc
+            D = jc.dispatch_tool
+            D("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
+            D("set_profile_field", {"field": "address", "value": "12 Elm St"})
+            out(D("fill_form", {"fields": %r + %r + ["VIN", "Seller signature",
+                                                     "Spouse's name"]}))
+        """ % (self.SELLER, self.BUYER), JEFFEREY_CLIENT="jefferey")
+        self.assertEqual(r["filled"], {
+            "Seller full name": "Laszlo Czako", "Seller address": "12 Elm St",
+            "Seller's name": "Laszlo Czako", "Vendor name": "Laszlo Czako",
+            "Nom du vendeur": "Laszlo Czako", "Name (seller)": "Laszlo Czako"})
+        why = {n["field"]: n["why"] for n in r["needs_you"]}
+        for label in self.BUYER + ["Spouse's name"]:
+            self.assertIn("other than the owner", why[label], label)
+        self.assertNotIn("someone else", why["Seller signature"])
+        self.assertIn("only he signs", why["Seller signature"])
+        self.assertEqual(r["owner_is"], "seller")
+        self.assertIn("owner_is='buyer'", r["sides"])
+
+    def test_when_he_is_buying_the_sides_swap_on_every_surface(self):
+        r = self.py("""
+            import jefferey_chat as jc
+            jc.dispatch_tool("set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
+            import jefferey_mcp as m
+            from fastapi.testclient import TestClient
+            import jefferey_http as jh
+            labels = %r + %r
+            t = jc.dispatch_tool("fill_form", {"fields": labels, "owner_is": "buyer"})
+            c = mcp_call(m, "fill_form", {"fields": labels, "owner_is": "the purchaser"})
+            h = TestClient(jh.app).post("/forms/fill", headers=H(%r),
+                                        json={"fields": labels, "owner_is": "Buyer"}).json()
+            bad = [mcp_call(m, "fill_form", {"fields": labels, "owner_is": w})
+                   for w in ("spouse", "doctor", "seller buyer")]
+            out({"t": t, "c": c, "h": h, "bad": bad})
+        """ % (self.SELLER, self.BUYER, TA), JEFFEREY_CLIENT="jefferey",
+            JEFFEREY_HTTP_TOKENS=TOKENS)
+        for k in "tch":
+            self.assertEqual(set(r[k]["filled"]),
+                             {"Buyer name", "Nom de l'acheteur", "Purchaser name"}, k)
+            self.assertEqual(r[k]["owner_is"], "buyer", k)
+            for label in self.SELLER:
+                self.assertNotIn(label, r[k]["filled"], (k, label))
+        for b in r["bad"]:
+            self.assertTrue(b.get("refused"), b)
+            self.assertNotIn("filled", b)
+            self.assertIn("'seller'", b["reason"])
+
+    def test_a_pdf_bill_of_sale_takes_his_name_only_on_his_side(self):
+        r = self.py("""
+            import jefferey_mcp as m
+            mcp_call(m, "set_profile_field", {"field": "full name", "value": "Laszlo Czako"})
+            form = make_form("bos.pdf", [{"name": "Seller name"}, {"name": "Buyer name"}])
+            read = mcp_call(m, "pdf_form_fields", {"pdf_path": form})
+            sold = mcp_call(m, "fill_pdf", {"pdf_path": form,
+                                            "values": {"Seller name": "Laszlo Czako"}})
+            wrong = mcp_call(m, "fill_pdf", {"pdf_path": form,
+                                             "values": {"Buyer name": "Laszlo Czako"}})
+            bought = mcp_call(m, "fill_pdf", {"pdf_path": form, "owner_is": "buyer",
+                                              "values": {"Seller name": "Laszlo Czako"}})
+            out({"read": read, "sold": sold, "wrong": wrong, "bought": bought,
+                 "files": outbox()})
+        """, JEFFEREY_CLIENT="jefferey")
+        self.assertEqual(r["read"]["for_someone_else"], ["Buyer name"])
+        self.assertEqual(r["read"]["owner_is"], "seller")
+        self.assertIn("written", r["sold"], r["sold"])
+        self.assertTrue(r["wrong"].get("refused"), r["wrong"])
+        self.assertTrue(r["bought"].get("refused"), r["bought"])
+        self.assertEqual(len(r["files"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

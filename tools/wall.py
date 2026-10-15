@@ -198,13 +198,15 @@ def allowed(sha: str, place, country, taken_at, automatic: bool) -> bool:
     photo, never anything on the owner's 'never on the wall' list — and,
     for 'on this day' (shown without anyone asking), never a subject his
     rules say not to raise unprompted."""
+    from reminisce import matches_any
     hidden, rem = _hidden()
     if hidden.get("closed") or sha in hidden["shas"]:
         return False
     tags = _photo_tags(rem, place, country, taken_at)
-    if tags & hidden["off_wall"]:
+    # 'Nova Scotia' or 'Halifax 2023' on his list hides what is both (I-53)
+    if matches_any(hidden["off_wall"], tags):
         return False
-    if automatic and tags & (hidden["unprompted"] | hidden["never_ask"]):
+    if automatic and matches_any(hidden["unprompted"] | hidden["never_ask"], tags):
         return False
     return True
 
@@ -227,11 +229,13 @@ def search(question: str, top: int = 120) -> dict:
     emb = _embedder() if q.semantic else None
     hits = []
     # Ask for more than will show: some are hidden or out of reach.
-    for h in recall.run(_index(), q, emb, top=top * 3):
+    idx = _index()
+    for h in recall.run(idx, q, emb, top=top * 3):
         if not allowed(h["sha256"], h["place"], h["country"], h["taken_at"], False):
             continue
-        if not (h.get("path") and Path(h["path"]).is_file()):
-            continue                     # deleted, or on a drive not plugged in
+        if not (h.get("path") and Path(h["path"]).is_file()) and not _cached_away(
+                idx, h["sha256"], h.get("path"), h.get("rel")):
+            continue                     # deleted, or out of reach with no copy here
         hits.append({k: v for k, v in h.items() if k != "path"})
         if len(hits) >= top:
             break
@@ -255,7 +259,7 @@ def on_this_day(top: int = 120) -> dict:
     for sha, path, rel, taken, place, country in rows:
         if not allowed(sha, place, country, taken, True):
             continue
-        if idx.locate(path, rel) is None:
+        if idx.locate(path, rel) is None and not _cached_away(idx, sha, path, rel):
             continue
         # No `path`: the page only needs the id, the date and the place, and
         # an absolute filename ("2016_divorce_papers.jpg") is itself a
@@ -268,6 +272,15 @@ def on_this_day(top: int = 120) -> dict:
             "No photographs from this day in other years.",
             "reading": f"photographs taken on {today.strftime('%B %-d')}, "
                        f"in other years", "hits": hits}
+
+
+def _cached_away(idx, sha: str, path, rel) -> bool:
+    """The original is away for now (not deleted) and the wall already has
+    its copy."""
+    try:
+        return idx.thumb_path(sha).is_file() and idx.away(path, rel)
+    except OSError:
+        return False
 
 
 def thumbnail(sha: str) -> bytes | None:
@@ -288,9 +301,11 @@ def thumbnail(sha: str) -> bytes | None:
     if not allowed(sha, place, country, taken, False):
         return None
     src = idx.locate(path, rel)
-    if src is None:
-        return None                          # not reachable now (drive unplugged)
     out = idx.thumb_path(sha)
+    if src is None:
+        # In iCloud for now, or on a drive that is out: the copy made before
+        # is still his photograph (verify regression). Deleted: nothing.
+        return out.read_bytes() if _cached_away(idx, sha, path, rel) else None
     if out.exists():
         return out.read_bytes()
     try:
