@@ -237,7 +237,7 @@ CORPUS: list[tuple[str, str, str, str, str]] = [
      "Mum, it's me, Laszlo. I'm in trouble and I lost my phone, this is my new number. I need "
      "you to send money right now. Please don't tell anyone, I'm embarrassed. I'll explain "
      "later."),
-    ("voice_apple_cards", "scam", "laszlo.b@gmail.co", "voice message from Laszlo",
+    ("voice_apple_cards", "scam", "laszlo.b@example.net", "voice message from Laszlo",
      "Hi Dad, voice message attached, it's me. I need two $500 Apple cards today, scratch them "
      "and read me the numbers."),
     ("voice_say_yes", "scam", "RBC Fraud Department", "Voice confirmation needed",
@@ -518,9 +518,9 @@ CORPUS: list[tuple[str, str, str, str, str]] = [
     ("em_interac_friend", "legit", "notify@payments.interac.ca",
      "INTERAC e-Transfer: Karen sent you money",
      "Karen sent you $40.00 (CAD). Deposit your money: click here to deposit."),
-    ("em_estate", "important", "estates@smithlaw.ca", "Estate of the late Joseph Czako",
+    ("em_estate", "important", "estates@smithlaw.ca", "Estate of the late Joseph Novak",
      "As executor's counsel, we write to advise you are named as a beneficiary in the will of "
-     "Joseph Czako. Please contact our office at the number listed on our website to arrange a "
+     "Joseph Novak. Please contact our office at the number listed on our website to arrange a "
      "meeting. No payment is required."),
     ("em_rbc_real_lock", "important", "RBC Royal Bank <alerts@rbc.com>",
      "Important: we've temporarily locked your account",
@@ -1273,7 +1273,7 @@ class TheReprosFromTheStressTest(TriageTest):
             out([jc.dispatch_tool("triage_message", {"sender": s, "body": %r})
                  for s in ("Josh (grandson) 365-555-0001", "+1 365 555 0155 (unknown)",
                            "BMO Alerts <alerts@bmo-secure-login.co>", "billing@paypa1.com",
-                           "laszlo.b@gmail.co", "notify@payments.interac.ca")])
+                           "laszlo.b@example.net", "notify@payments.interac.ca")])
         """ % body, JEFFEREY_CLIENT="jefferey")
         saved, unknown = r[0], r[1]
         self.assertIn("someone he has recorded", saved["sender_is"])

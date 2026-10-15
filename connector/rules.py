@@ -44,7 +44,7 @@ KINDS = ("disclosure", "reaction", "representation")
 
 # Audiences a rule can name. Anything else is a named person or group
 # ("karen", "family", "my sister"). Since October 2026 (I-24) a rule meets
-# its audience however it is written: 'Karen Czako <k@example.com>' is the
+# its audience however it is written: 'Karen Novak <k@example.com>' is the
 # 'karen' a rule names, and his ex-wife Karen is 'family' too. A rule that
 # says NO matches every way the audience can be written; a rule that says
 # YES must match it exactly.
@@ -105,7 +105,7 @@ def names_ai(r: dict) -> bool:
 def _says_no_to(r: dict, names, people) -> bool:
     """Does this NO rule reach an audience known by these names? Its own
     audience, each word of it, or the recorded person it names (verify I-24:
-    a no for 'Karen Czako' let 'Karen' and 'my ex-wife' through) — and, for
+    a no for 'Karen Novak' let 'Karen' and 'my ex-wife' through) — and, for
     a no that names his family or his children ('ma famille', 'my kids'),
     the family (D1)."""
     a = _aud(r)
@@ -309,7 +309,7 @@ class ConscienceRules:
         want = set(_tags(tags))
         if grounding.norm_audience(aud) == SELF:
             return {"allowed": True, "audience": aud, "reason": "the owner may always hear about themself"}
-        # 'Karen Czako <k@example.com>' meets a rule for 'karen' (I-24: only
+        # 'Karen Novak <k@example.com>' meets a rule for 'karen' (I-24: only
         # the exact string used to match, so a 'never tell Karen' rule let
         # her full name through to an 'anyone' allow).
         broad, strict = grounding.audience_aliases(aud, self.c.data.get("people") or [])

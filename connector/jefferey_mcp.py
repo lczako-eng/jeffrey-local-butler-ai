@@ -440,7 +440,7 @@ def triage_message(body: str, sender: str = "", subject: str = "") -> dict:
 def draft_guidance(purpose: str, recipient: str = "") -> dict:
     """Call BEFORE writing anything in the user's name (an email, a letter,
     a complaint, a cancellation), with the recipient as it will appear
-    ('Karen Czako <k@example.com>'). Returns their voice, the priorities and
+    ('Karen Novak <k@example.com>'). Returns their voice, the priorities and
     facts that apply here, who to sign as, the hard limits — and what his
     own rules keep from this recipient (do_not_mention) and how he asked to
     be spoken of. Write the draft from this, run check_draft on it, then

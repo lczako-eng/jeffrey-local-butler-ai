@@ -14,7 +14,7 @@ The structural rules it holds his rules to:
     caretaker key 'jefferey'. His own agent always sees his life; his rules
     about who may hear what govern everyone else.
   * A 'no' names exactly its audience (every way that audience is written:
-    'Karen Czako' is also 'Karen' and 'my ex-wife'), except that an explicit
+    'Karen Novak' is also 'Karen' and 'my ex-wife'), except that an explicit
     anyone-word — anyone, everyone, the public, members of the public, the
     world, nobody, people, les gens, tout le monde, quiconque, n'importe qui
     … with or without 'the', alone or beside other names — means every

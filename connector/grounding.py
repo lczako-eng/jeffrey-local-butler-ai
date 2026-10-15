@@ -19,8 +19,8 @@ surface answers the same way (the October 2026 stress test):
    default: only the owner's own caretaker key sees it, and only when the
    subject names it.
 
-3. **Who is listening (I-24).** 'karen', 'Karen Czako' and
-   'Karen Czako <karen@example.com>' are the same person to the owner's
+3. **Who is listening (I-24).** 'karen', 'Karen Novak' and
+   'Karen Novak <karen@example.com>' are the same person to the owner's
    rules. A rule that says NO matches every way she can be written; a rule
    that says YES must match her exactly. When in doubt, the answer is no.
 """
@@ -735,7 +735,7 @@ _ANYONE = frozenset({"anyone", "everyone", "everybody", "anybody", "all", "any o
                      "everyone else", "anyone else", "anybody else", "everybody else",
                      "all others", "all other people", "people", "strangers", "tout le monde",
                      "n'importe qui", "les autres", "tous"})
-# Titles that are not a name ('Mrs. Czako' is Czako).
+# Titles that are not a name ('Mrs. Novak' is Novak).
 _TITLES = frozenset({"mr", "mrs", "ms", "miss", "dr", "mme", "mlle", "m", "sir", "madam"})
 
 
@@ -779,7 +779,7 @@ SOMEONE_WORDS = FAMILY_WORDS | _stems("""
 
 # --------------------------------------------------- who a 'no' is for (R2)
 # A rule that says NO names exactly its audience — every way that audience is
-# written ('Karen Czako' is also 'Karen' and 'my ex-wife'), and no one else —
+# written ('Karen Novak' is also 'Karen' and 'my ex-wife'), and no one else —
 # except that an explicit anyone-word means every audience other than the
 # owner's own keys: 'anyone', 'everyone', 'the public', 'members of the
 # public', 'the world', 'nobody', 'people', 'les gens', 'tout le monde',
@@ -993,7 +993,7 @@ def rule_names(audience, people=()) -> frozenset:
     (verify I-24): the audience as written, each word of its name, and — when
     it names someone recorded in his life story — that person, their
     relationship to him, and the addresses noted for them. A no for 'Karen
-    Czako' then meets 'Karen', 'Mrs. Czako', 'my ex-wife' and her address."""
+    Novak' then meets 'Karen', 'Mrs. Novak', 'my ex-wife' and her address."""
     n = norm_audience(audience)
     if not n or n in (SELF, "anyone"):
         return frozenset({n} if n else ())
@@ -1056,7 +1056,7 @@ def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
         rel = norm_audience(p.get("relationship", ""))
         noted = _emails_in(p.get("notes", ""))
         exact = pn in strict or bool(email and email.lower() in noted)
-        # 'my ex-wife' is the person recorded as his ex-wife; 'kczako@…'
+        # 'my ex-wife' is the person recorded as his ex-wife; 'knovak@…'
         # holds her surname (verify I-24) — for a NO, never for a yes
         if rel and norm_audience(raw) == rel:
             broad |= {pn, rel}

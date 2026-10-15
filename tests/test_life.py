@@ -414,8 +414,8 @@ class DraftsKeepHisRules(LifeTest):
     """I-24 (selling#16, email#2)."""
 
     def test_a_rule_meets_the_recipient_however_the_address_is_written(self):
-        # email#2: draft_guidance('PTSD', 'Karen Czako <someone@example.invalid>')
-        # returned the PTSD fact; check_disclosure allowed 'Karen Czako'.
+        # email#2: draft_guidance('PTSD', 'Karen Novak <someone@example.invalid>')
+        # returned the PTSD fact; check_disclosure allowed 'Karen Novak'.
         r = self.py("""
             import jefferey_mcp as m
             mcp_call(m, "add_person", {"name": "Karen", "relationship": "ex-wife"})
@@ -426,11 +426,11 @@ class DraftsKeepHisRules(LifeTest):
             mcp_call(m, "set_rule", {"kind": "representation", "tags": "work", "audience": "anyone",
                                      "instruction": "Say I'm retired and leave it there."})
             mcp_call(m, "remember_fact", {"fact": "Laszlo has PTSD from Afghanistan"})
-            to = "Karen Czako <someone@example.invalid>"
+            to = "Karen Novak <someone@example.invalid>"
             out({"draft": mcp_call(m, "draft_guidance", {"purpose": "PTSD", "recipient": to}),
                  "other": mcp_call(m, "draft_guidance", {"purpose": "PTSD", "recipient": "Dr. Lee"}),
                  "checks": {a: mcp_call(m, "check_disclosure", {"audience": a, "tags": "health"})["allowed"]
-                            for a in ("karen", "Karen", "Karen Czako", to, "my sister")}})
+                            for a in ("karen", "Karen", "Karen Novak", to, "my sister")}})
         """, JEFFEREY_CLIENT="jefferey")
         d = r["draft"]
         self.assertEqual(d["their_facts_here"], [])
@@ -439,8 +439,8 @@ class DraftsKeepHisRules(LifeTest):
         self.assertIn("Say I'm retired and leave it there.", d["speak_of_them_this_way"])
         self.assertEqual([f["fact"] for f in r["other"]["their_facts_here"]],
                          ["Laszlo has PTSD from Afghanistan"])
-        self.assertEqual(r["checks"], {"karen": False, "Karen": False, "Karen Czako": False,
-                                       "Karen Czako <someone@example.invalid>": False,
+        self.assertEqual(r["checks"], {"karen": False, "Karen": False, "Karen Novak": False,
+                                       "Karen Novak <someone@example.invalid>": False,
                                        "my sister": True})
 
     def test_a_yes_for_one_karen_is_not_a_yes_for_another(self):
@@ -1085,20 +1085,20 @@ class AfterTheFixes(LifeTest):
         self.assertEqual(r["bulk"]["held_back"]["private"], 1)
 
     def test_a_no_for_her_full_name_meets_every_way_she_is_written(self):
-        # I-24 (1) and (2): a no for 'Karen Czako' did not meet 'Karen',
-        # 'karen@example.com', 'my ex-wife', 'Mrs. Czako', 'K. Czako <…>' or
-        # 'kczako@gmail.com'; they fell through to the 'anyone' yes
+        # I-24 (1) and (2): a no for 'Karen Novak' did not meet 'Karen',
+        # 'karen@example.com', 'my ex-wife', 'Mrs. Novak', 'K. Novak <…>' or
+        # 'knovak@example.net'; they fell through to the 'anyone' yes
         forms = ["Karen", "Karen <karen@example.com>", "karen@example.com", "my ex-wife",
-                 "Mrs. Czako", "K. Czako <kc1975@example.com>", "kczako@gmail.com",
-                 "Karen Czako <karen.czako@gmail.com>"]
+                 "Mrs. Novak", "K. Novak <kc1975@example.com>", "knovak@example.net",
+                 "Karen Novak <karen.novak@example.net>"]
         r = self.py("""
             import access
             import jefferey_mcp as m
             with access.owner_console():
-                m.life.add_person("Karen Czako", relationship="ex-wife",
+                m.life.add_person("Karen Novak", relationship="ex-wife",
                                   notes="email kc1975@example.com")
                 m.rules.set_rule("disclosure", "health", "Never tell Karen about my PTSD.",
-                                 audience="Karen Czako", allow=False)
+                                 audience="Karen Novak", allow=False)
                 m.rules.set_rule("disclosure", "health", "Anyone may know I am treated.",
                                  audience="anyone", allow=True)
                 m.conscience.remember_fact("On sertraline 100mg for PTSD")

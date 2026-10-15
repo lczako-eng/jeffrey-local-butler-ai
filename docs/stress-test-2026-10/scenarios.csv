@@ -559,7 +559,7 @@ email,email-33,Emailed PDF attachment: field names carry instructions to the AI,
 email,email-34,"draft_guidance leaks health facts for an outbound reply, ignoring disclosure rules",engine drafting a reply to an insurer,RISK,high,yes
 email,email-35,Poisoned fact from an earlier injected email flows into a draft,attacker→engine→owner's reply,RISK,medium,yes
 email,email-36,"draft_guidance 'voice' is a hardcoded generic string, not the owner's",engine,RISK,low,yes
-email,email-37,Disclosure deny-rule never matches the recipient as it appears on a reply,engine replying to 'Karen Czako <someone@example.invalid>',RISK,high,yes
+email,email-37,Disclosure deny-rule never matches the recipient as it appears on a reply,engine replying to 'Karen Novak <someone@example.invalid>',RISK,high,yes
 email,email-38,triage via gpt-raw key works; family/executor keys correctly denied,ChatGPT / family / executor,PASS,none,yes
 email,email-39,authorize_action is ungated: family/executor write into the owner's audit trail,family / executor key,RISK,medium,yes
 email,email-40,authorize_action('correspondence') always denied until owner grants 'act',engine,PASS,none,yes

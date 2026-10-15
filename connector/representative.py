@@ -3346,7 +3346,7 @@ class Representative:
         their voice, their values on this subject, the hard limits — and, for
         anyone who is not him, what his own rules let this person be told
         (I-24: the PTSD fact went into a reply to the very person his rule
-        named, because 'Karen Czako <…>' did not match a rule for 'karen').
+        named, because 'Karen Novak <…>' did not match a rule for 'karen').
 
         Facts come only when the purpose names them (whole words — 'rent' is
         not 'cuRRENT'); a fact his rules keep from this recipient is left out

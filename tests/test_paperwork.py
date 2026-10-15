@@ -1065,7 +1065,7 @@ class AfterTheFixes(PaperworkTest):
                 for f, v in [("Date of birth", "1950-03-14"), ("Postal code", "K1A 0B1"),
                              ("Phone", "416-555-0101"), ("Province", "Ontario"),
                              ("Address", "12 Elm St"), ("City", "Toronto"),
-                             ("Email", "l@example.org"), ("Website", "lczako.ca"),
+                             ("Email", "l@example.org"), ("Website", "my-site.example"),
                              ("Full name", "Laszlo Czako")]:
                     jc.rep.set_profile_field(f, v)
             out(jc.dispatch_tool("fill_form", {"fields": [
@@ -1085,7 +1085,7 @@ class AfterTheFixes(PaperworkTest):
         self.assertEqual(f["Address (street)"], "12 Elm St")
         self.assertEqual(f["address-level2"], "Toronto")
         self.assertEqual(f["Email address (e.g. name@example.com)"], "l@example.org")
-        self.assertEqual(f["Website (e.g. www.example.ca)"], "lczako.ca")
+        self.assertEqual(f["Website (e.g. www.example.ca)"], "my-site.example")
         self.assertEqual(f["Your email (jane@site.ca)"], "l@example.org")
         self.assertNotIn("Name (buyer)", f, "a hint that names someone else is not dropped")
         why = {n["field"]: n["why"] for n in r["needs_you"]}
