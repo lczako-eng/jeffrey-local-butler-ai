@@ -328,9 +328,10 @@ def log_action(category: str, description: str, outcome: str, amount: float | No
                authorization_id: str = "") -> dict:
     """Write down an act just performed on the owner's behalf, citing the
     authorization_id authorize_action gave you. No silent actions, ever. An
-    act with no valid approval, or that is not what was approved, is kept
-    but marked 'not approved' for the owner to see; outcomes JEFFEREY writes
-    itself (permission changes, approvals) are refused."""
+    act with no valid approval, or that is not what was approved — anything
+    it says beyond the approval counts — is kept but marked 'not approved' for
+    the owner to see; outcomes JEFFEREY writes itself (permission changes,
+    approvals) are refused. Describe exactly the act that was approved."""
     return conscience.log_action(category, description, outcome, amount, authorization_id)
 
 
@@ -950,7 +951,7 @@ def set_rule(kind: str, tags: str, instruction: str, audience: str = "me",
     owner's word; never write a rule for them. From you a no (disclosure,
     allow=false) holds at once, noted by the AI; any other rule is a proposal
     that changes nothing until he confirms it himself. A no for someone he
-    has not recorded holds for everyone and every AI; the result says so."""
+    has not recorded holds for everyone but his own JEFFEREY; the result says so."""
     return rules.set_rule(kind, tags, instruction, audience, allow)
 
 

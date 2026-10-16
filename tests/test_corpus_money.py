@@ -56,7 +56,10 @@ Round 8 (F4) — money after a cancellation, and look-alike bills
   * Statement names are read through the shared fold (a Cyrillic 'CОSTCO' is
     made to look like Costco: a phishing question) and lose a payment
     processor's prefix (PAYPAL *, PP*, SQ *, SP *, TST*, STRIPE*) before they
-    are matched. A variant of a registered name (the same first word:
+    are matched — but such a line, or a name glued to a fee word
+    ('COSTCOMEMBER'), is never by itself the membership: it asks him, and it
+    is never the first bill (round 8 repair), until he says the line is his
+    (name_for_charge, confirmed at his keyboard). A variant of a registered name (the same first word:
     'GOODLIFE CLUBS' for 'GOODLIFE FITNESS') at the fee inside the cadence
     asks 'Is this a second bill?'.
 
@@ -427,13 +430,24 @@ CHECKS: list[tuple] = [
     ("a Cyrillic Costco at the fee", [COSTCO], [
         ("COSTCO MEMBERSHIP", 65.00, "2026-02-01", "expected", 0.0, ""),
         ("C\u041eSTCO MEMBERSHIP", 65.00, "2026-09-03", "ask_owner", 0.0, PHISH)], 0.0),
+    # Round 8 repair (F4): a line billed through a payment processor, or a name
+    # read only by splitting a word glued to a fee word, is never by itself
+    # his membership — anyone can call a PayPal or Square account
+    # 'COSTCOMEMBER' — so it is his question, and nothing is claimed from the
+    # membership for it (round 8 claimed $65 and $54.99 here, and a pack that
+    # asked Costco to refund what PayPal's account holder had charged)
     ("the membership through PayPal", [COSTCO], [
         ("COSTCO MEMBERSHIP", 65.00, "2026-02-01", "expected", 0.0, ""),
-        ("PAYPAL *COSTCOMEMBER", 65.00, "2026-09-03", "duplicate", 65.00, "")], 65.00),
+        ("PAYPAL *COSTCOMEMBER", 65.00, "2026-09-03", "ask_owner", 0.0, QUESTION)], 0.0),
     ("the gym through Square and Stripe", [("GoodLife Fitness membership", 54.99, "monthly")], [
         ("GOODLIFE FITNESS", 54.99, "2026-09-01", "expected", 0.0, ""),
-        ("SQ *GOODLIFE FITNESS", 54.99, "2026-09-03", "duplicate", 54.99, ""),
-        ("STRIPE*GOODLIFE FITNESS", 54.99, "2026-10-01", "expected", 0.0, "")], 54.99),
+        ("SQ *GOODLIFE FITNESS", 54.99, "2026-09-03", "ask_owner", 0.0, QUESTION),
+        ("STRIPE*GOODLIFE FITNESS", 54.99, "2026-10-01", "ask_owner", 0.0, QUESTION)], 0.0),
+    # ...the skeptic's P2: the processor's line first, then the real bill,
+    # which stays as agreed (round 8 called it a $65 duplicate)
+    ("PayPal first, then the real membership", [COSTCO], [
+        ("PAYPAL *COSTCOMEMBER", 65.00, "2026-02-01", "ask_owner", 0.0, QUESTION),
+        ("COSTCO MEMBERSHIP", 65.00, "2026-03-01", "expected", 0.0, "")], 0.0),
     ("a second bill under a variant name", [("GoodLife Fitness membership", 54.99, "monthly")], [
         ("GOODLIFE FITNESS", 54.99, "2026-09-01", "expected", 0.0, ""),
         ("GOODLIFE CLUBS", 54.99, "2026-09-06", "ask_owner", 0.0, QUESTION)], 0.0),

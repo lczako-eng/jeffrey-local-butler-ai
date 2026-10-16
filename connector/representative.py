@@ -2668,6 +2668,43 @@ class Representative:
                        fields=unconfirmed,
                        needs_you=[{"field": k, "why": "noted by the AI, not confirmed by him"}
                                   for k in unconfirmed])
+        # A box that is one of his own details takes only what he confirmed
+        # himself — the value fill_form gives for it, written as he keeps it —
+        # or a reference to his vault (round 8 repair, S2: fill_pdf compared a
+        # value only with the AI's note, as text, so 'help-desk@example.net.',
+        # 'mailto:…', '99 Scam Road' and 'Mike Ross' went into his own boxes).
+        his_value, not_his = {}, []
+        for k, v in values.items():
+            if k not in hits or not v.strip() or vault.is_reference(v):
+                continue
+            for f in hits[k]:
+                if f.get("ft") in ("/Btn", "/Sig") or f["sensitive"] or parties(
+                        *f["texts"], among=_PEOPLE | _NOT_CURRENT | _SHOPS, long=True,
+                        side=side):
+                    continue
+                key = next((x for x in (self._normalize_field(t, side) for t in f["texts"])
+                            if x), None)
+                if not key:
+                    continue
+                mine = self._current(key)
+                if mine and _same_detail(key, v, mine):
+                    his_value[k] = mine
+                else:
+                    not_his.append((k, key, mine))
+                    break
+        if not_his:
+            return _no("These boxes are his own details, and only what he confirmed himself "
+                       "goes in them: " + ", ".join(
+                           f"'{k}' (his {_DETAIL_WORDS.get(key, key.replace('_', ' '))}"
+                           + ("" if mine else ", which he has not given yet") + ")"
+                           for k, key, mine in not_his)
+                       + ". What was handed in is not what he confirmed. Nothing was written. "
+                         "Use exactly what fill_form gives for these boxes, or ask him — a "
+                         "new detail is his to confirm himself (/pending, then /confirm, in "
+                         "'Talk to JEFFEREY on this Mac').",
+                       fields=[k for k, _, _ in not_his],
+                       needs_you=[{"field": k, "why": "his own detail: only what he confirmed "
+                                                     "goes here"} for k, _, _ in not_his])
         if blocked:
             return {
                 "error": "refused", "refused": True,
@@ -2776,6 +2813,8 @@ class Representative:
                 if secret is None:
                     return {"error": "unknown vault reference", "references": [v]}
                 resolved[k] = secret
+            elif k in his_value:
+                resolved[k] = his_value[k]         # his own detail, as he keeps it
             else:
                 resolved[k] = _tick(v, hits[k])
         try:
@@ -2914,8 +2953,12 @@ class Representative:
         if not s:
             return "unknown", "not given", flags
         # 'someone he has recorded' is someone HE recorded or confirmed: a
-        # 'grandson' an AI wrote down is nobody he knows (S3, round 8)
+        # 'grandson' an AI wrote down is nobody he knows (S3, round 8) — and
+        # is named as what he is, someone an AI noted down, never 'a stranger'
+        # or 'an address he has not recorded' (round 8 repair)
         people = provenance.his_people(self.c.data)
+        noted = [p for p in self.c.data.get("people") or []
+                 if isinstance(p, dict) and not provenance.his(p)]
         m = _EMAIL_ADDR.search(s)
         digits = re.sub(r"\D", "", s)
         if m:
@@ -2942,6 +2985,9 @@ class Representative:
             for p in people:
                 if addr in str(p.get("notes", "")).casefold():
                     return "recorded", f"{p.get('name')}, someone he has recorded", flags
+            for p in noted:
+                if addr in str(p.get("notes", "")).casefold():
+                    return "noted", _noted_as(p), flags
             kind = "official" if _official(domain) else "email"
             return kind, ("the real address of a company he may deal with" if kind == "official"
                           else "an email address he has not recorded"), flags
@@ -2956,15 +3002,19 @@ class Representative:
         if set(words) & _STRANGER_WORDS:
             return "unknown", "someone he does not know (a buyer or a stranger)", flags
         if len(digits) >= 7:
-            for p in people:
-                noted = re.sub(r"\D", "", str(p.get("notes", "")))
-                if noted and digits[-10:] in noted:
-                    return "recorded", f"{p.get('name')}, someone he has recorded", flags
-        for p in people:
-            pw = [w for w in re.findall(r"[^\W\d_]+", grounding.normalise(p.get("name", "")))
-                  if len(w) >= 2]
-            if words and pw and set(pw) <= set(words):
-                return "recorded", f"{p.get('name')}, someone he has recorded", flags
+            for group, kind in ((people, "recorded"), (noted, "noted")):
+                for p in group:
+                    num = re.sub(r"\D", "", str(p.get("notes", "")))
+                    if num and digits[-10:] in num:
+                        return kind, (f"{p.get('name')}, someone he has recorded"
+                                      if kind == "recorded" else _noted_as(p)), flags
+        for group, kind in ((people, "recorded"), (noted, "noted")):
+            for p in group:
+                pw = [w for w in re.findall(r"[^\W\d_]+", grounding.normalise(p.get("name", "")))
+                      if len(w) >= 2]
+                if words and pw and set(pw) <= set(words):
+                    return kind, (f"{p.get('name')}, someone he has recorded"
+                                  if kind == "recorded" else _noted_as(p)), flags
         if words:
             if 4 <= len(digits) <= 6:
                 return "shortcode", "a company's short number", flags
@@ -2982,7 +3032,7 @@ class Representative:
             return "number", "a phone number he has not saved", flags
         return "unknown", "someone he does not know", flags
 
-    def triage_message(self, sender: str, subject: str, body: str) -> dict:
+    def triage_message(self, sender: str, subject: str, body: str) -> dict:  # noqa: C901
         """Read a message the way a good friend would: what does it want,
         does it matter by THIS person's priorities, and is anyone trying
         to take advantage of them?
@@ -3009,6 +3059,10 @@ class Representative:
 
         kind, sender_is, sender_flags = self._sender_kind(sender)
         known = kind in ("recorded", "contact", "shortcode", "official")
+        # someone an AI noted down is not someone he knows — every sign still
+        # counts — but the name the message gives is the note's, so it is no
+        # 'wrong number from a stranger' (round 8 repair, S3)
+        noted = kind == "noted"
         # verify I-13: a bare name he has not recorded may be his saved
         # contact — or any name a stranger chose on Marketplace or WhatsApp.
         # It is never 'known'; the family signals weigh it a little lighter.
@@ -3177,7 +3231,7 @@ class Representative:
             add("romance", 0.3, ("affection from someone who then needs money — the pattern "
                                  "of a romance scam; never send money to someone he has not "
                                  "met in person"))
-        if stranger and seen(_WRONG_NUMBER):
+        if stranger and not noted and seen(_WRONG_NUMBER):
             add("wrong_number", 0.25, ("a 'wrong number' message from a stranger — often the "
                                        "start of a friendship that ends in a request for "
                                        "money; best not to reply"))
@@ -3246,7 +3300,12 @@ class Representative:
                         "his schedule, or who lives with him. If it is about a sale, "
                         "meet in a public place (many police stations have a safe "
                         "exchange zone) with someone else there.")
-            if kind != "recorded":
+            if noted:
+                advice += (" It is from " + sender_is + ". If that is who they are, he can "
+                           "check by calling them on the number he already has, and confirm "
+                           "them himself (/pending, then /confirm, in 'Talk to JEFFEREY on "
+                           "this Mac'); then JEFFEREY knows them.")
+            elif kind != "recorded":
                 advice += (" JEFFEREY does not know who sent it (" + sender_is + "). If it "
                            "is someone in his family, he can check by calling them on the "
                            "number he already has; once they are in his life story with "
@@ -3276,6 +3335,14 @@ class Representative:
             verdict = "needs_decision"
             advice = ("It wants his time or an answer: tell him what it asks and by when. "
                       "Recommend, with the reasoning in his values.")
+        elif noted:
+            # nothing in it asks for anything — but only an AI says who sent it:
+            # he is told who, and asked whether that is right (round 8 repair)
+            verdict = "needs_decision"
+            advice = ("Nothing here asks for money, a card, a code or a secret. It is from "
+                      + sender_is + ": tell him who it says it is from and what it says, and "
+                      "ask him whether that is right. If it is, he confirms them himself "
+                      "(/pending, then /confirm, in 'Talk to JEFFEREY on this Mac').")
         else:
             verdict = "routine"
             advice = ("JEFFEREY saw nothing here that asks for money, a card, a code, a secret "
@@ -3391,8 +3458,10 @@ class Representative:
                          "mention them, hint at them, or explain why. If asked, say it "
                          "isn't yours to share."),
             }
+            rd = provenance.reader()
             reps = [r["instruction"] for r in R.rules("representation")
-                    if _rules._aud(r) in (strict | {_rules.ANYONE})]
+                    if _rules._aud(r) in (strict | {_rules.ANYONE})
+                    and not _rules.words_held(r, rd, self.c.data)]
             if reps:
                 out["speak_of_them_this_way"] = reps
         if _STRANGER_DEAL.search(grounding.normalise(f"{purpose} {recipient}")):
@@ -3557,6 +3626,37 @@ _NO_PDF = ("JEFFEREY could not open a PDF form at that place. Check the file's n
            "folder with the owner: it must be a .pdf file on this computer or the drive.")
 _UNTICKED = frozenset({"", "off", "no", "false", "0", "unchecked", "none", "n"})
 _TICKED = frozenset({"yes", "on", "true", "1", "x", "checked", "y", "oui"})
+
+
+_DETAIL_WORDS = {"full_name": "name", "address_line1": "address", "address_line2": "address",
+                 "email": "e-mail address", "phone": "phone number",
+                 "postal_code": "postal code", "date_of_birth": "date of birth",
+                 "first_name": "first name", "last_name": "last name"}
+
+
+def _same_detail(key: str, given: str, his: str) -> bool:
+    """Is what was handed in his own confirmed detail, only written another
+    way (case, spacing, a full stop; a phone number's dashes, a date's
+    order)? An address of e-mail must be the very same address."""
+    n = grounding.normalise
+    if key in ("email", "website"):
+        return n(given) == n(his)
+    if key == "phone":
+        a, b = re.sub(r"\D", "", given), re.sub(r"\D", "", his)
+        return len(b) >= 7 and a[-10:] == b[-10:]
+    if key == "date_of_birth":
+        a, b = re.findall(r"\d+", given), re.findall(r"\d+", his)
+        return bool(b) and sorted(x.lstrip("0") for x in a) == sorted(x.lstrip("0") for x in b)
+    plain = lambda x: " ".join(re.sub(r"[^\w\s]", " ", n(x)).split())  # noqa: E731
+    return plain(given) == plain(his)
+
+
+def _noted_as(p: dict) -> str:
+    """Someone an AI wrote down, in plain words (round 8 repair, S3)."""
+    rel = str(p.get("relationship") or "").strip()
+    return (f"{p.get('name')}, noted down by an AI" + (f" as his {rel}" if rel else "")
+            + " — he has not confirmed them, so JEFFEREY does not count them as someone "
+              "he knows")
 
 
 def _quoted(words) -> str:

@@ -61,7 +61,7 @@ from pathlib import Path
 os.umask(0o077)
 
 sys.path.insert(0, str(Path(__file__).parent))
-from conscience import Conscience, DriveNotHere, StoreProblem
+from conscience import Conscience, DriveNotHere, StoreProblem, on_screen
 from representative import Representative
 from guardian import Guardian
 from life import Life
@@ -307,9 +307,9 @@ TOOLS = [
         "description": (
             "Write down an act just performed on the owner's behalf, citing "
             "the authorization_id authorize_action gave. No silent actions, "
-            "ever. An act with no valid approval, or that is not what was "
-            "approved, is kept but marked 'not approved'; outcomes JEFFEREY "
-            "writes itself are refused."
+            "ever. An act with no valid approval, or that says anything beyond "
+            "what was approved, is kept but marked 'not approved'; outcomes "
+            "JEFFEREY writes itself are refused."
         ),
         "input_schema": {
             "type": "object",
@@ -1040,7 +1040,8 @@ TOOLS = [
             "Only at the owner's word; never write a rule for them. From you a "
             "no (disclosure, allow false) holds at once, noted by the AI; any "
             "other rule is a proposal that changes nothing until he confirms it. "
-            "A no for someone he has not recorded holds for everyone and every AI."
+            "A no for someone he has not recorded holds for everyone but his own "
+            "JEFFEREY."
         ),
         "input_schema": {
             "type": "object",
@@ -2511,8 +2512,8 @@ def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | No
                 return {"pending": []}
             print(f"  {len(items)} thing(s) an AI noted down wait for your OK:")
             for k, it in enumerate(items, 1):
-                print(f"    {k}. ({it['kind']}) {it['what'][:110]}")
-                print(f"          — {it['why']}   [code {it['id']}]")
+                print(f"    {k}. ({it['kind']}) {on_screen(it['what'])}")
+                print(f"          — {on_screen(it['why'])}   [code {it['id']}]")
             print("  If they are right, type /confirm and their numbers (for example "
                   "/confirm 1 3), or /confirm all. Then they are your own words. If one is "
                   "wrong, ask JEFFEREY to forget it. To let more people see something, "
@@ -2521,12 +2522,16 @@ def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | No
         if verb == "/confirm":
             items = [it for it in conscience.pending_items()
                      if it["kind"] != "request to share"]
-            ids, what = [], []
+            ids, what, picked = [], [], []
+            listed = conscience.pending_items()
             for w in rest.replace(",", " ").split():
                 if w.lower() == "all":
-                    ids, what = ["all"], ["everything an AI noted down that waits for you"]
+                    # every one of them, in full: 'all' also takes rules away and
+                    # adds yes rules, so he sees each (round 8 repair)
+                    ids, picked = ["all"], list(items)
+                    what = [f"{k}. ({it['kind']}) {on_screen(it['what'])}"
+                            for k, it in enumerate(listed, 1) if it in items]
                     break
-                listed = conscience.pending_items()
                 if w.isdigit() and 1 <= int(w) <= len(listed):
                     it = listed[int(w) - 1]
                     if it["kind"] == "request to share":
@@ -2534,16 +2539,20 @@ def owner_life(command: str, answer=input, tty: bool | None = None) -> dict | No
                               "if you want that.")
                         continue
                     ids.append(it["id"])
-                    what.append(f"{w}. {it['what'][:80]}")
+                    picked.append(it)
+                    what.append(f"{w}. ({it['kind']}) {on_screen(it['what'])}")
                 else:
                     ids.append(w)
-                    what.append(w)
+                    what.append(on_screen(w))
             if not items or not ids:
                 print("  Nothing was confirmed." if items else "  Nothing is waiting for you.")
                 return {"confirmed": [], "unknown_ids": []}
             print("  You are saying these are right, in your own words:")
             for line in what:
                 print(f"    {line}")
+            changes = conscience.rule_changes(picked)
+            if changes:
+                print("  " + changes)
             if not _confirmed("  Is that right? Type yes and press return: ", answer, tty,
                               widen=True):
                 return None
@@ -3266,11 +3275,13 @@ def selftest() -> None:
         assert _R.set_rule("disclosure", "money", "Anyone may know.", audience="anyone",
                            allow=True).get("proposed")
         assert not _R.check_disclosure("a neighbour", "money")["allowed"], "an AI's yes held"
-        # a no for someone nobody knows holds for everyone and every AI (round 8,
-        # F1); once he has recorded who Bob is, it binds only Bob
+        # a no for someone nobody knows holds for everyone but his own JEFFEREY,
+        # as a no for 'anyone' does (round 8, F1 and its repair); once he has
+        # recorded who Bob is, it binds only Bob
         _said = _R.set_rule("disclosure", "travel", "Not the press.", audience="the press",
                             allow=False)
-        assert _said["holds_for"] == "everyone and every AI", _said
+        assert _said["holds_for"] == "everyone", _said
+        assert "except your own JEFFEREY" in _said["note"], _said
         assert not _R.check_disclosure("a neighbour", "travel")["allowed"], "unknown no ignored"
         _R.c.data.setdefault("people", []).append({"name": "Bob", "relationship": "friend"})
         assert _R.set_rule("disclosure", "work", "Not Bob.", audience="bob",

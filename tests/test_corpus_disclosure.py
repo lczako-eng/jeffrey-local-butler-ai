@@ -56,12 +56,13 @@ and new_regressions). Now:
   * A 'no' whose audience — or any part of it before 'but', 'except' or
     'other than' — is not a person he recorded himself, not one of his keys'
     names, and not a group (an anyone-word, a family word, an AI word) holds
-    for EVERYONE AND EVERY AI, his own JEFFEREY too, and set_rule says so:
-    "I don't know who 'my lawyer' is, so this no holds for everyone and every
-    AI. Add them to your people to make it narrower." Rows that round 7 read
-    as EXACT ('Le Monde', 'Bob', 'my lawyer', 'the neighbours' …) are UNKNOWN
-    now, and an anyone-word beside a name nobody knows ('the public or the
-    press') holds for every AI too (AI_ALL). With the person recorded at his
+    for everyone — and, since the round 8 repair, not for his own JEFFEREY,
+    as a no for 'anyone' does — and set_rule says so: "I don't know who 'my
+    lawyer' is, so this no holds for everyone and every AI except your own
+    JEFFEREY … Add them to your people to make it narrower." Rows that
+    round 7 read as EXACT ('Le Monde', 'Bob', 'my lawyer', 'the neighbours'
+    …) are UNKNOWN now, and an anyone-word beside a name nobody knows ('the
+    public or the press') is ANYONE_UNKNOWN. With the person recorded at his
     own console, the same audiences bind only that person (RECORDED below).
     A person an AI wrote down never makes a no narrower.
   * AI words also cover JEFFEREY, Jefferey, Jeffrey, the butler, the
@@ -81,11 +82,13 @@ Outcomes, for a 'no' about his health with this audience:
   FAMILY    the family key no longer reads it (the no names the family)
   AI        neither the family key nor his caretaker key reads it; set_rule
             says it holds for every AI
-  AI_ALL    both: an anyone-word and an AI ('the public and ChatGPT'), or an
-            anyone-word and a name nobody knows ('the public or the press')
-  UNKNOWN   nobody knows who it is: everyone and every AI (round 8, F1)
-His caretaker key 'jefferey' still reads it, except for AI, AI_ALL and
-UNKNOWN.
+  AI_ALL    both: an anyone-word and an AI ('the public and ChatGPT')
+  UNKNOWN   nobody knows who it is: everyone (round 8, F1) — but, since its
+            repair, not his own JEFFEREY, as for EVERYONE
+  ANYONE_UNKNOWN  an anyone-word and a name nobody knows ('the public or
+            the press'): everyone, but not his own JEFFEREY (round 8 repair;
+            round 8 called these AI_ALL)
+His caretaker key 'jefferey' still reads it, except for AI and AI_ALL.
 """
 
 from __future__ import annotations
@@ -97,8 +100,14 @@ from test_life import LifeTest, TA, TF
 
 EVERYONE, EXACT, FAMILY, AI, AI_ALL = "everyone", "exact", "family", "ai", "ai+everyone"
 UNKNOWN = "nobody knows them"
+ANYONE_UNKNOWN = "anyone, and a name nobody knows"
+# Round 8 repair (F1): a no for someone nobody knows holds for everyone but his
+# own JEFFEREY, as a no for 'anyone' does — round 8 held it from his JEFFEREY
+# too, and blinded the caretaker that looks after him (UNKNOWN said 'everyone
+# and every AI', and an anyone-word beside such a name was AI_ALL; those rows
+# are ANYONE_UNKNOWN now). A no that names an AI still holds for every AI.
 HOLDS_FOR = {EVERYONE: "everyone", AI: "every AI", AI_ALL: "everyone and every AI",
-             UNKNOWN: "everyone and every AI"}
+             UNKNOWN: "everyone", ANYONE_UNKNOWN: "everyone"}
 
 AUDIENCES: list[tuple[str, str]] = [
     # round 4, verify-b/c: the ways of saying 'anyone' (ANoForThePublicIsANoForEveryone)
@@ -118,18 +127,18 @@ AUDIENCES: list[tuple[str, str]] = [
     ("le monde entier", EVERYONE), ("tout le monde sauf moi", EVERYONE),
     # round 5 verify-b: an anyone-word beside other names (round 8, F1: a
     # name nobody knows beside it makes it a no for every AI as well)
-    ("the public or the press", AI_ALL), ("the public and the media", AI_ALL),
-    ("le grand public et les journalistes", AI_ALL), ("the neighbours and the public", AI_ALL),
-    ("le public et la banque", AI_ALL), ("the general public, the bank", AI_ALL),
-    ("outsiders, the bank and the press", AI_ALL), ("nobody but my doctor", EVERYONE),
+    ("the public or the press", ANYONE_UNKNOWN), ("the public and the media", ANYONE_UNKNOWN),
+    ("le grand public et les journalistes", ANYONE_UNKNOWN), ("the neighbours and the public", ANYONE_UNKNOWN),
+    ("le public et la banque", ANYONE_UNKNOWN), ("the general public, the bank", ANYONE_UNKNOWN),
+    ("outsiders, the bank and the press", ANYONE_UNKNOWN), ("nobody but my doctor", EVERYONE),
     ("people other than my doctor", EVERYONE), ("social media", EVERYONE),
     # ...and the rest of that skeptic's list (p/r2.py)
-    ("strangers and the newspapers", AI_ALL), ("the world and his doctor", AI_ALL),
+    ("strangers and the newspapers", ANYONE_UNKNOWN), ("the world and his doctor", ANYONE_UNKNOWN),
     ("no one", EVERYONE), ("nobody", EVERYONE), ("personne", EVERYONE), ("aucun", EVERYONE),
     ("no-one at all", EVERYONE), ("the internet", EVERYONE),
-    ("the church and everybody", AI_ALL), ("any stranger", EVERYONE), ("folks", EVERYONE),
+    ("the church and everybody", ANYONE_UNKNOWN), ("any stranger", EVERYONE), ("folks", EVERYONE),
     ("everyone except the family", EVERYONE), ("all but Anna", EVERYONE),
-    ("mon voisin et le public", AI_ALL), ("le public, les voisins", AI_ALL),
+    ("mon voisin et le public", ANYONE_UNKNOWN), ("le public, les voisins", ANYONE_UNKNOWN),
     # a name that holds such a word is a name (round 4 verify-c: 'Le Monde'),
     # and a name nobody knows is everyone and every AI (round 8, F1)
     ("Le Monde", UNKNOWN), ("Monde", UNKNOWN), ("Mr. Nobody", UNKNOWN), ("Mrs. World", UNKNOWN),
@@ -182,7 +191,7 @@ AUDIENCES: list[tuple[str, str]] = [
     # convergence vb/vc R2 evidence: fixed in round 6, kept fixed
     ("any person", EVERYONE), ("noone", EVERYONE), ("personne d'autre", EVERYONE),
     ("everyone on Facebook", EVERYONE), ("all and sundry", EVERYONE),
-    ("anyone but Anna", EVERYONE), ("the press and anyone else", AI_ALL),
+    ("anyone but Anna", EVERYONE), ("the press and anyone else", ANYONE_UNKNOWN),
     ("whoever asks", EVERYONE), ("Nobody.", EVERYONE), ("toute personne", EVERYONE),
     ("my lawyer", UNKNOWN), ("Joe Everyone", UNKNOWN), ("Dr Wu", UNKNOWN),
     # ---------------------------------------------------------- round 8 (F1)
@@ -261,7 +270,7 @@ class WhoANoIsFor(LifeTest):
             why = []
             for where in ("http", "mcp"):
                 own_held = DIABETES not in o[where]
-                if own_held != (want in (AI, AI_ALL, UNKNOWN)):
+                if own_held != (want in (AI, AI_ALL)):
                     why.append(f"his own key ({where}) {'held' if own_held else 'reads it'}")
                 if "The orb made her laugh." not in f[where]:
                     why.append(f"the family key ({where}) lost an unrelated moment")
@@ -313,10 +322,13 @@ class WhoANoIsFor(LifeTest):
             got = {k: r[k] for k in ("moments", "facts", "family", "own_http")}
             if recorded:
                 self.assertEqual(got, {"moments": 3, "facts": 1, "family": 3, "own_http": 3}, a)
-                self.assertNotEqual(r["holds_for"], "everyone and every AI", a)
+                self.assertNotIn(r["holds_for"], ("everyone and every AI", "everyone"), a)
             else:
-                self.assertEqual(got, {"moments": 0, "facts": 0, "family": 0, "own_http": 0}, a)
-                self.assertEqual(r["holds_for"], "everyone and every AI", a)
+                # (round 8 repair: nobody knows who Bob is, so the no holds for
+                # everyone — the family key reads nothing — but his own JEFFEREY
+                # still sees his life; round 8 hid all of it from his JEFFEREY)
+                self.assertEqual(got, {"moments": 3, "facts": 1, "family": 0, "own_http": 3}, a)
+                self.assertEqual(r["holds_for"], "everyone", a)
                 self.assertIn(f"I don't know who '{a}' is", r["note"])
 
     def test_a_no_for_someone_he_recorded_binds_only_them(self):
@@ -454,7 +466,9 @@ class WhoANoIsFor(LifeTest):
                             allow=False)["holds_for"]
             out(res)
         """)
-        self.assertEqual(r, {"le monde False": "everyone", "Le Monde False": "everyone and every AI",
+        # (round 8 repair: a newspaper he has not recorded holds for everyone
+        # but his own JEFFEREY, as 'anyone' does)
+        self.assertEqual(r, {"le monde False": "everyone", "Le Monde False": "everyone",
                              "LE MONDE False": "everyone", "tout le monde False": "everyone",
                              "le monde True": "everyone", "Le Monde True": "le monde",
                              "LE MONDE True": "everyone", "tout le monde True": "everyone"})
@@ -525,13 +539,12 @@ class WhoANoIsFor(LifeTest):
                 out(res)
             """ % (surface, auds), JEFFEREY_CLIENT="jefferey")
         # round 8 (F1): nobody knows who 'the press' or 'Bob' is, so those
-        # hold for everyone and every AI ('but my doctor' is who may hear it)
+        # hold for everyone ('but my doctor' is who may hear it) — since the
+        # round 8 repair, everyone but his own JEFFEREY, as for 'anyone'
         for surface, res in said.items():
-            self.assertEqual(res["the public or the press"],
-                             ["everyone and every AI", ["everyone and every AI"]], surface)
+            self.assertEqual(res["the public or the press"], ["everyone", ["everyone"]], surface)
             self.assertEqual(res["nobody but my doctor"], ["everyone", ["everyone"]], surface)
-            self.assertEqual(res["Bob"], ["everyone and every AI", ["everyone and every AI"]],
-                             surface)
+            self.assertEqual(res["Bob"], ["everyone", ["everyone"]], surface)
 
 
 if __name__ == "__main__":

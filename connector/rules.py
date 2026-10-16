@@ -72,12 +72,15 @@ KINDS = ("disclosure", "reaction", "representation")
 # AN AUDIENCE NO ONE KNOWS IS EVERYONE (F1, round 8). A no whose audience —
 # read through the shared fold — is not a person he recorded himself, not
 # the name of one of his keys, and not a group (an anyone-word, a family
-# word, an AI word) holds for everyone AND every AI, his own JEFFEREY too
-# (grounding.unknown_parts). 'my lawyer', 'Bob', 'Le Monde' and 'the press'
-# used to bind only a reader of that very name — in practice nobody. Once he
-# records who they are at his own console, the no binds only them; a person
-# an AI wrote down never makes a no narrower. A yes never widens past what
-# is written.
+# word, an AI word) holds for everyone (grounding.unknown_parts): every
+# person, the family key and every AI — but not his own JEFFEREY, exactly as
+# a no for 'anyone' does (round 8 repair: holding it from his own JEFFEREY
+# too blinded the caretaker that looks after him, and an engine's untagged
+# no for a name nobody knows hid his whole life from it). 'my lawyer', 'Bob',
+# 'Le Monde' and 'the press' used to bind only a reader of that very name —
+# in practice nobody. Once he records who they are at his own console, the
+# no binds only them; a person an AI wrote down never makes a no narrower. A
+# yes never widens past what is written.
 SELF = "me"
 ANYONE = "anyone"
 # The keys a no may name: the presets, and every key he has given out.
@@ -150,9 +153,10 @@ def names_ai(r: dict) -> bool:
 
 
 def every_ai(r: dict, data: dict | None = None) -> bool:
-    """Does this NO hold for every AI: it names one, or nobody knows who its
-    audience is (F1)?"""
-    return names_ai(r) or bool(unknown(r, data))
+    """Does this NO hold for every AI, his own JEFFEREY too? Only when it
+    names an AI (D1). A no for someone nobody knows holds for everyone but
+    his own JEFFEREY, as a no for 'anyone' does (F1, round 8 repair)."""
+    return names_ai(r)
 
 
 def describe(r: dict, data: dict | None = None) -> tuple[str, str]:
@@ -161,19 +165,23 @@ def describe(r: dict, data: dict | None = None) -> tuple[str, str]:
     said = _written(r)
     nobody = unknown(r, data)
     everyone, ai = _no_aud(r, data) == ANYONE, every_ai(r, data)
-    if nobody:
-        who = (" and ".join(f"'{x}'" for x in nobody))
-        are = "is" if len(nobody) == 1 else "are"
-        return ("everyone and every AI",
-                f"I don't know who {who} {are}, so this no holds for everyone and every AI. "
-                f"Add them to your people to make it narrower. Only you, reading at your own "
-                f"keyboard, still see it.")
+    who = " and ".join(f"'{x}'" for x in nobody)
+    are = "is" if len(nobody) == 1 else "are"
     if ai:
         return ("everyone and every AI" if everyone else "every AI",
                 f"'{said}' names an AI, so this no holds for every AI that reads your "
                 "memories — Claude, ChatGPT, a model on this Mac, and your own JEFFEREY too"
                 + (", and for every person as well" if everyone else "")
-                + ". Only you, reading at your own keyboard, still see it.")
+                + "." + (f" I don't know who {who} {are}: add them to your people to make it "
+                         f"narrower." if nobody else "")
+                + " Only you, reading at your own keyboard, still see it.")
+    if nobody:
+        return ("everyone",
+                f"I don't know who {who} {are}, so this no holds for everyone and every AI "
+                f"except your own JEFFEREY, which always sees your life so it can look after "
+                f"you, and never tells it to {who if len(nobody) == 1 else 'them'}. "
+                f"Add them to your people to make it narrower. To keep it from your JEFFEREY "
+                f"too, add a no for 'any AI'.")
     if everyone:
         return ("everyone",
                 f"'{said}' means everyone, so this no holds for everyone except your own "
@@ -202,8 +210,8 @@ def _says_no_to(r: dict, names, people) -> bool:
 
 
 def _ai_no(data: dict, hit) -> dict | None:
-    """The first rule that says NO to every AI — it names one, or nobody
-    knows its audience (F1) — about whatever `hit` reaches."""
+    """The first rule that says NO to every AI — it names one (D1) — about
+    whatever `hit` reaches."""
     for r in data.get("rules") or []:
         if isinstance(r, dict) and r.get("kind") == "disclosure" and not r.get("allow") \
                 and hit(r) and every_ai(r, data):
@@ -299,16 +307,44 @@ def binds(r: dict, rd: dict | None = None, data: dict | None = None) -> bool:
         r, names, (data or {}).get("people") or []))
 
 
+def words_held(r: dict, rd: dict | None = None, data: dict | None = None) -> bool:
+    """Are this rule's own words kept from whoever reads (S1, round 8
+    repair)? When the rule holds for that reader (binds) — and when its words
+    are about something one of his rules keeps from that reader, or are
+    private and the reader does not hold his private life. 'Never tell Karen
+    Novak that I have HIV' does not hold for his own JEFFEREY, but its words
+    are about his health, which 'Never tell my health to any AI' keeps from
+    every AI: the words of one rule never carry what another keeps back.
+    Who may read a rule's words follows the same rules as everything else."""
+    if not isinstance(r, dict):
+        return False
+    rd = rd if rd is not None else provenance.reader()
+    aud = rd.get("audiences") or frozenset()
+    if not aud:
+        return False                     # the owner himself, at his keyboard
+    if binds(r, rd, data):
+        return True
+    text = str(r.get("instruction") or "")
+    tags = [str(t) for t in r.get("tags") or [] if str(t).strip()]
+    kinds: list[str] = []
+    for t in tags or [""]:
+        kinds += [k for k in grounding.sensitivity(text, t) if k not in kinds]
+    if kinds and not rd.get("caretaker") and not rd.get("owner"):
+        return True
+    return held_back(data or {}, aud, text, tags + kinds) is not None
+
+
 def held_for_reader(r: dict, rd: dict | None = None, data: dict | None = None) -> dict:
-    """A rule as a reader it binds may see it: what it is about, whom it is
-    for, yes or no — never his sentence (S1)."""
+    """A rule as a reader whose rules keep its words from it may see it: what
+    it is about, whom it is for, yes or no — never his sentence (S1)."""
     v = {k: r[k] for k in ("id", "kind", "tags", "audience", "allow", "added") if k in r}
     if r.get("kind") == "disclosure" and not r.get("allow"):
         v["holds_for"] = describe(r, data)[0]
     v["instruction_held_back"] = True
-    v["note"] = ("His own words for this rule are not given to an AI it holds for — only "
-                 "what it is about, whom it is for, and whether it is a yes or a no. Obey "
-                 "it; never ask him to read it to you.")
+    v["note"] = ("His own words for this rule are not given to this AI — it holds for you, "
+                 "or its words are about something his rules keep from you. Only what it is "
+                 "about, whom it is for, and whether it is a yes or a no. Obey it; never ask "
+                 "him to read it to you.")
     return v
 
 
@@ -447,7 +483,14 @@ class ConscienceRules:
                 "more go out, so only he does it, with his own hands. Nothing was removed.",
                 "Tell him what you asked to remove, and that it waits for him: /pending and "
                 "/confirm in 'Talk to JEFFEREY on this Mac'. Do not try again yourself.")
-        plan = forgetting.plan_rules(self.c, rule_id_or_text)
+        rd = provenance.reader()
+        # Only by what this engine may read of a rule: its id, its topic, its
+        # audience — and its words only when they are not kept from it (round
+        # 8 repair: 'HIV' said 'proposed', 'cancer' said 'nothing', a yes/no
+        # test of the very sentence it may not read).
+        plan = forgetting.plan_rules(
+            self.c, rule_id_or_text,
+            readable=lambda r: not words_held(r, rd, self.c.data))
         if isinstance(plan, str):
             return forgetting.refusal("remove_rule", plan)
         if not plan.changes:
@@ -457,7 +500,6 @@ class ConscienceRules:
         src = provenance.source(text=str(rule_id_or_text or ""))
         props = self.c.data.setdefault("rule_proposals", [])
         ids, rows = [], []
-        rd = provenance.reader()
         for ch in plan.changes:
             r = ch["before"]
             old = next((x for x in props if isinstance(x, dict) and x.get("action") == "remove"
@@ -468,7 +510,7 @@ class ConscienceRules:
                        "status": "pending", "added": _now()}
                 props.append(old)
             ids.append(old["id"])
-            seen = held_for_reader(r, rd, self.c.data) if binds(r, rd, self.c.data) else r
+            seen = held_for_reader(r, rd, self.c.data) if words_held(r, rd, self.c.data) else r
             rows.append({"id": r.get("id"), "kind": "rule",
                          "what": (f"a {'yes' if seen.get('allow') else 'no'} about "
                                   f"{', '.join(seen.get('tags') or []) or 'anything'} for "
@@ -491,12 +533,14 @@ class ConscienceRules:
 
     def listed(self, kind: str = "") -> list[dict]:
         """The rules as he reads them: each no that holds for everyone says so.
-        To an engine a rule holds for, never his sentence (S1, round 8); an
-        AI's note is labelled, and what an AI proposed is listed apart."""
+        To an engine a rule holds for, never his sentence (S1, round 8), nor
+        the sentence of any rule whose words are about what his rules keep
+        from it (words_held); an AI's note is labelled, and what an AI
+        proposed is listed apart."""
         rd = provenance.reader()
         out = []
         for r in self.rules(kind):
-            v = (held_for_reader(r, rd, self.c.data) if binds(r, rd, self.c.data)
+            v = (held_for_reader(r, rd, self.c.data) if words_held(r, rd, self.c.data)
                  else self._as_read(r))
             v = {k: x for k, x in v.items() if k not in ("source", "status")}
             if provenance.pending(r):
@@ -544,7 +588,7 @@ class ConscienceRules:
             if no:
                 out = {"allowed": False, "audience": aud, "tags": sorted(want),
                        "reason": "the owner forbade it", "rule": no.get("instruction", "")}
-                if not _caller_holds_private() or binds(no, None, self.c.data):
+                if not _caller_holds_private() or words_held(no, None, self.c.data):
                     out.pop("rule", None)
                 return out
         ok, rule, limited = verdict(self.c.data, broad, strict, on_topic)
@@ -560,13 +604,18 @@ class ConscienceRules:
                "rule": rule.get("instruction", "")}
         if limited:
             # A representation rule ("to others, say I'm retired") IS the
-            # owner's permission to say exactly that much — and no more.
-            out["limited_to"] = limited
-        if not _caller_holds_private() or binds(rule, None, self.c.data):
+            # owner's permission to say exactly that much — and no more. Its
+            # words go only to a reader they keep nothing from (round 8 repair).
+            rd = provenance.reader()
+            kept = {r.get("instruction", "") for r in self.rules("representation")
+                    if words_held(r, rd, self.c.data)}
+            out["limited_to"] = [x for x in limited if x not in kept]
+        if not _caller_holds_private() or words_held(rule, None, self.c.data):
             # The words of his rule are themselves the secret ('Never tell
             # Karen about Lisa'). Only his caretaker key reads them; others
             # get the answer and the reason (family#6) — and never an AI
-            # the rule holds for (S1, round 8).
+            # the rule holds for (S1, round 8), nor one whose words carry what
+            # another of his rules keeps from it (round 8 repair).
             out.pop("rule", None)
         return out
 
@@ -577,11 +626,20 @@ class ConscienceRules:
         owner's words, not a paraphrase."""
         aud = audience.strip().lower()
         want = set(_tags(tags))
+        rd = provenance.reader()
+        held = [0]
 
         def hits(kind):
-            return [r["instruction"] for r in self.rules(kind)
-                    if (not r["tags"] or want & set(r["tags"]))
-                    and r["audience"] in (aud, ANYONE, SELF if kind == "reaction" else aud)]
+            got = []
+            for r in self.rules(kind):
+                if not ((not r["tags"] or want & set(r["tags"]))
+                        and r["audience"] in (aud, ANYONE, SELF if kind == "reaction" else aud)):
+                    continue
+                if words_held(r, rd, self.c.data):
+                    held[0] += 1         # its words carry what his rules keep from you
+                    continue
+                got.append(r["instruction"])
+            return got
 
         out = {"tags": sorted(want), "audience": aud}
         if aud == SELF:
@@ -596,6 +654,10 @@ class ConscienceRules:
                            "'disclosure'. If allowed, say it only in the way "
                            "'speak_of_them_this_way' prescribes. If nothing prescribes, say "
                            "less rather than more.")
+        if held[0]:
+            out["held_back"] = {"count": held[0], "why": (
+                "Some of his instructions on this subject are about something his own rules "
+                "keep from you, so their words are not given. Do not guess at them.")}
         return out
 
     def _aliases(self, audience: str) -> tuple[frozenset, frozenset]:
@@ -615,9 +677,11 @@ class ConscienceRules:
         _, strict = self._aliases(audience)
         names = set(strict) | {ANYONE}
         want = set(_tags(list(tags)))
+        rd = provenance.reader()
         return [r["instruction"] for r in self.rules("representation")
                 if _aud(r) in names
-                and grounding.tag_hits(r.get("tags") or [], text or " ".join(sorted(want)), want)]
+                and grounding.tag_hits(r.get("tags") or [], text or " ".join(sorted(want)), want)
+                and not words_held(r, rd, self.c.data)]
 
     def denied_subjects(self, audience: str) -> list[str]:
         """The subjects a rule of his keeps from this audience — their names

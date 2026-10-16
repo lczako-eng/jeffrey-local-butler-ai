@@ -23,7 +23,8 @@ The decisions:
           back only when that makes a word the reader knows
     F1    an audience no one knows is everyone: a no whose audience is not a
           person he recorded, one of his keys, or a group (anyone, family,
-          AI) holds for everyone and every AI, and set_rule says so
+          AI) holds for everyone and every AI, and set_rule says so (round 8
+          repair: everyone but his own JEFFEREY, as for 'anyone')
     F2    a no on a topic reaches his values and his health (lab results,
           measures, the most-prescribed medicines in Canada)
     F3    codes and secret answers; a topic search matches only what would
@@ -48,6 +49,9 @@ from test_his_own import HisOwnTest
 from test_life import LifeTest
 
 EVERY = "everyone and every AI"
+# round 8 repair (F1): a no for someone nobody knows holds for everyone but his
+# own JEFFEREY, as a no for 'anyone' does; round 8 held it from his JEFFEREY too
+NOBODY_KNOWS = "everyone"
 
 
 # ======================================================================= fold
@@ -152,10 +156,11 @@ class F1AnAudienceNoOneKnowsIsEveryone(HisOwnTest):
             out(res)
         """)
         for a, (holds, note, seen) in r.items():
-            self.assertEqual(holds, EVERY, a)
-            self.assertEqual(seen, {"family": False, "jefferey": False}, a)
+            self.assertEqual(holds, NOBODY_KNOWS, a)
+            self.assertEqual(seen, {"family": False, "jefferey": True}, a)
         self.assertIn("I don't know who 'my lawyer' is, so this no holds for everyone and "
-                      "every AI. Add them to your people to make it narrower.", r["my lawyer"][1])
+                      "every AI except your own JEFFEREY", r["my lawyer"][1])
+        self.assertIn("Add them to your people to make it narrower.", r["my lawyer"][1])
         self.assertIn("I don't know who 'Bob' is", r["Bob"][1])
         self.assertIn("I don't know who 'the press' is", r["the public or the press"][1])
 
@@ -178,11 +183,11 @@ class F1AnAudienceNoOneKnowsIsEveryone(HisOwnTest):
             res["Bob Smith"] = [no("Bob Smith").get("holds_for"), reads()]
             out(res)
         """)
-        self.assertEqual(r["ai_person"], [EVERY, {"family": False, "jefferey": False}])
+        self.assertEqual(r["ai_person"], [NOBODY_KNOWS, {"family": False, "jefferey": True}])
         for a in ("Bob", "my GP", "Karen", "Karen Novak", "Le Monde", "Mrs. Patel"):
-            self.assertNotEqual(r[a][0], EVERY, a)
+            self.assertNotIn(r[a][0], (EVERY, NOBODY_KNOWS), a)
             self.assertEqual(r[a][1], {"family": True, "jefferey": True}, a)
-        self.assertEqual(r["Bob Smith"][0], EVERY)
+        self.assertEqual(r["Bob Smith"][0], NOBODY_KNOWS)
 
     def test_a_family_word_binds_the_family_key_and_the_person_he_recorded(self):
         # v1 D1 case 5: 'my wife', 'my sister', 'ma soeur', 'my brother', 'my

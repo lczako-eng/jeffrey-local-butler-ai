@@ -279,8 +279,9 @@ sends you can never say yes for you. The same goes for the buttons and the
 commands below: they only work with you at the keyboard, and `--yes` is
 not accepted any more. One thing this cannot stop: an AI program that is
 allowed to type commands on this Mac (some "agents" can) could read the
-three numbers off the screen and type them itself. So never let an AI run
-commands on the Mac that holds your memories. This ends when confirming
+three numbers off the screen and type them itself — or simply change the
+memory file directly, because it is an ordinary file on this Mac. So never
+let an AI run commands on the Mac that holds your memories. This ends when confirming
 moves to your fingerprint (Touch ID).
 
 | Type | It means |
@@ -298,9 +299,10 @@ moves to your fingerprint (Touch ID).
 
 Moving money, gift cards, crypto, phone calls in your voice, the doors — and
 your home itself: the house, its keys, its security, its cameras, who comes
-in (`home`, `my house`, `home security`, `guests`, `la maison`…) — are never
-allowed, whatever you type. Buying for the home (groceries, household
-supplies) is not the home itself. Anything that repeats (a subscription) he
+in (`home`, `my house`, `home security`, `guests`, `la maison`, `garage`,
+`housekeeping`, `chez moi`…, however it is spelled) — are never allowed,
+whatever you type; an errand put under one is brought to you. Buying for the
+home (groceries, household supplies) is not the home itself. Anything that repeats (a subscription) he
 always brings to you. And whatever you have allowed, anything about getting
 into your home — a door, a gate, the garage, a key, a lock, a code, the
 alarm, the intercom, or letting someone in (even the cat) — he brings to you
@@ -324,7 +326,7 @@ see something:
 | Type | It means |
 |---|---|
 | `/remember Anna calls on Sundays` | keep exactly these words, as your own |
-| `/pending` | what an AI noted down, or asked to share, that waits for your OK — numbered |
+| `/pending` | what an AI noted down, or asked to share, that waits for your OK — numbered, each in full; a rule says first whether it is a YES or a NO, about what, and for whom |
 | `/confirm 2` (or `/confirm 1 3`, or `/confirm all`) | yes, those are right: now they are your own words |
 | `python connector/conscience.py confirm` | the same, without starting a conversation (only at your keyboard, typing the three numbers it shows) |
 | `/share m-1a2b3c family` | your family's key may read this moment (`private` takes it back) |
@@ -340,10 +342,11 @@ know your life to look after you. A rule about your family or your children
 the key your family uses.
 
 A rule about someone JEFFEREY does not know — "never tell my lawyer", "not
-the press" — holds for **everyone and every AI** until that person is one of
-your people: tell JEFFEREY who they are, then `/confirm` it yourself. JEFFEREY
-tells you so when you make the rule; once they are yours, it is about them
-alone.
+the press" — holds for **everyone**, every other AI and your family's key
+included, until that person is one of your people: tell JEFFEREY who they
+are, then `/confirm` it yourself. Your own JEFFEREY still sees it, so it can
+look after you, and never tells it to them. JEFFEREY tells you so when you
+make the rule; once they are yours, it is about them alone.
 
 ---
 

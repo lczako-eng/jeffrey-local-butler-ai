@@ -482,6 +482,19 @@ def require_owners_hands(what: str) -> None:
             f"why, then stop. JEFFEREY never widens JEFFEREY.")
 
 
+def require_owner_console(what: str) -> None:
+    """A confirmation is his alone (S6, round 8 repair): only code that read
+    his yes from a person at the keyboard (owner_console) may make an AI's
+    words his, or mark his notices read. Unlike require_owners_hands, a
+    process with no engine bound does not count — `Conscience(p).confirm(
+    'all')` from a script confirmed every note an AI had written."""
+    if not is_owner_console():
+        raise OwnerOnly(
+            f"Only the owner can {what}, at his own keyboard: /confirm in 'Talk to "
+            f"JEFFEREY on this Mac', or python connector/conscience.py confirm, where he "
+            f"types the number shown. Nothing was changed.")
+
+
 def require_live() -> dict:
     """The caller's key must exist and be switched on. A revoked or unknown
     key is dead everywhere — it does not even get to read the key list or the

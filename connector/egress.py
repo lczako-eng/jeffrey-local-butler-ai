@@ -306,7 +306,7 @@ RELEASE: dict[str, frozenset[str]] = {
     # their own rules about who may hear what
     "check_disclosure": frozenset({"allowed", "audience", "tags"}),
     "guidance_for": frozenset({"tags", "audience", "react_this_way",
-                               "disclosure", "speak_of_them_this_way"}),
+                               "disclosure", "speak_of_them_this_way", "held_back"}),
     # the keys to Self-Cloud (about keys — never about the data behind them).
     # Giving out or widening a key is not a tool on any surface (the owner
     # types /grant or /scope add himself), so those release nothing.

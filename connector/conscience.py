@@ -41,8 +41,11 @@ Owner commands (the owner's own terminal; no AI can run these):
     python connector/conscience.py dismiss          I have read the notices
 'restore' and 'confirm' want him at the keyboard (S6, round 8): stdin and
 stdout terminals, the number shown on the screen typed back, --yes ignored.
-An agent with a shell and a pseudo-terminal can still do what he can, until
-Touch ID (I-43).
+'edit' and 'dismiss' want him there too (round 8 repair). What no check here
+can stop: the memory file is a plain file, so a program with a shell on this
+Mac can change the memory file directly (JEFFEREY adopts what it finds), and
+one with a pseudo-terminal can type the number shown, until Touch ID (I-43).
+Never let an AI run commands on the Mac that holds his memories.
 """
 
 from __future__ import annotations
@@ -545,18 +548,31 @@ _NEVER = (
      "speaking for the owner on the phone, in his voice or at the door"),
     (re.compile(r"\b(?:unlock\w*|locks?|alarms?|garage ?doors?|garage ?openers?|doors?)$"),
      "letting anyone into the house"),
-    # S9 (round 8): his home itself — the house, its security, its keys, who
-    # comes in — in English and French, any wording that ends with one of
-    # these ('my home', 'home security', 'house guests', 'la maison'). What
-    # one buys for the home ('household supplies', 'groceries') is not the
-    # home itself. (Accents are taken off before this is read.)
-    (re.compile(r"\b(?:homes?|houses?|maisons?|condos?|condominiums?|apartments?"
-                r"|appartements?|propert(?:y|ies)|proprietes?|security|securite"
-                r"|visitors?|visiteurs?|guests?|invites?|keys?|cles?|clefs?"
-                r"|entry|entries|entrees?|access|acces|portes?|cameras?"
-                r"|smart ?homes?|domotique)$"),
-     "his home itself: who comes in, its keys, doors and security"),
 )
+# S9 (round 8): his home itself — the house, its security, its keys, who
+# comes in — in English and French. Round 8 read only a wording that ENDED
+# with one of these, and not through the shared fold: Cyrillic 'hоme', Greek
+# 'Hοme', 'h0me', 'home security system', 'garage', 'serrures', 'chez moi'
+# and thirty more took 'act' (round 8 repair). Now the category is read
+# through grounding.fold, and a word of the home anywhere in it — or a word
+# that starts with home, house or maison ('homesecurity', 'housekeeping') —
+# makes it his home itself. Only what one buys for it ('household supplies',
+# 'home supplies') is not. A category about his home is never 'act'; an
+# errand under one is brought to him, never called a scam.
+_HOME_ITSELF = re.compile(
+    r"\b(?:homes?|houses?|maisons?|condos?|condominiums?|apartments?|appartements?"
+    r"|apparts?|propert(?:y|ies)|proprietes?|security|securite|visitors?|visiteurs?"
+    r"|guests?|invites?|keys?|cles?|clefs?|entry|entries|entrees?|access|acces|portes?"
+    r"|cameras?|smart ?homes?|domotique|alarms?(?! clocks?\b)|alarmes?|codes?|serrures?|garages?"
+    r"|locks?|lockbox(?:es)?|locksmiths?|buzzers?|nest|surveillance|domiciles?"
+    r"|logements?|residences?|foyers?|cottages?|chalets?|chez (?:moi|nous|soi|lui|elle)"
+    r"|(?:my|our|his|the) (?:place|flat))\b"
+    r"|\b(?:home|house|maison)[a-z]{3,}")
+_HOME_GOODS = re.compile(r"\bsuppl(?:y|ies)$")
+_HOME_WHY = "his home itself: who comes in, its keys, doors and security"
+# the words the fold may read back from look-alike letters and digits
+_NEVER_WORDS = frozenset(w for rx, _ in _NEVER for w in re.findall(r"[a-z]{3,}", rx.pattern)) \
+    | frozenset(re.findall(r"[a-z]{3,}", _HOME_ITSELF.pattern))
 # Inside a description: never a 'never' (R10, round 6). The words of a
 # description are an engine's, and reading them for 'never' refused ordinary
 # errands as 'letting anyone into the house … it may be a scam' ('Let me
@@ -583,6 +599,85 @@ _ASK_IN_TEXT = (
                 r"|phone\s+(?:him|her|them|the\s+(?:bank|police|office)|back|up))"),
      "speaking for the owner on the phone or in his voice"),
 )
+
+# --- what was done, beside what was approved (S8, round 8 repair) ------------
+# A line of the action log is in the past tense; an approval is not. These
+# are read as the same word, so 'Fed the cat at 6' is what 'Feed the cat at 6'
+# approved (the regular ones, 'watered', 'phoned', are read alike: _act_stem).
+_PAST = {"fed": "feed", "ate": "eat", "gave": "give", "given": "give", "told": "tell",
+         "sent": "send", "bought": "buy", "brought": "bring", "took": "take",
+         "taken": "take", "made": "make", "paid": "pay", "got": "get", "gotten": "get",
+         "went": "go", "gone": "go", "left": "leave", "kept": "keep", "met": "meet",
+         "ran": "run", "rang": "ring", "rung": "ring", "said": "say", "sold": "sell",
+         "wrote": "write", "written": "write", "drove": "drive", "driven": "drive",
+         "came": "come", "saw": "see", "seen": "see", "found": "find", "did": "do",
+         "done": "do", "had": "have", "put": "put", "set": "set", "read": "read",
+         "picked": "pick", "dropped": "drop", "swept": "sweep", "hung": "hang",
+         "fetched": "fetch", "booked": "book", "called": "call", "cut": "cut",
+         "spent": "spend", "shut": "shut", "won": "win", "lost": "lose"}
+
+
+# Only grammar is set aside: articles, pronouns, prepositions. The words of a
+# message or an act ('sent', 'told', 'letter', 'everything') count, though
+# grounding's own STOP list leaves them out when it grounds a topic —
+# 'Fed the cat at 6 and sent a letter' says more than 'Feed the cat at 6'.
+_ACT_KEEP = frozenset("""send sends sending sent ask asks asking asked tell tells telling told
+    say says saying said help helps helping get gets got getting make makes made let lets
+    write writes writing written wrote letter letters email emails message messages reply
+    replies draft drafts note notes need needs want wants like likes everything something
+    anything nothing someone anyone everyone thing things please""".split())
+_ACT_GRAMMAR = grounding.STOP - _ACT_KEEP
+
+
+def _act_words(text: str) -> dict[str, str]:
+    """The words of an act that mean something, one form for each tense
+    (and the word as written); numbers and times aside (an amount is read
+    on its own)."""
+    out: dict[str, str] = {}
+    for w in re.findall(r"[a-z]+", grounding.fold(str(text or "")).lower()):
+        if w in _ACT_GRAMMAR or len(w) < 2:
+            continue
+        out.setdefault(_act_stem(w), w)
+    return out
+
+
+def _act_stem(w: str) -> str:
+    """One form for 'phone', 'phoned', 'fix', 'fixed', 'tidy', 'tidied':
+    the same on both sides is all that matters here."""
+    w = _PAST.get(w, w)
+    if w.endswith("ied") and len(w) > 4:
+        w = w[:-3] + "y"
+    s = grounding.stem(w)
+    if s.endswith("ed") and len(s) > 3:
+        s = s[:-1]                      # 'used' is 'use', 'phoned' is 'phone'
+    if s.endswith("e") and len(s) > 2:
+        s = s[:-1]
+    return s
+
+
+# Words that only say the approved thing was carried out ('Ordered the weekly
+# shop', 'Placed the order', 'Done') — never an object of their own: what
+# they did it TO must still be a word of the approval.
+_CARRIED_OUT = frozenset(_act_words("order orders ordered place placed complete completed "
+                                    "finish finished handle handled arrange arranged"))
+
+
+def _beyond_approval(done: str, approved: str, approved_amount=None) -> list[str]:
+    """What an act written down says beyond what was approved: its words that
+    are not words of the approval, and an amount larger than any the
+    approval named."""
+    have = set(_act_words(approved)) | _CARRIED_OUT
+    extra = [w for k, w in _act_words(done).items() if k not in have]
+    amounts = lambda t: [float((a or b).replace(",", "")) for a, b in  # noqa: E731
+                         _AMOUNT_IN_TEXT.findall(str(t).lower())
+                         if (a or b).replace(",", "").replace(".", "", 1).isdigit()]
+    said, allowed = amounts(done), amounts(approved)
+    if _real_number(approved_amount) is not None:
+        allowed.append(_real_number(approved_amount))
+    if said and max(said) > (max(allowed) if allowed else 0.0) + 0.005:
+        extra.append(f"${max(said):,.2f}")
+    return extra
+
 
 # --- getting into the home asks the owner (D4, round 7) ----------------------
 # Rounds 4 to 6 read a description for WHO was being let in — a person, a
@@ -2346,7 +2441,12 @@ class Conscience:
         return out
 
     def dismiss_notices(self) -> int:
-        """The owner has read them. They stay in the file, marked as read."""
+        """The owner has read them. They stay in the file, marked as read.
+        Only he says so, at his keyboard (S6, round 8 repair: 'conscience.py
+        dismiss' from a script marked 'what was done is not what was
+        approved' read)."""
+        import access
+        access.require_owner_console("mark his notices as read")
         n = 0
         for x in self.data.get("_notices") or []:
             if isinstance(x, dict) and not x.get("dismissed"):
@@ -2690,7 +2790,10 @@ class Conscience:
             now = f"{higher} > {lower}"
             legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else {}
             locked = (bool(p.get("stated")) and not provenance.pending(p)) or (
-                (_real_number(legacy.get("confidence")) or 0) >= 0.8)
+                (_real_number(legacy.get("confidence")) or 0) >= 0.8) or (
+                # round 8 repair (S7): a value kept before JEFFEREY knew who
+                # said what is his, like one he stated: never turned round by an AI
+                provenance.stated_by(p) == provenance.UNKNOWN)
             # An AI never turns round or overrides a value he stated, or one
             # that is locked — whatever he typed: a question, 'I decided', 'I
             # changed my mind', words in quotation marks (R9, round 6; round 5
@@ -2800,21 +2903,26 @@ class Conscience:
             self._legacy_seen(p, True)
             p["for"] = int(p.get("for") or 0) + 1
         else:
-            # S7 (round 8): an AI's correction never wears down a value he
-            # stated or confirmed himself — twelve of them took his 'the car'
-            # from 0.6 to 0.15. It is written down, and he is asked; it does
-            # not count against him.
-            mine = engine and provenance.owner_backed(p)
+            # S7 (round 8): an AI's correction never wears down a value that is
+            # his — one he stated or confirmed himself (twelve of them took his
+            # 'the car' from 0.6 to 0.15), and one kept before JEFFEREY knew who
+            # said what (round 8 repair: forty turned 'doctor's advice > cost'
+            # round, and wore a 0.9 down to 0.08). It is written down, and he
+            # is asked; it does not count against him.
+            mine = engine and provenance.his(p)
             if not mine:
                 self._legacy_seen(p, False)
                 p["against"] = int(p.get("against") or 0) + 1
             else:
-                entry["not_counted"] = "against a value he stated or confirmed himself"
+                entry["not_counted"] = ("against a value he stated or confirmed himself"
+                                        if provenance.owner_backed(p) else
+                                        "against a value he held before JEFFEREY knew who "
+                                        "said what")
             legacy = p.get("legacy") if isinstance(p.get("legacy"), dict) else None
             strong_old = bool(legacy) and (_real_number(legacy.get("confidence")) or 0) >= 0.8
             if p.get("stated") or strong_old or mine:
-                said = ("said" if p.get("stated") else "confirmed" if mine
-                        else "has long held")
+                said = ("said" if p.get("stated") else "confirmed"
+                        if provenance.owner_backed(p) else "has long held")
                 q = (f"He {said} that for {p['context']}, {p['higher']} matters more than "
                      f"{p['lower']}. This time he chose {hi} over {lo}. Ask him, once "
                      f"and plainly, whether that has changed; nothing was reversed.")
@@ -2920,17 +3028,36 @@ class Conscience:
         return re.sub(r"\s+", " ", str(category or "")).strip().lower()
 
     @staticmethod
-    def _never(category: str, description: str = "") -> str | None:
-        """Why this can never be approved, whatever is set — or None. Only
-        the CATEGORY decides (R10, round 6): a description is an engine's
-        words, and reading them for 'never' refused ordinary errands."""
-        bare = "".join(ch for ch in unicodedata.normalize("NFKD", str(category or ""))
-                       if not unicodedata.combining(ch))       # 'propriété', 'clés'
-        words = re.sub(r"[^a-z0-9]+", " ", bare.lower()).strip()
+    def _category_words(category: str) -> str:
+        """A category in one spelling, read through the shared fold (round 8
+        repair): look-alike letters, digits for letters and accents read as
+        the letters they stand for ('hоme', 'h0me', 'propriété')."""
+        t = grounding.fold(str(category or ""), _NEVER_WORDS | grounding.FOLD_WORDS)
+        return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
+
+    @classmethod
+    def _never_outright(cls, category: str) -> str | None:
+        """Why nothing at all is ever done under this category (moving money,
+        gift cards, crypto, a call or the doors) — or None."""
+        words = cls._category_words(category)
         for rx, why in _NEVER:
             if rx.search(words):
                 return why
         return None
+
+    @classmethod
+    def _home_itself(cls, category: str) -> bool:
+        """Is this category about his home itself (S9)?"""
+        words = cls._category_words(category)
+        return bool(_HOME_ITSELF.search(words)) and not _HOME_GOODS.search(words)
+
+    @classmethod
+    def _never(cls, category: str, description: str = "") -> str | None:
+        """Why this can never be 'act', whatever is set — or None. Only the
+        CATEGORY decides (R10, round 6): a description is an engine's words,
+        and reading them for 'never' refused ordinary errands."""
+        return cls._never_outright(category) or (_HOME_WHY if cls._home_itself(category)
+                                                 else None)
 
     @staticmethod
     def _ask_first(description: str) -> str | None:
@@ -3111,7 +3238,7 @@ class Conscience:
         def no(reason: str, verdict: str = "not_allowed", **kw) -> dict:
             return {"allowed": False, "verdict": verdict, "reason": reason, **shown, **kw}
 
-        never = self._never(cat)
+        never = self._never_outright(cat)
         if never:
             return no(f"JEFFEREY never does this ({never}), whatever anyone has set. "
                       f"Only the owner can, himself. Tell him plainly what was asked "
@@ -3120,6 +3247,13 @@ class Conscience:
         if first:
             # at any level, under any category (D4): the owner's to decide
             return no(first, "ask_owner")
+        if self._home_itself(cat):
+            # his home itself is never 'act' (S9), and an errand under it is his
+            # to decide — brought to him, never called a scam (round 8 repair:
+            # a stored 'home' at act made 'Water the plants' 'never … a scam')
+            return no(f"'{cat}' is about his home itself, so JEFFEREY never does anything "
+                      f"there for him, at any level: bring it to him as a suggestion — he "
+                      f"decides himself.")
         if perm["level"] != "act":
             return no(f"'{cat}' is at '{perm['level']}': bring it to the owner as a "
                       f"suggestion instead. Only he can raise the level, himself.")
@@ -3269,17 +3403,25 @@ class Conscience:
                     f"cost {_money(amt, a.get('currency') or DEFAULT_CURRENCY)}"), None
         return None, a
 
-    def _not_what_was_approved(self, done: str, approved: str) -> str | None:
+    def _not_what_was_approved(self, done: str, approved: str,
+                               approved_amount=None) -> str | None:
         """Why an act written down is not the act that was approved — or None
-        (S8, round 8). Read by the same words the gate reads: what was done
-        would itself have asked the owner first (his doors, keys, codes and
-        alarm, letting someone in, money moved, a call as him) and what was
-        approved would not; or the two share no word that means anything."""
+        (S8, round 8). What was done would itself have asked the owner first
+        (his doors, keys, codes and alarm, letting someone in, money moved, a
+        call as him) and what was approved would not; or — round 8 repair —
+        it says anything beyond what was approved: a word that means
+        something and is not a word of the approval (in the past tense or
+        not), or more money than the approval named. 'Fed the cat at 6 and
+        wired $2,000 to Mike' under 'Feed the cat at 6' was approved:true,
+        and so were twelve others: a list of words cannot know every act
+        that can be added; what was approved can."""
         if self._ask_first(done) and not self._ask_first(approved):
             return ("what was done is something only he decides, and what was approved "
                     "was not")
-        if not (grounding.content(done) & grounding.content(approved)):
-            return "the two have nothing in common"
+        beyond = _beyond_approval(done, approved, approved_amount)
+        if beyond:
+            return "it says more than what was approved: " + ", ".join(
+                f"'{w}'" for w in beyond[:8])
         return None
 
     def log_action(self, category: str, description: str, outcome: str,
@@ -3317,7 +3459,8 @@ class Conscience:
             # The approval is used either way: it never covers a second act.
             auth["used"] = _now()
             mismatch = self._not_what_was_approved(entry["description"],
-                                                   str(auth.get("description") or ""))
+                                                   str(auth.get("description") or ""),
+                                                   auth.get("amount"))
         if auth is not None and mismatch:
             # S8 (round 8): an approval for 'Feed the cat at 6' covered a
             # logged 'Unlocked the front door and let the plumber in' as
@@ -3326,11 +3469,17 @@ class Conscience:
                          approved_for=str(auth.get("description") or "")[:300],
                          note=(f"Not an approved act: what was done is not what was approved "
                                f"({mismatch}). The owner sees this line marked that way."))
+            approved_for = on_screen(str(auth.get("description") or ""))[:120]
+            done_said = on_screen(entry["description"])[:160]
+            only_his = mismatch.startswith("what was done is something only he decides")
             self._note("action_mismatch", (
-                f"An AI wrote in your action log ('{cat}') that it did something under an "
-                f"approval you had given for something else: what was done is not what "
-                f"was approved. It is marked 'not approved' there — look at it in your "
-                f"brief, and ask JEFFEREY what happened."))
+                f"An AI wrote in your action log ('{cat}') something beyond what you "
+                f"approved: you approved '{approved_for}', and it wrote '{done_said}' — what "
+                f"was done is not what was approved, so it is marked 'not approved' there. "
+                + ("That is something only you decide: ask JEFFEREY what happened."
+                   if only_his else
+                   "If that is all it did, nothing is wrong; if not, ask JEFFEREY what "
+                   "happened.")))
         elif auth is not None:
             # What was approved stands beside what was done, so the owner
             # sees at a glance whether they are the same thing (verify I-45).
@@ -3825,27 +3974,27 @@ class Conscience:
         for r in self.data.get("rules") or []:
             if isinstance(r, dict) and provenance.pending(r):
                 out.append({"id": r.get("id"), "kind": "rule",
-                            "what": f"{r.get('instruction', '')} (about "
-                                    f"{', '.join(r.get('tags') or []) or 'anything'}, for "
-                                    f"{r.get('audience_written') or r.get('audience')})",
+                            "what": _rule_said(r, "the AI's words"),
                             "why": "an AI wrote down this no; it already holds, and confirming "
-                                   "makes it your own rule"})
+                                   "makes it your own rule",
+                            "effect": "keeps"})
         for x in self.data.get("rule_proposals") or []:
             if not isinstance(x, dict):
                 continue
             r = x.get("rule") if isinstance(x.get("rule"), dict) else {}
-            said = (f"{r.get('instruction', '')} ({'yes' if r.get('allow') else 'no'} "
-                    f"about {', '.join(r.get('tags') or []) or 'anything'}, for "
-                    f"{r.get('audience_written') or r.get('audience')})")
             if x.get("action") == "remove":
                 out.append({"id": x.get("id"), "kind": "removing one of his rules",
-                            "what": said,
+                            "what": "TAKING AWAY " + _rule_said(r, "its words", taken=True),
                             "why": "an AI asked to take this rule away; it still holds, and "
-                                   "confirming takes it away (you can put it back)"})
+                                   "confirming takes it away (you can put it back)",
+                            "effect": "takes away"})
             else:
-                out.append({"id": x.get("id"), "kind": "new rule", "what": said,
+                out.append({"id": x.get("id"), "kind": "new rule",
+                            "what": _rule_said(r, "the AI's words"),
                             "why": "an AI asked for this rule; it changes nothing until you "
-                                   "confirm it"})
+                                   "confirm it — " + _rule_if_confirmed(r),
+                            "effect": ("yes" if r.get("kind") == "disclosure" and r.get("allow")
+                                       else "no" if r.get("kind") == "disclosure" else "how")})
         prof = self.data.get("profile") if isinstance(self.data.get("profile"), dict) else {}
         for n in self.data.get("profile_notes") or []:
             if not isinstance(n, dict):
@@ -3857,6 +4006,28 @@ class Conscience:
                         "why": "an AI wrote it down for your forms; forms use only what you "
                                "confirmed, and confirming puts this on them"})
         return out
+
+    @staticmethod
+    def rule_changes(items) -> str:
+        """What confirming these does to his rules, in one line — or ''
+        (round 8 repair: '/confirm all' said only 'everything an AI noted
+        down', while it also took his rules away and added yes rules)."""
+        n = {k: sum(1 for it in items if it.get("effect") == k)
+             for k in ("yes", "no", "how", "takes away")}
+        bits = []
+        if n["yes"]:
+            bits.append(f"it adds {n['yes']} yes (letting someone hear about you)")
+        if n["no"]:
+            bits.append(f"it adds {n['no']} no")
+        if n["how"]:
+            bits.append(f"it adds {n['how']} rule{'s' if n['how'] > 1 else ''} for how to react "
+                        f"to you or speak of you")
+        if n["takes away"]:
+            bits.append(f"it takes away {n['takes away']} of your rules")
+        if not bits:
+            return ""
+        return ("This also changes your rules: " + (", ".join(bits[:-1]) + " and " + bits[-1]
+                                                    if len(bits) > 1 else bits[0]) + ".")
 
     def _find_item(self, item_id: str, sections=None) -> tuple[str | None, dict | None]:
         i = str(item_id or "").strip()
@@ -3871,7 +4042,7 @@ class Conscience:
         typed at his terminal). A value an AI said had changed is changed
         now, and the change is logged as his."""
         import access
-        access.require_owners_hands("confirm what an AI wrote down")
+        access.require_owner_console("confirm what an AI wrote down")
         want = [str(x).strip() for x in (ids if isinstance(ids, (list, tuple))
                                          else str(ids or "").replace(",", " ").split())
                 if str(x).strip()]
@@ -4004,6 +4175,56 @@ class Conscience:
         return out
 
 
+# ---------------------------------------------- what he confirms, on his screen
+# Round 8 repair (S1): what he confirms is an AI's own words, so what it DOES
+# comes first — yes or no, about what, for whom — and the words follow in
+# full, never cut, with every control character (a new line, a colour code)
+# shown as a space: a rule cannot draw a line of its own on his screen.
+_SCREEN_CONTROL = re.compile("[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e"
+                             "\u2060-\u2069\ufeff]")
+
+
+def on_screen(text) -> str:
+    """Text as it may stand on his screen: one line, no control characters."""
+    return " ".join(_SCREEN_CONTROL.sub(" ", str(text or "")).split())
+
+
+def _rule_parts(r: dict) -> tuple[str, str]:
+    topic = ", ".join(str(t) for t in r.get("tags") or []) or "anything"
+    aud = str(r.get("audience_written") or r.get("audience") or "me")
+    return on_screen(topic), on_screen(aud)
+
+
+def _rule_said(r: dict, whose: str, taken: bool = False) -> str:
+    """One rule, for his screen: what it does first, then its words in full."""
+    topic, aud = _rule_parts(r)
+    words = f" — {whose}: \"{on_screen(r.get('instruction', ''))}\""
+    kind = r.get("kind")
+    if kind == "reaction":
+        head = f"HOW TO REACT to you about {topic}"
+    elif kind == "representation":
+        head = f"HOW TO SPEAK OF YOU to {aud} about {topic}"
+    elif r.get("allow"):
+        head = (f"your YES: {aud} may hear about {topic}" if taken
+                else f"A YES: {aud} may hear about {topic}")
+    else:
+        head = (f"your NO: never tell {aud} about {topic}" if taken
+                else f"A NO: never tell {aud} about {topic}")
+    return head + words
+
+
+def _rule_if_confirmed(r: dict) -> str:
+    topic, aud = _rule_parts(r)
+    about = "anything about you" if topic == "anything" else f"your {topic}"
+    if r.get("kind") == "reaction":
+        return "if you confirm it, JEFFEREY reacts to you this way"
+    if r.get("kind") == "representation":
+        return f"if you confirm it, JEFFEREY speaks of you this way to {aud}"
+    if r.get("allow"):
+        return f"if you confirm it, {aud} may hear about {about}"
+    return f"if you confirm it, {aud} is never told about {about}"
+
+
 # ------------------------------------------------------------ the owner's view
 def _too_new_text(need: str) -> str:
     return (f"Your memories were last saved by a newer JEFFEREY (version {need}) "
@@ -4090,16 +4311,31 @@ def _print_history(c: Conscience, limit: int | None) -> None:
     print("\n  To put one back:  restore <number>")
 
 
-def edit(c: Conscience, editor: list[str] | None = None) -> int:
-    """The owner's validated hand edit. A private copy of the memory file
-    opens in a text editor; when it is saved and closed it is checked. A
-    mistake is named by line and nothing changes (the edited copy is kept
-    to fix); a good edit becomes the newest revision, with the version from
-    before pinned so it can be undone. Editing the file directly also works
-    — JEFFEREY notices and adopts it — this is the safe way."""
+def edit(c: Conscience, editor: list[str] | None = None, input_fn=None,
+         tty: bool | None = None) -> int:
+    """The owner's validated hand edit, at his keyboard (S6, round 8 repair:
+    with an EDITOR script and stdin from /dev/null it made an AI's notes his
+    and its 'Anyone may know my money' a confirmed yes). Only a person at
+    this keyboard starts it; a private copy of the memory file opens in a
+    text editor; when it is saved and closed it is checked, he is told what
+    it changes of his own (notes made his, rules added or taken away), and
+    he types the number shown. A mistake is named by line and nothing
+    changes (the edited copy is kept to fix); a good edit becomes the newest
+    revision, with the version from before pinned so it can be undone.
+
+    The memory file is a plain file: whatever can write to it — the owner's
+    own editor, or any program with a shell on this Mac — can change it
+    directly, and JEFFEREY adopts what it finds (it keeps the copy from
+    before). That is why no AI should ever run commands on this Mac."""
     import shlex
     import shutil
     import subprocess
+    import answers
+    if tty is None:
+        tty = answers.person_at_keyboard()
+    if not tty:
+        print("  " + answers.NOT_AT_KEYBOARD)
+        return 1
     try:
         c.refresh()
     except StoreProblem:
@@ -4135,6 +4371,16 @@ def edit(c: Conscience, editor: list[str] | None = None) -> int:
               f"  Your edited copy is kept at {tmp} — fix it and run this again.")
         return 1
     try:
+        old_obj = Conscience._parse(raw)
+    except _Unreadable:
+        old_obj = {}
+    for line in _what_an_edit_makes_his(old_obj, obj):
+        print("  " + line)
+    if not answers.confirm_by_code(print, input_fn, True, "Save this edit?"):
+        os.unlink(tmp)
+        print("  Your memories are exactly as they were.")
+        return 1
+    try:
         with c._lock():
             cur = c.path.read_bytes()
             if cur != raw:
@@ -4161,6 +4407,33 @@ def edit(c: Conscience, editor: list[str] | None = None) -> int:
     print("  Saved. The version from before is kept as a copy, if you change "
           "your mind ('Restore my memories').")
     return 0
+
+
+def _what_an_edit_makes_his(old: dict, new: dict) -> list[str]:
+    """What a hand edit changes of what is his, in plain words: an AI's notes
+    it makes his, rules it adds or takes away (round 8 repair, S6)."""
+    def made_his(sec: str) -> int:
+        was = {x["id"]: x for x in old.get(sec) or [] if isinstance(x, dict) and x.get("id")}
+        return sum(1 for x in new.get(sec) or [] if isinstance(x, dict)
+                   and x.get("id") in was and provenance.pending(was[x["id"]])
+                   and not provenance.pending(x))
+    lines = []
+    notes = sum(made_his(sec) for sec in ("facts", "memories", "media", "people", "goals",
+                                          "priorities"))
+    if notes:
+        lines.append(f"This edit makes {notes} thing(s) an AI wrote down your own words.")
+    key = lambda r: (r.get("kind"), str(r.get("instruction")), r.get("audience"),  # noqa: E731
+                     bool(r.get("allow")))
+    was = {key(r) for r in old.get("rules") or [] if isinstance(r, dict)}
+    now = {key(r) for r in new.get("rules") or [] if isinstance(r, dict)}
+    yes = sum(1 for k in now - was if k[0] == "disclosure" and k[3])
+    if yes:
+        lines.append(f"It adds {yes} yes rule(s): someone may hear about you.")
+    if now - was and len(now - was) > yes:
+        lines.append(f"It adds {len(now - was) - yes} other rule(s).")
+    if was - now:
+        lines.append(f"It takes away {len(was - now)} of your rules.")
+    return lines or ["This edit changes no rule, and makes nothing an AI wrote your own."]
 
 
 def confirm_at_keyboard(c: "Conscience", which=(), yes: bool = False, input_fn=None,
@@ -4193,8 +4466,8 @@ def confirm_at_keyboard(c: "Conscience", which=(), yes: bool = False, input_fn=N
         return 0
     out(f"  {len(items)} thing(s) an AI noted down wait for your OK:")
     for k, it in enumerate(items, 1):
-        out(f"    {k}. ({it['kind']}) {it['what'][:110]}")
-        out(f"          — {it['why']}")
+        out(f"    {k}. ({it['kind']}) {on_screen(it['what'])}")
+        out(f"          — {on_screen(it['why'])}")
     chosen = [w for w in which or () if str(w).strip()]
     if not chosen:
         answers.flush_typeahead()
@@ -4218,7 +4491,10 @@ def confirm_at_keyboard(c: "Conscience", which=(), yes: bool = False, input_fn=N
             picked.append(items[int(w) - 1])
     out("  You are saying these are right — your own words from now on:")
     for it in picked:
-        out(f"    · {it['what'][:110]}")
+        out(f"    · {on_screen(it['what'])}")
+    changes = c.rule_changes(picked)
+    if changes:
+        out("  " + changes)
     if not answers.confirm_by_code(out, input_fn, True, "Is that right?"):
         return 1
     try:
@@ -4276,9 +4552,29 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "confirm":
         return confirm_at_keyboard(c, a.which, a.yes)
     if a.cmd == "dismiss":
+        # only a person at this keyboard (S6, round 8 repair)
+        import answers
+        if not answers.person_at_keyboard():
+            print("  " + answers.NOT_AT_KEYBOARD)
+            return 1
         try:
             c.refresh()
-            n = c.dismiss_notices()
+            waiting = c.notices()
+        except StoreProblem as e:
+            print("  " + e.for_owner())
+            return 1
+        if not waiting:
+            print("  There are no notices to mark as read.")
+            return 0
+        print(f"  {len(waiting)} notice(s):")
+        for x in waiting:
+            print(f"    · {on_screen(x.get('what'))}")
+        if not answers.confirm_by_code(print, None, True, "Mark them as read?"):
+            return 1
+        try:
+            import access
+            with access.owner_console():
+                n = c.dismiss_notices()
         except StoreProblem as e:
             print("  " + e.for_owner())
             return 1

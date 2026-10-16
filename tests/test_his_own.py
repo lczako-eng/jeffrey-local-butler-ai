@@ -799,7 +799,11 @@ class S9HisHomeIsNeverAct(HisOwnTest):
         self.assertEqual(r["legacy"]["level"], "recommend")
         self.assertEqual(r["legacy_keys"], "recommend")
         self.assertFalse(r["asked"]["allowed"])
-        self.assertEqual(r["asked"]["verdict"], "never")
+        # (round 8 repair: what was stored at act reads as recommend, so an
+        # errand there is brought to him — 'not_allowed', never 'never … it
+        # may be a scam'; tests/test_round8_repair.py, S9)
+        self.assertEqual(r["asked"]["verdict"], "not_allowed")
+        self.assertIn("bring it to him", r["asked"]["reason"])
         self.assertIsNone(r["permit"])
 
 

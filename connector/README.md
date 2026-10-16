@@ -136,30 +136,45 @@ console — never what the words mean:
   widens what goes out — a yes, `remove_rule`, any other kind of rule — is a
   proposal that changes nothing until he confirms it (`/pending`, `/confirm`,
   or `python connector/conscience.py confirm`); no code completes it for an
-  engine. `list_rules` and `check_disclosure` never hand an engine a rule's own
-  sentence when the rule holds for that engine.
+  engine. `list_rules`, `check_disclosure`, `guidance_for` and `remove_rule`
+  never hand an engine a rule's own sentence when the rule holds for that
+  engine, or when its words are about something his rules keep from it — and
+  `remove_rule` from an engine matches only what it may read (id, topic,
+  audience). `/pending` and `conscience.py confirm` show each rule's yes or
+  no, subject and audience first, then its words in full.
 - **His profile.** An engine's `set_profile_field` waits beside his own value;
   `fill_form` and `fill_pdf` use only what he confirmed.
 - **His people and goals.** An engine's person or goal waits, labelled; its
   change to someone he recorded is a proposal. Triage and every trust decision
-  count only the people he recorded or confirmed.
+  count only the people he recorded or confirmed; triage names someone an AI
+  noted down as just that, and asks him.
 - **Forgetting what is his** — anything he stored or confirmed — needs his own
   approval, whatever the count; an engine's code only forgets its own notes.
 - **Learned values.** An engine's note never passes 0.6, and an engine's
-  correction never wears down a value he stated or confirmed.
-- **log_action** is `approved` only when what was done is what was approved.
-- **His home itself** (home, house, keys, security, guests, cameras, la maison…)
-  is never `act`.
+  correction never wears down a value he stated or confirmed, or one kept
+  before JEFFEREY knew who said what.
+- **log_action** is `approved` only when what was done is what was approved,
+  and says nothing beyond it (no word, and no more money, than the approval).
+- **His home itself** (home, house, keys, security, guests, cameras, garage,
+  la maison, chez moi…, in any letters, anywhere in the category) is never
+  `act`; an errand under it is brought to him.
+- **Money.** A bill through a payment processor (`PAYPAL *…`, `SQ *…`) or a
+  name glued to a fee word is never by itself his membership: it asks him, and
+  never makes the real bill a duplicate, until he says the line is his.
+- **A no for someone nobody knows** holds for everyone but his own JEFFEREY.
 
 **Confirmation needs a person.** The owner's own command-line confirmations —
 `conscience.py confirm` and `restore`, `forgetting.py approve`, `erase` and
 `bring-back`, `guardian.py review`, `egress.py open` and `keep` — refuse unless
 stdin and stdout are terminals; `--yes` is ignored; the answer is read from the
 terminal itself (`/dev/tty`) and must hold a short number printed on the
-screen at that moment. **What this cannot stop:** an agent that has a shell
-*and* a pseudo-terminal can still do what he can — it can read the number off
-its own screen and type it back. Until confirmation moves to Touch ID (I-43),
-never give an AI agent a shell on the Mac that holds his memories.
+screen at that moment. `conscience.py edit` and `dismiss`, and `confirm` called
+from Python, want him there too. **What this cannot stop:** a program with a
+shell alone can change the memory file directly — it is a plain file, and
+JEFFEREY adopts what it finds (keeping the copy from before) — and one that also
+has a pseudo-terminal can read the number off its own screen and type it back.
+Until confirmation moves to Touch ID (I-43), never give an AI agent a shell on
+the Mac that holds his memories.
 
 ## The Opportunity Engine + the predictive orb
 

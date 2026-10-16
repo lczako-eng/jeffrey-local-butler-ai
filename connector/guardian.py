@@ -358,10 +358,10 @@ def _segment_tokens(seg: str) -> list[str]:
     return re.findall(r"[^\W_]+", s)
 
 
-def _clean(tokens: list[str]) -> list[str]:
+def _clean(tokens: list[str], glue: bool = True) -> list[str]:
     split = []
     for t in tokens:
-        for suf in _GLUED_FEE:
+        for suf in (_GLUED_FEE if glue else ()):
             if t.isalpha() and t.endswith(suf) and len(t) - len(suf) >= 4:
                 split += [t[:-len(suf)], suf]
                 break
@@ -412,6 +412,42 @@ def _forms_of(merchant: str) -> tuple[tuple[str, ...], ...]:
     else:
         forms.append(_clean(head_t + tail_t))
     return tuple(tuple(f) for f in forms if f)
+
+
+def _billed_through(merchant: Any) -> bool:
+    """Is this line billed through a payment processor ('PAYPAL *…', 'SQ
+    *…')? Then the name after the '*' is whatever the processor's account
+    holder typed — anyone can call a PayPal account 'COSTCOMEMBER'."""
+    s = _fold("" if merchant is None else str(merchant))
+    head, star, tail = s.partition("*")
+    first = (_segment_tokens(head) or [""])[0]
+    return bool(star) and first in _PROCESSORS and bool(_segment_tokens(tail))
+
+
+def _plain_key(merchant: Any) -> str:
+    """A statement name as it stands, processor and all, with nothing read
+    into it (no glued word split): the name the owner himself can say is his
+    (name_for_charge), round 8 repair."""
+    s = re.sub(r"[*x•]{2,}\d*", " ", _fold("" if merchant is None else str(merchant)))
+    return " ".join(t for t in _segment_tokens(s.replace("*", " "))
+                    if not any(ch.isdigit() for ch in t))
+
+
+@functools.lru_cache(maxsize=16384)
+def _clear_forms(merchant: str) -> tuple[tuple[str, ...], ...]:
+    """The forms of a statement name that may CLEARLY be a membership's own
+    (round 8 repair, F4): never one billed through a payment processor, and
+    never one read by splitting a word glued to a fee word — 'PAYPAL
+    *COSTCOMEMBER' at the fee passed as his Costco membership, and the real
+    'COSTCO MEMBERSHIP' a month later became a duplicate claimed from Costco."""
+    if _billed_through(merchant):
+        return ()
+    s = _fold(merchant).replace("+", " plus ").replace("&", " and ")
+    s = re.sub(r"[*x•]{2,}\d*", " ", s)
+    head, star, tail = s.partition("*")
+    toks = _segment_tokens(head) + (_segment_tokens(tail) if star else [])
+    f = tuple(_clean(toks, glue=False))
+    return (f,) if f else ()
 
 
 def _norm(merchant: Any) -> str:
@@ -943,7 +979,9 @@ class Guardian:
         GAS' or 'COSTCO WHOLESALE'); or the leading part of the registered
         name, unless what it leaves out is a membership word ('AMAZON.CA' is
         not 'Amazon Prime')."""
-        for qf in _forms(merchant):
+        if _plain_key(merchant) in e.get("statement_names", []):
+            return True                     # he said himself this line is it
+        for qf in _clear_forms("" if merchant is None else str(merchant)):
             for rf in self._entry_forms(e):
                 if _score(qf, rf) >= STRONG and not set(_extra(qf, rf)) & _OTHER_BUSINESS:
                     return True
@@ -1116,7 +1154,8 @@ class Guardian:
                 # the cancellation (F4, round 8)
                 cancelled = not e.get("active", True) and e.get("cancelled_on")
                 after = cancelled and best >= STRONG and not set(extra) & _OTHER_BUSINESS and (
-                    _words_of(merchant) & _ASK_WORDS or _near_fee(e["amount"], amount))
+                    _words_of(merchant) & _ASK_WORDS or _near_fee(e["amount"], amount)) and (
+                    self._clear_name(e, merchant))      # never a processor's line (F4 repair)
                 if ((not self._is_fee(e, merchant, amount) and not after)
                         or (scam and not _SCAM.search(_fold(e.get("merchant", ""))))):
                     best = HINT
@@ -1450,12 +1489,18 @@ class Guardian:
         if not alias or entry is None:
             return {"merchant": merchant, "error": "I could not find that register entry, "
                                                    "or the statement name is empty."}
+        # the line as it stands, processor and all: a membership billed through
+        # PayPal or Square is quiet only once he has said so (F4 repair)
+        plain = _plain_key(descriptor)
+        new_line = (_billed_through(descriptor) or not _clear_forms(str(descriptor))
+                    or plain != " ".join(_clear_forms(str(descriptor))[0]))
 
         def run() -> dict:
-            if alias in entry.get("aliases", []) or alias == entry["key"]:
+            known = alias in entry.get("aliases", []) or alias == entry["key"]
+            if known and (not new_line or plain in entry.get("statement_names", [])):
                 return {"merchant": entry["merchant"], "note": "Already known by that name."}
             change = {"descriptor": str(descriptor), "alias": alias, "entry": entry["id"],
-                      "merchant": entry["merchant"]}
+                      "merchant": entry["merchant"], "statement": plain}
             if self.owner_present():
                 self._apply_alias(change)
                 self.c._save()
@@ -1471,7 +1516,12 @@ class Guardian:
         entry = next((e for e in self._entries() if e["id"] == change["entry"]), None)
         if entry is None:
             return
-        entry.setdefault("aliases", []).append(change["alias"])
+        if change["alias"] not in entry.setdefault("aliases", []):
+            entry["aliases"].append(change["alias"])
+        if change.get("statement"):
+            names = entry.setdefault("statement_names", [])
+            if change["statement"] not in names:
+                names.append(change["statement"])
         if log:
             self._log(f"Charge register: '{change['descriptor']}' counts as {entry['merchant']}",
                   "name added")
@@ -2118,8 +2168,13 @@ class Guardian:
                                                    "period."))
                     # a second bill is claimed only with a membership word in its
                     # name or at the very amount of the first (F4, round 8);
-                    # otherwise it is his question
-                    if not alike and not _words_of(it["merchant"]) & _ASK_WORDS:
+                    # otherwise it is his question. So is one where only one of
+                    # the two came through a payment processor (F4 repair:
+                    # 'PAYPAL *NETFLIX', then 'NETFLIX.COM', was a duplicate
+                    # claimed from Netflix for its own real charge).
+                    through = (_billed_through(it["merchant"]) or _billed_through(p["merchant"]))
+                    if (not alike and not _words_of(it["merchant"]) & _ASK_WORDS) or (
+                            through and _plain_key(it["merchant"]) != _plain_key(p["merchant"])):
                         return Guardian._question(
                             {"kind": "second", "of": entry, "prior": p}, it, when)
                     recover = amt

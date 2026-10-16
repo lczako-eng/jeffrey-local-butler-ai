@@ -343,10 +343,17 @@ TEXT_NO_MONEY: list[tuple[str, str]] = [
 # says 'never', whatever the description.
 NEVER_CATEGORIES = ["front door locks", "doors", "the doors", "alarm", "home alarm",
                     "garage door", "intercom", "phone calls", "voice", "transfers",
-                    "e-transfer", "wire", "gift cards", "crypto",
-                    # round 8 (S9): his home itself — in English and French
-                    "home", "my home", "home security", "house guests", "front door keys",
-                    "la maison", "visiteurs", "smart home"]
+                    "e-transfer", "wire", "gift cards", "crypto"]
+# Round 8 (S9): his home itself — in English and French — is never 'act'
+# either. Round 8 repair: under it, an errand is brought to him (verdict
+# 'not_allowed', 'bring it to him'), never 'never … it may be a scam' — that
+# is what a legacy 'act' there reads as (recommend); the door words still ask
+# him first, as under any category. These rows said 'never' in round 8.
+HOME_ITSELF_CATEGORIES = ["home", "my home", "home security", "house guests",
+                          "front door keys", "la maison", "visiteurs", "smart home",
+                          # round 8 repair: any letters, any place in the wording
+                          "h\u043eme", "h0me", "home security system", "garage", "serrures",
+                          "chez moi", "housekeeping"]
 ORDINARY_CATEGORIES = ["voice lessons", "alarm clock", "door dash", "pets", "groceries",
                        "household supplies"]
 
@@ -423,6 +430,15 @@ class ThePersonAtTheDoorIsTheOwnersToLetIn(AuthorityTest):
                     set_ = str(e)
                 never[k] = [set_, c.authorize_action(k, "let the cat in"),
                             c.authorize_action(k, "Order more coffee and let me know", 5)]
+            home = {}
+            for k in %r:
+                try:
+                    c.set_permission(k, "act", 100, "week")
+                    set_ = "accepted"
+                except ValueError as e:
+                    set_ = str(e)
+                home[k] = [set_, c.authorize_action(k, "let the cat in"),
+                           c.authorize_action(k, "Order more coffee and let me know", 5)]
             ordinary = {}
             for k in %r:
                 try:
@@ -430,9 +446,10 @@ class ThePersonAtTheDoorIsTheOwnersToLetIn(AuthorityTest):
                 except ValueError as e:
                     ordinary[k] = str(e)
             out({"nm": nm, "nd": nd, "er": er, "tx": tx, "any": anyc, "never": never,
-                 "ordinary": ordinary})
+                 "home": home, "ordinary": ordinary})
         """ % (NO_MONEY, NO_DOOR, ERRANDS, TEXT_NO_MONEY, ANY_CATEGORY,
-               ANY_CATEGORY_DESCRIPTIONS, NEVER_CATEGORIES, ORDINARY_CATEGORIES))
+               ANY_CATEGORY_DESCRIPTIONS, NEVER_CATEGORIES, HOME_ITSELF_CATEGORIES,
+               ORDINARY_CATEGORIES))
 
     def test_every_description_the_skeptics_named(self):
         r = self.run_cases()
@@ -473,6 +490,14 @@ class ThePersonAtTheDoorIsTheOwnersToLetIn(AuthorityTest):
                 self.assertFalse(v["allowed"], (k, v))
                 self.assertEqual(v["verdict"], "never", (k, v))
                 self.assertIn("never does this", v["reason"], (k, v))
+        for k, (set_, door, errand) in r["home"].items():
+            self.assertIn("never acts on", set_, k)
+            for v in (door, errand):
+                self.assertFalse(v["allowed"], (k, v))
+            self.assertEqual(door["verdict"], "ask_owner", (k, door))
+            self.assertEqual(errand["verdict"], "not_allowed", (k, errand))
+            self.assertIn("bring it to him", errand["reason"], (k, errand))
+            self.assertNotIn("scam", errand["reason"], (k, errand))
         for k, said in r["ordinary"].items():
             self.assertEqual(said, "accepted", k)
 

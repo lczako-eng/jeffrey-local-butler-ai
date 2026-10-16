@@ -1228,9 +1228,12 @@ def exclude(c: Conscience, contains: str = "", ids=None, confirm: str = "") -> d
         c.data, "conscience_included", contains, ids, ("ref", "note")), confirm)
 
 
-def plan_rules(c: Conscience, rule_id_or_text: str = "") -> Plan | str:
+def plan_rules(c: Conscience, rule_id_or_text: str = "", readable=None) -> Plan | str:
     """Which rules a remove_rule would take: by id, or by whole words of the
-    rule, an exact tag or its audience."""
+    rule, an exact tag or its audience. `readable(rule)`: may whoever asks
+    read this rule's words? If not, its words are never matched — only its
+    id, its tags and its audience (round 8 repair, S1: a match on words the
+    engine may not read told it what they were)."""
     s = rule_id_or_text.strip() if isinstance(rule_id_or_text, str) else ""
     plan = Plan()
     exact = [r for r in _items(c.data, "rules") if s and str(r.get("id", "")).casefold() == s.casefold()]
@@ -1243,7 +1246,8 @@ def plan_rules(c: Conscience, rule_id_or_text: str = "") -> Plan | str:
         return bad
     w, key = Words(s), _squash(s)
     for r in _items(c.data, "rules"):
-        if (w(r.get("instruction")) or any(_squash(t) == key for t in _strs(r.get("tags")))
+        words = w(r.get("instruction")) if readable is None or readable(r) else False
+        if (words or any(_squash(t) == key for t in _strs(r.get("tags")))
                 or _squash(r.get("audience", "")) == key):
             plan.remove("rules", r)
     return plan

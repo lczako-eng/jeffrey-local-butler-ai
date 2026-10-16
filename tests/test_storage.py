@@ -536,11 +536,19 @@ class HandEdits(StoreTest):
         bad = self.tmp / "bad_editor.py"
         bad.write_text("import sys\nopen(sys.argv[1], 'w').write('{\"facts\": [,]}')\n")
         before = self.store.read_bytes()
-        self.assertEqual(cmod.edit(Conscience(self.store), [PY, str(bad)]), 1)
+        # (round 8 repair, S6: the edit is his only at the keyboard — no
+        # person, no edit; and he types the number shown before it is saved)
+        typed = lambda prompt: "".join(__import__("re").findall(r"\d", prompt))  # noqa: E731
+        self.assertEqual(cmod.edit(Conscience(self.store), [PY, str(good)], tty=False), 1)
+        self.assertEqual(self.store.read_bytes(), before, "an edit with no person changed it")
+        self.assertEqual(cmod.edit(Conscience(self.store), [PY, str(bad)], typed, tty=True), 1)
         self.assertEqual(self.store.read_bytes(), before, "a bad edit changed the file")
         self.assertEqual(len(list(self.tmp.glob(".memories-edit-*.json"))), 1,
                          "the owner's edited copy must be kept to fix")
-        self.assertEqual(cmod.edit(Conscience(self.store), [PY, str(good)]), 0)
+        self.assertEqual(cmod.edit(Conscience(self.store), [PY, str(good)],
+                                   lambda p: "no", tty=True), 1)
+        self.assertEqual(self.store.read_bytes(), before, "an edit he did not confirm")
+        self.assertEqual(cmod.edit(Conscience(self.store), [PY, str(good)], typed, tty=True), 0)
         c2 = Conscience(self.store)
         self.assertEqual([f["fact"] for f in c2.data["facts"]], ["My doctor is Dr Old"])
         self.assertTrue(any("by hand" in n["what"] for n in c2.notices()))

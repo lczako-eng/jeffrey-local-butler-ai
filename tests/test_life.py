@@ -1294,8 +1294,11 @@ class AfterTheFixes(LifeTest):
             care = [corr("mom's care", "cost", "safety") for _ in range(4)]
             travel = corr("travel", "direct flights", "price")
             phone = [corr("phone plan", "price", "reliability") for _ in range(3)]
+            import access
+            with access.owner_console():          # his own corrections, at his keyboard
+                his = [corr("phone plan", "price", "reliability") for _ in range(3)]
             out({"first": first, "care": care, "travel": travel, "phone": phone,
-                 "kept": store()["priorities"][0]})
+                 "his": his, "kept": store()["priorities"][0]})
         """)
         self.assertEqual(r["first"]["confidence"], 0.99)
         self.assertTrue(r["first"]["locked"])
@@ -1303,7 +1306,12 @@ class AfterTheFixes(LifeTest):
             self.assertEqual((x["higher"], x["lower"]), ("safety", "cost"))
             self.assertTrue(x["question_for_owner"])
         self.assertGreaterEqual(r["travel"]["confidence"], 0.85)
-        self.assertEqual([x["higher"] for x in r["phone"]], ["reliability", "reliability", "price"])
+        # (round 8 repair, S7: a value kept before JEFFEREY knew who said what
+        # is his, so an AI's corrections never turn it round — they ask him;
+        # his own still do, as the old code did)
+        self.assertEqual([x["higher"] for x in r["phone"]], ["reliability"] * 3)
+        self.assertTrue(r["phone"][0]["question_for_owner"])
+        self.assertEqual([x["higher"] for x in r["his"]], ["reliability", "reliability", "price"])
         self.assertEqual({k: r["kept"]["legacy"][k] for k in ("confidence", "evidence")},
                          {"confidence": 0.99, "evidence": 1})
 
