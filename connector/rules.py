@@ -369,10 +369,63 @@ def words_held(r: dict, rd: dict | None = None, data: dict | None = None) -> boo
     return held_back(data or {}, aud, text, tags + kinds) is not None
 
 
+# A RULE'S TOPIC IS ONE OF ITS WORDS (round 9 repair). 'Never tell Ed about
+# it', tagged 'hiv', was listed to every AI with its tag, draft_guidance said
+# do_not_mention ['hiv'], and check_disclosure(Ed, 'hiv') said 'the owner
+# forbade it' where 'diabetes' said 'silence' — an unlimited oracle on the
+# word his rule is about. A topic word that is itself private ('hiv',
+# 'dementia', 'diabetes' — not a kind, like 'health' or 'money') goes to a
+# reader only as his rules let that reader hear it: otherwise the reader sees
+# its kind ('health'), every question by such a word is asked by its kind, a
+# no about it holds for its whole kind for that reader, and a yes about it
+# opens nothing to that reader.
+def _private_word(tag) -> list[str]:
+    t = grounding.normalise(tag)
+    if not t or t in grounding.CLASSES or t in grounding.CLASS_ALIASES:
+        return []
+    return grounding.sensitivity(t)
+
+
+def tag_held(tag, rd: dict | None = None, data: dict | None = None) -> list[str]:
+    """The kinds a rule's topic word stands for when that word is kept from
+    whoever reads — or [] when the reader may see the word itself."""
+    rd = rd if rd is not None else provenance.reader()
+    aud = rd.get("audiences") or frozenset()
+    if not aud:
+        return []                        # the owner himself, at his keyboard
+    kinds = _private_word(tag)
+    if not kinds:
+        return []
+    if not rd.get("caretaker") and not rd.get("owner"):
+        return kinds                     # a reader who does not hold his private life
+    return kinds if held_back(data or {}, aud, str(tag), [str(tag)] + kinds) else []
+
+
+def shown_tags(r: dict, rd: dict | None = None, data: dict | None = None) -> list[str]:
+    """A rule's topics as this reader may see them (see above)."""
+    out: list[str] = []
+    for t in (r.get("tags") or []) if isinstance(r, dict) else []:
+        for x in tag_held(t, rd, data) or [t]:
+            if x not in out:
+                out.append(x)
+    return out
+
+
+def asked_as(tags, rd: dict | None = None, data: dict | None = None) -> set[str]:
+    """The topics a reader asks about, as it may ask them: a private word
+    kept from it is asked by its kind."""
+    out: set[str] = set()
+    for t in tags:
+        out |= set(tag_held(t, rd, data) or [t])
+    return out
+
+
 def held_for_reader(r: dict, rd: dict | None = None, data: dict | None = None) -> dict:
     """A rule as a reader whose rules keep its words from it may see it: what
     it is about, whom it is for, yes or no — never his sentence (S1)."""
     v = {k: r[k] for k in ("id", "kind", "tags", "audience", "allow", "added") if k in r}
+    if "tags" in v:
+        v["tags"] = shown_tags(r, rd, data)
     if r.get("kind") == "disclosure" and not r.get("allow"):
         v["holds_for"] = describe(r, data)[0]
     v["instruction_held_back"] = True
@@ -536,7 +589,8 @@ class ConscienceRules:
         # test of the very sentence it may not read).
         plan = forgetting.plan_rules(
             self.c, rule_id_or_text,
-            readable=lambda r: not words_held(r, rd, self.c.data))
+            readable=lambda r: not words_held(r, rd, self.c.data),
+            tags_of=lambda r: shown_tags(r, rd, self.c.data))
         if isinstance(plan, str):
             return forgetting.refusal("remove_rule", plan)
         self.c.search_found(bool(plan.changes))
@@ -590,6 +644,8 @@ class ConscienceRules:
             v = (held_for_reader(r, rd, self.c.data) if words_held(r, rd, self.c.data)
                  else self._as_read(r))
             v = {k: x for k, x in v.items() if k not in ("source", "status")}
+            if "tags" in v:
+                v["tags"] = shown_tags(r, rd, self.c.data)
             if provenance.pending(r):
                 v.update(status="pending", noted_by=provenance.NOTED_BY_AI)
             out.append(v)
@@ -599,7 +655,8 @@ class ConscienceRules:
             r = p.get("rule") if isinstance(p.get("rule"), dict) else {}
             if kind and r.get("kind") != kind.lower():
                 continue
-            out.append({"id": p.get("id"), "kind": r.get("kind"), "tags": r.get("tags"),
+            out.append({"id": p.get("id"), "kind": r.get("kind"),
+                        "tags": shown_tags(r, rd, self.c.data),
                         "audience": r.get("audience"), "allow": r.get("allow"),
                         "proposed": "to remove" if p.get("action") == "remove" else "to add",
                         "status": "waiting_for_owner",
@@ -618,16 +675,30 @@ class ConscienceRules:
         """
         aud = str(audience or "").strip().lower()
         want = set(_tags(tags))
-        if grounding.norm_audience(aud) == SELF or grounding.names_self(audience):
+        # only when the whole audience is him (round 9 repair: 'me and Karen
+        # Novak' was a silent yes, because any part of it was him)
+        if grounding.norm_audience(aud) == SELF or grounding.only_self(audience):
             return {"allowed": True, "audience": aud, "reason": "the owner may always hear about themself"}
         # 'Karen Novak <k@example.com>' meets a rule for 'karen' (I-24: only
         # the exact string used to match, so a 'never tell Karen' rule let
         # her full name through to an 'anyone' allow).
         broad, strict = self._aliases(aud)
-        text = " ".join(sorted(want))
+        rd = provenance.reader()
+        # asked as this reader may ask it (a private word kept from it by its
+        # kind); a no about a word kept from it holds for the whole kind, and
+        # a yes about one opens nothing to it (round 9 repair)
+        seen = asked_as(want, rd, self.c.data)
+        text = " ".join(sorted(seen))
 
         def on_topic(r):
-            return grounding.tag_hits(r.get("tags") or [], text, want)
+            tags = r.get("tags") or []
+            if r.get("allow") or r.get("kind") != "disclosure":
+                if any(tag_held(t, rd, self.c.data) for t in tags):
+                    return False
+                if seen != want:
+                    return False
+                return grounding.tag_hits(tags, text, want)
+            return grounding.tag_hits(shown_tags(r, rd, self.c.data), text, seen)
 
         if grounding.names_ai(audience):
             # a no that names any AI holds for every AI (D1)
@@ -675,11 +746,13 @@ class ConscienceRules:
         want = set(_tags(tags))
         rd = provenance.reader()
         held = [0]
+        seen = asked_as(want, rd, self.c.data)          # round 9 repair
 
         def hits(kind):
             got = []
             for r in self.rules(kind):
-                if not ((not r["tags"] or want & set(r["tags"]))
+                rt = shown_tags(r, rd, self.c.data)
+                if not ((not rt or seen & set(rt))
                         and r["audience"] in (aud, ANYONE, SELF if kind == "reaction" else aud)):
                     continue
                 if words_held(r, rd, self.c.data):
@@ -735,23 +808,26 @@ class ConscienceRules:
         only, never his words (for draft_guidance's do_not_mention)."""
         broad, strict = self._aliases(audience)
         ai = grounding.names_ai(audience)
+        rd = provenance.reader()
         out = []
         for r in self.rules("disclosure"):
             if r.get("allow") or not r.get("tags"):
                 continue
+            # a topic word his rules keep from this reader is named by its kind
+            tags = shown_tags(r, rd, self.c.data)        # (round 9 repair)
             if ai and every_ai(r, self.c.data):
-                out += r["tags"]
+                out += tags
             elif _no_aud(r, self.c.data) != ANYONE and (
                     _aud(r) in broad or "family" in broad and grounding.names_family(_written(r))):
-                out += r["tags"]
+                out += tags
             elif unknown(r, self.c.data) and _aud(r) in broad:
-                out += r["tags"]                 # a no nobody knows names this very one
+                out += tags                      # a no nobody knows names this very one
             elif _no_aud(r, self.c.data) == ANYONE:
                 # a yes for exactly this audience opens it again
                 if not any(x.get("allow") and _aud(x) in strict
                            and set(x.get("tags") or []) & set(r["tags"])
                            for x in self.rules("disclosure")):
-                    out += r["tags"]
+                    out += tags
         return sorted(set(out))
 
     def summary(self) -> dict:

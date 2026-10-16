@@ -79,6 +79,10 @@ import provenance
 MODEL = "claude-opus-5"
 MAX_TOKENS = 4096
 PROMPT_FACTS, PROMPT_PRIORITIES = 30, 15     # the system prompt is a summary (I-41)
+# ...and it fits, however long they are (round 9 repair: the counts capped how
+# many went in, not how long each was — 30 facts and 15 values of 300
+# characters beside 200 long goals made 61,052 characters)
+PROMPT_MAX = 39_000
 
 DIRECTIVES = (Path(__file__).parent / "directives.md").read_text()
 
@@ -1684,16 +1688,52 @@ def system_prompt() -> str:
     # Private facts go in only for a model on this Mac (I-11); never the
     # place his memories are kept on his drive.
     snap, _ = egress.mask(conscience.snapshot(PROMPT_FACTS, 0, PROMPT_PRIORITIES))
-    return (
-        DIRECTIVES
-        + "\n\n## Live conscience (loaded this session — the user owns every byte)\n\n"
-        + "```json\n" + json.dumps(snap, indent=1, ensure_ascii=False) + "\n```\n\n"
-        + "This is only the start of what he has told JEFFEREY: before you recommend, "
-        + "draft or remember anything, call explain_basis about the subject (and "
-        + "who_am_i for his life story). The conscience tools write to this same "
-        + "store. Use them: corrections are the curriculum, and anything worth "
-        + "keeping must be written down — the engine forgets, the conscience does not."
-    )
+    head = (DIRECTIVES
+            + "\n\n## Live conscience (loaded this session — the user owns every byte)\n\n"
+            + "```json\n")
+    tail = ("\n```\n\n"
+            "This is only the start of what he has told JEFFEREY: before you recommend, "
+            "draft or remember anything, call explain_basis about the subject (and "
+            "who_am_i for his life story). The conscience tools write to this same "
+            "store. Use them: corrections are the curriculum, and anything worth "
+            "keeping must be written down — the engine forgets, the conscience does not.")
+    body = _fit_snapshot(snap, PROMPT_MAX - len(head) - len(tail))
+    return head + body + tail
+
+
+# What the snapshot drops first when it does not fit: the longest section,
+# one item at a time — the oldest fact, the least sure value, the oldest goal.
+_FIT = (("facts", "more_facts", 0), ("active_goals", "more_goals", -1),
+        ("priorities", "more_priorities", -1), ("notices", "more_notices", 0))
+
+
+def _fit_snapshot(snap, room: int) -> str:
+    """The snapshot as JSON in at most `room` characters (round 9 repair):
+    items are left out, longest section first, and it says so — the rest is
+    one tool call away."""
+    def dump(x) -> str:
+        return json.dumps(x, indent=1, ensure_ascii=False)
+    text = dump(snap)
+    if len(text) <= room or not isinstance(snap, dict):
+        return text
+    snap = dict(snap)
+    for key, _, _ in _FIT:
+        if isinstance(snap.get(key), list):
+            snap[key] = list(snap[key])
+    snap["shortened"] = ("Shortened to fit: some facts, values or goals are left out here. "
+                         "Ask explain_basis about the subject you need, or who_am_i, before "
+                         "you rely on what is missing.")
+    text = dump(snap)
+    while len(text) > room:
+        lists = [(len(dump(snap[k])), k, more, end) for k, more, end in _FIT
+                 if isinstance(snap.get(k), list) and snap[k]]
+        if not lists:
+            break
+        _, key, more, end = max(lists)
+        snap[key].pop(end)
+        snap[more] = int(snap.get(more) or 0) + 1
+        text = dump(snap)
+    return text
 
 
 # ---------------------------------------------------------------- engine loop

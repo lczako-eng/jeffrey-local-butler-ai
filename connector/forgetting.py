@@ -513,7 +513,9 @@ def _plan(data: dict, section: str, contains, ids, fields, *,
     if ids:
         for i in ids:
             it = _find(data, section, i)
-            if it is None or (eligible and not eligible(it)):
+            # an id of something it may not read is, to an engine, no id at all
+            # (round 9 repair: forget(ids=[…]) told whether a held fact exists)
+            if it is None or (eligible and not eligible(it)) or not _readable(c, section, it):
                 plan.unknown.append(i)
             else:
                 add(it)
@@ -578,18 +580,18 @@ def plan_life(data: dict, contains, ids, c=None) -> Plan | str:
     if ids:
         for i in ids:
             p = _find(data, "people", i)
-            if p is not None:
+            if p is not None and _readable(c, "people", p):
                 plan.remove("people", p)
                 if p.get("name"):
                     names.append(p["name"])
                 continue
             for sec in ("memories", "media"):
                 it = _find(data, sec, i)
-                if it is not None:
+                if it is not None and _readable(c, sec, it):
                     plan.remove(sec, it)
                     break
             else:
-                plan.unknown.append(i)
+                plan.unknown.append(i)      # unknown, or not its to read (round 9 repair)
     else:
         bad = too_vague(s)
         if bad:
@@ -854,7 +856,11 @@ def run(c: Conscience, tool: str, make_plan: Callable[[], Plan | str],
 
 
 def _by_words(contains, ids) -> bool:
-    return bool(isinstance(contains, str) and contains.strip()) and not _ids(ids)
+    """Is this request a search — by words, or (round 9 repair) by ids from
+    an engine, which may guess them as it may guess words?"""
+    if _ids(ids):
+        return _engine()
+    return bool(isinstance(contains, str) and contains.strip())
 
 
 def _engine() -> bool:
@@ -1271,12 +1277,15 @@ def exclude(c: Conscience, contains: str = "", ids=None, confirm: str = "") -> d
         searched=_by_words(contains, ids))
 
 
-def plan_rules(c: Conscience, rule_id_or_text: str = "", readable=None) -> Plan | str:
+def plan_rules(c: Conscience, rule_id_or_text: str = "", readable=None,
+               tags_of=None) -> Plan | str:
     """Which rules a remove_rule would take: by id, or by whole words of the
     rule, an exact tag or its audience. `readable(rule)`: may whoever asks
     read this rule's words? If not, its words are never matched — only its
     id, its tags and its audience (round 8 repair, S1: a match on words the
-    engine may not read told it what they were)."""
+    engine may not read told it what they were). `tags_of(rule)`: its topics as
+    whoever asks may see them (round 9 repair: a topic word his rules keep
+    from it is matched only by its kind)."""
     s = rule_id_or_text.strip() if isinstance(rule_id_or_text, str) else ""
     plan = Plan()
     exact = [r for r in _items(c.data, "rules") if s and str(r.get("id", "")).casefold() == s.casefold()]
@@ -1290,7 +1299,8 @@ def plan_rules(c: Conscience, rule_id_or_text: str = "", readable=None) -> Plan 
     w, key = Words(s), _squash(s)
     for r in _items(c.data, "rules"):
         words = w(r.get("instruction")) if readable is None or readable(r) else False
-        if (words or any(_squash(t) == key for t in _strs(r.get("tags")))
+        tags = tags_of(r) if tags_of is not None else r.get("tags")
+        if (words or any(_squash(t) == key for t in _strs(tags))
                 or _squash(r.get("audience", "")) == key):
             plan.remove("rules", r)
     return plan

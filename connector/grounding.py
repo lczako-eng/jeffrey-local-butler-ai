@@ -84,26 +84,70 @@ def _is_symbol(tok: str) -> bool:
 # filler inside a word hid it from every reader: 'I take Ozem️pic',
 # 'Pass️word: Tulip7392', 'Jo is on che️mo', 'Let the plumber
 # i️n', 'Turn off the al͏arm'.
+#
+# Round 9 repair (G5): three more that are not default-ignorable but show as
+# nothing or as a blank — U+2800 (the braille blank), U+FFFC (the object
+# replacement character) and U+1D159 (the musical null notehead): 'Let the
+# plumber i⠀n' was allowed, 'I take Ozem⠀pic' reached every AI past his
+# no, and an engine handed in 'My PIN is 7⠀7⠀3⠀1'.
 IGNORABLE_RANGES = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
                     (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
-                    (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
-                    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3),
-                    (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
+                    (0x2060, 0x206F), (0x2800, 0x2800), (0x3164, 0x3164), (0xFE00, 0xFE0F),
+                    (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0xFFFC, 0xFFFC),
+                    (0x1BCA0, 0x1BCA3), (0x1D159, 0x1D159), (0x1D173, 0x1D17A),
+                    (0xE0000, 0xE0FFF))
 IGNORABLE_CLASS = "".join(f"\\U{a:08x}" if a == b else f"\\U{a:08x}-\\U{b:08x}"
                           for a, b in IGNORABLE_RANGES)
 _IGNORABLE = re.compile("[" + IGNORABLE_CLASS + "]")
 
 
 def is_ignorable(ch: str) -> bool:
-    """Is this one character default-ignorable (G5)?"""
+    """Is this one character one that shows as nothing (G5)?"""
     cp = ord(ch)
     return any(a <= cp <= b for a, b in IGNORABLE_RANGES)
 
 
 def visible(text) -> str:
-    """The text with every default-ignorable code point taken out (G5)."""
+    """The text with every code point that shows as nothing taken out (G5)."""
     t = str(text or "")
     return t if t.isascii() else _IGNORABLE.sub("", t)
+
+
+# ---------------------------------------- read both ways (round 9 repair, G5)
+# A character that shows as nothing may stand inside a word ('i⠀n',
+# 'Ozem​pic') or between two words, where it shows as their space
+# ('Unlock​the​front​door', 'MyㅤPINㅤisㅤ7731'). Read only as
+# nothing, the second glues the words together and hides them — the door
+# allowed 'Unlock​the​front​door'; read only as a space, the first
+# splits the word. So every reader that decides something (the door, what
+# kind of private a text is, a rule's topic, a draft, the secrets) reads a
+# text that holds one both ways, and finds what either reading finds.
+def _hidden(ch: str) -> bool:
+    return is_ignorable(ch) or unicodedata.category(ch) == "Cf"
+
+
+def has_hidden(text) -> bool:
+    """Does this text hold a character that shows as nothing (G5)?"""
+    t = str(text or "")
+    return not t.isascii() and any(_hidden(ch) for ch in t if not ch.isascii())
+
+
+def spaced(text) -> str:
+    """The text with every character that shows as nothing read as a space —
+    one for one, so every place in it stays where it was."""
+    t = str(text or "")
+    return t if t.isascii() else "".join(" " if not ch.isascii() and _hidden(ch) else ch
+                                         for ch in t)
+
+
+def readings(text) -> tuple[str, ...]:
+    """The ways a reader that decides something reads this text: as written
+    — or, when it holds a character that shows as nothing, with each of them
+    read as nothing, and again with each read as a space."""
+    t = str(text or "")
+    if not has_hidden(t):
+        return (t,)
+    return ("".join(ch for ch in t if ch.isascii() or not _hidden(ch)), spaced(t))
 
 
 @functools.lru_cache(maxsize=1 << 16)
@@ -184,6 +228,8 @@ def _mark(c: str) -> bool:
 def _fold_char(ch: str, accents: bool) -> str:
     if unicodedata.category(ch) == "Cf" or is_ignorable(ch):
         return ""          # zero-width spaces, soft hyphens, variation selectors, fillers (G5)
+    if ch.isspace():
+        return " "         # a line or paragraph separator is a space too (G5 repair: 'i n')
     if ch in _LOOK:
         return _LOOK[ch]
     if ch.isdecimal():
@@ -729,9 +775,17 @@ _DRAFT_PHRASES = (("multiple sclerosis", "ms"), ("sclerose en plaques", "ms"),
                   ("the big c", "cancer"), ("le gros c", "cancer"), ("viral load", "hiv"),
                   ("charge virale", "hiv"), ("having a baby", "pregnant"),
                   ("expecting a baby", "pregnant"), ("attend un bebe", "pregnant"),
-                  ("a fait faillite", "bankrupt"))
+                  ("a fait faillite", "bankrupt"),
+                  # round 9 repair (unsafe_r9 G4): the drafts the skeptics wrote
+                  ("mind is going", "dementia"), ("perd la memoire", "dementia"),
+                  ("maxed out", "debt"), ("drank too much", "alcoholic"),
+                  ("drinks too much", "alcoholic"), ("drinking too much", "alcoholic"),
+                  ("treatment centre", "rehab"), ("treatment center", "rehab"))
 _DRAFT_PHRASE_RX = tuple((re.compile(r"(?<![^\W_])" + re.escape(p) + r"(?![^\W_])"), w)
-                         for p, w in _DRAFT_PHRASES)
+                         for p, w in _DRAFT_PHRASES) + (
+    # 'Laszlo has AIDS' — not hearing, visual or teaching aids, nor first aid
+    (re.compile(r"(?<![^\W_])(?<!hearing )(?<!visual )(?<!teaching )(?<!learning )"
+                r"(?<!mobility )(?<!walking )aids(?![^\W_])"), "hiv"),)
 # 'Anna is expecting', 'expecting in May' — not 'expecting a parcel' or rain
 _EXPECTING = re.compile(r"(?<![^\W_])expecting(?=\s*(?:[.!?,;:]|$)|\s+(?:in|this|next|again|"
                         r"another|twins|a\s+(?:boy|girl)|her|their|our|his)(?![^\W_]))")
@@ -744,7 +798,8 @@ _DRAFT_LEX_EXTRA = frozenset("""ms hiv aids copd ra aa ptsd adhd ocd als ibs uti
     kidney liver transplant angina pacemaker glaucoma cataract cataracts macular osteoporosis
     gout fibromyalgia migraine migraines ulcer hernia thyroid autism psychosis overdose
     radiation surgery operation stroke heart sick ill illness disease diagnosed
-    sclerosis bipolar alcoholic relapse sober""".split())
+    sclerosis bipolar alcoholic relapse sober
+    virus prostate""".split())
 
 
 def _draft_prepared(text: str) -> str:
@@ -1152,6 +1207,11 @@ _HEALTH_LEX_PHRASES += ("my sugar", "his sugar", "her sugar", "ma pression", "sa
                         "alcoholics anonymous", "narcotics anonymous", "aa meeting",
                         "aa meetings", "na meeting", "na meetings", "sleep apnea",
                         "sleep apnoea")
+# Round 9 repair: HIV and dementia in French, as the skeptics asked a rule's
+# topic ('VIH', 'démence')
+_HEALTH_LEX += """
+    vih demence
+"""
 _SENSE_WORDS["health"] = _SENSE_WORDS["health"] | _stems(_HEALTH_LEX)
 _SENSE_PHRASES["health"] = _SENSE_PHRASES["health"] + _HEALTH_LEX_PHRASES
 _SENSE_PATTERNS["health"] = _SENSE_PATTERNS["health"] + (
@@ -1235,8 +1295,13 @@ def _sensitivity(text: str, category: str) -> tuple[str, ...]:
 def sensitivity(text, category="") -> list[str]:
     """What kind of private this is, if any: health, money, minors (children),
     home_security, third_party (someone else's confidence) or private (marked
-    so). An empty list means nothing sensitive was recognised."""
-    return list(_sensitivity(str(text or ""), str(category or "")))
+    so). An empty list means nothing sensitive was recognised. A text that
+    holds a character that shows as nothing is read both ways (G5 repair)."""
+    t, cat = str(text or ""), str(category or "")
+    if not has_hidden(t):
+        return list(_sensitivity(t, cat))
+    found = {k for r in readings(t) for k in _sensitivity(r, cat)}
+    return [k for k in CLASSES if k in found]
 
 
 # What a subject has to say to NAME a kind of private ("my medications"
@@ -1314,6 +1379,9 @@ def tag_hits(rule_tags, text: str = "", tags=()) -> bool:
     rts = [normalise(t) for t in (rule_tags or []) if normalise(t)]
     if not rts:
         return True
+    if text and has_hidden(text):
+        # read both ways (G5 repair): 'I​take​Ozempic' is about Ozempic
+        return any(tag_hits(rule_tags, r, tags) for r in readings(text))   # neither has one
     tset = {normalise(t) for t in tags if normalise(t)}
     classes = {CLASS_ALIASES.get(t, t) for t in tset} & set(CLASSES)
     # ...read as written and through the fold (round 9, G5: a combining mark
@@ -1753,6 +1821,31 @@ def names_self(audience) -> bool:
         if ws and all(w in _SELF_ALONE for w in ws):
             return True
     return False
+
+
+def only_self(audience) -> bool:
+    """Is this audience the owner himself and nobody else — EVERY part of it,
+    after 'and', 'but' or a comma too ('me', 'myself', 'just me', 'moi-même',
+    'me and myself')? Round 9 repair: names_self is true when ANY part is him
+    (right for a no, which then holds for everyone), and check_disclosure's
+    'the owner may always hear about himself' used it, so 'me and Karen
+    Novak', 'moi et ChatGPT' and 'me and the man on the phone' were a silent
+    yes. An audience with anyone else in it is asked about as that audience."""
+    text = " ".join(str(audience or "").split())
+    if not text:
+        return False
+    n = fold(text, _SELF_FOLD)
+    if re.search(r"[^\w' ,;/&+|\-]", n):
+        return False                     # an address, a bracket, a sign: someone else
+    parts = [p for p in _PART_BREAK.split(n) if p and p.strip(" ,;/&+|-")]
+    if not parts:
+        return False
+    for part in parts:
+        ws = [w.strip("'.-") for w in part.replace("-", " ").split()]
+        ws = [w for w in ws if w and w not in _SELF_ONLY and w not in _STRONGER]
+        if not ws or not all(w in _SELF_ALONE for w in ws):
+            return False
+    return True
 
 
 def person_key(name, relationship="") -> tuple[str, str]:

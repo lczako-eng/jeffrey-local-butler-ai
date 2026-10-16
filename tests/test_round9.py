@@ -614,7 +614,11 @@ class G5InvisibleCharactersAreNothing(HisOwnTest):
             if k.startswith("cat "):
                 self.assertEqual(v, "refused", k)
             elif k == "netflix":
-                self.assertEqual(v, ["expected", "expected"], v)
+                # round 9 repair (skep9 regress_r9 row 2): a character that shows
+                # as nothing inside a merchant name is a disguise, as a look-alike
+                # letter is — read as nothing it passed as his plan and made his
+                # real bill a 'duplicate'. It asks him.
+                self.assertEqual(v, ["expected", "ask_owner"], v)
             else:
                 self.assertEqual(v, [False, False, False], k)
 

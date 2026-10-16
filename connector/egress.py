@@ -136,7 +136,10 @@ RELEASE: dict[str, frozenset[str]] = {
                                  "more_notices"}),
     # values and how they are learned: for and against counted apart, a
     # stated value locked against inference, a reversal logged (I-48)
-    "record_correction": frozenset(_PRIORITY | {"flipped", "already_counted"}),
+    # noted/held_back: a correction about what his rules keep from this AI is
+    # answered the same whatever he holds (round 9 repair)
+    "record_correction": frozenset(_PRIORITY | {"flipped", "already_counted", "noted",
+                                                "held_back"}),
     "set_priority": frozenset(_PRIORITY | {"reversed", "changed"}),
     # facts only reach a key that may read facts (conscience.explain_basis);
     # whole words, each with why it matched (I-28)
@@ -149,7 +152,9 @@ RELEASE: dict[str, frozenset[str]] = {
                                  "voice", "voice_is", "rules", "disclosure",
                                  "speak_of_them_this_way", "meeting_safety"}),
     # ask_owner: his own private fact, to someone who may not hear it (G4)
-    "check_draft": frozenset({"ok", "audience", "problems", "advice", "ask_owner"}),
+    # checked_as: a draft with no audience is read as for anyone (round 9 repair)
+    "check_draft": frozenset({"ok", "audience", "problems", "advice", "ask_owner",
+                              "checked_as"}),
     # facts, profile, rules, the daily brief
     "remember_fact": frozenset({"id", "fact", "category", "added", "visibility",
                                 "sensitivity", "status", "noted_by"}),
@@ -267,10 +272,12 @@ RELEASE: dict[str, frozenset[str]] = {
     "add_person": frozenset({"id", "name", "relationship", "notes",
                              "important_dates", "visibility", "added", "updated",
                              "matched_existing", "changed", "possible_duplicate_of",
-                             "unconfirmed", "noted_by", "proposed_change"}),
+                             "unconfirmed", "noted_by", "proposed_change",
+                             "notes_held_back"}),
     "update_person": frozenset({"id", "name", "relationship", "notes",
                                 "important_dates", "visibility", "added", "updated",
-                                "changed", "unconfirmed", "noted_by", "proposed_change"}),
+                                "changed", "unconfirmed", "noted_by", "proposed_change",
+                                "notes_held_back"}),
     # an AI's write is private, and verbatim only when it is his words (I-25, I-26)
     "add_memory": frozenset({"id", "text", "when", "people", "tags", "visibility",
                              "added", "photos", "verbatim", "status",
@@ -1408,13 +1415,17 @@ def _digit_word_hits(n: str) -> list[tuple[int, int, str]]:
 def _find(text: str, scan=_everything) -> list[tuple[int, int, str]]:
     if len(text) < 3:
         return []
-    n, src = _normalise(text)
-    hits = scan(n)
-    if not hits:
-        return []
-    if src is not None:
-        hits = [(src[s], src[e - 1] + 1, w) for s, e, w in hits]
-    return _merge(hits)
+    hits: list[tuple[int, int, str]] = []
+    # A character that shows as nothing is read both ways (round 9 repair,
+    # G5): as nothing ('7⠀7⠀3⠀1' is 7731) and as a space
+    # ('My​PIN​is​7731'); the second reading keeps every place.
+    for t in (text, grounding.spaced(text)) if grounding.has_hidden(text) else (text,):
+        n, src = _normalise(t)
+        found = scan(n)
+        if src is not None:
+            found = [(src[s], src[e - 1] + 1, w) for s, e, w in found]
+        hits += found
+    return _merge(hits) if hits else []
 
 
 def _merge(hits: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
@@ -1580,8 +1591,14 @@ def names_a_code(text) -> bool:
     look-alike letters)?"""
     if not isinstance(text, str) or not text:
         return False
-    n, _ = _normalise(text)
-    return bool(_secret_word_ends(n))
+    return any(_secret_word_ends(_normalise(t)[0]) for t in _both(text))
+
+
+def _both(text: str) -> tuple[str, ...]:
+    """A text read both ways when it holds a character that shows as nothing
+    (round 9 repair, G5): as written, and with each such character a space —
+    one for one, so every place stays where it was."""
+    return (text, grounding.spaced(text)) if grounding.has_hidden(text) else (text,)
 
 
 def code_after_its_word(text) -> bool:
@@ -1589,9 +1606,12 @@ def code_after_its_word(text) -> bool:
     value anywhere after that word, in any later sentence (the door, D3)."""
     if not isinstance(text, str) or len(text) < 4:
         return False
-    n, _ = _normalise(text)
-    ends = _secret_word_ends(n)
-    return bool(ends) and bool(_code_shapes(n, min(ends), at_door=True))
+    for t in _both(text):
+        n, _ = _normalise(t)
+        ends = _secret_word_ends(n)
+        if ends and _code_shapes(n, min(ends), at_door=True):
+            return True
+    return False
 
 
 def hide_numbers_in_code_note(text: str) -> tuple[str, int]:
@@ -1601,12 +1621,22 @@ def hide_numbers_in_code_note(text: str) -> tuple[str, int]:
     many were hidden."""
     if not isinstance(text, str) or not names_a_code(text):
         return text, 0
-    n, src = _normalise(text)
-    spans = _code_shapes(n, least=2)
+    spans = []
+    for t in _both(text):
+        n, src = _normalise(t)
+        found = _code_shapes(n, least=2)
+        if src is not None:
+            found = [(src[s], src[e - 1] + 1) for s, e in found]
+        spans += found
     if not spans:
         return text, 0
-    if src is not None:
-        spans = [(src[s], src[e - 1] + 1) for s, e in spans]
+    merged: list[list[int]] = []
+    for s, e in sorted(spans):
+        if merged and s < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    spans = [(s, e) for s, e in merged]
     marks = [(m.start(), m.end()) for m in _MARK.finditer(text)]
     parts, last, count = [], 0, 0
     for s, e in spans:

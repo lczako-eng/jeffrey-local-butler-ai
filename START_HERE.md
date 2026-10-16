@@ -313,10 +313,18 @@ be empty.
 
 If an AI searches your memories again and again for words that are not there —
 the way someone guesses a PIN — its searches stop for an hour and you are told.
-A message is from someone you know only when it comes from the very address or
-number you gave JEFFEREY for them; a name alone is not enough. And before an
-AI sends something that tells your own private news (your health, your money)
-to someone your rules do not let hear it, it has to ask you.
+(Asking about something your own rules keep from it is not guessing, and never
+counts.) A message is from someone you know only when it comes from the very
+address or number you gave JEFFEREY for them; a name alone is not enough, and
+neither is an address typed into the name it shows. And before an AI sends
+something that tells your own private news (your health, your money) to
+someone your rules do not let hear it, it has to ask you — and a letter or a
+post with nobody named is checked as if anyone might read it.
+
+A shop name on your statement with a hidden character in it (one that shows as
+nothing, or as a blank) is brought to you, the same as a name spelled with
+look-alike letters. And "you and someone else" is never just you: telling
+"me and Karen" something is telling Karen.
 
 ### Who may see what
 

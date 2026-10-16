@@ -1086,7 +1086,18 @@ def _the_door_g10(w: list[str], i: int, ahead) -> int | None:
 def entry_words(description: str) -> str | None:
     """The words of a description that touch getting into the home or its
     security, or None (D4, round 7). Read by the words alone — never by who
-    or what is let in."""
+    or what is let in. A description that holds a character that shows as
+    nothing is read both ways — with it as nothing, and as a space (round 9
+    repair, G5: 'Let the plumber i\\u2800n' and 'Unlock\\u200bthe\\u200bfront\\u200bdoor'
+    were both allowed)."""
+    for text in grounding.readings(str(description or "")):
+        found = _entry_words_one(text)
+        if found:
+            return found
+    return None
+
+
+def _entry_words_one(description: str) -> str | None:
     w = _entry_words_of(description)
     n = len(w)
     # the Ring with its capital, as the doorbell camera is written ('Turn off
@@ -2851,6 +2862,26 @@ class Conscience:
         except StoreProblem:
             self._runtime_notices["searches"] = msg
 
+    def subject_closed(self, text: str, rd: dict | None = None) -> list[str]:
+        """The kinds of private thing a subject names — his health, his money
+        … — that one of his rules keeps from whoever reads (round 9 repair).
+        Such a question is answered by his rule, the same whatever he has
+        recorded, so it is never counted as a search that found nothing: his
+        own JEFFEREY, asking twenty times about the health 'Never tell my
+        health to any AI' keeps from it, was paused for an hour as if it were
+        guessing a PIN. Read by the KIND only, never by a rule's own topic
+        word, so the answer tells nothing about which words his rules name."""
+        import rules as _rules
+        rd = rd or provenance.reader()
+        aud = rd.get("audiences") or frozenset()
+        if not aud or not str(text or "").strip():
+            return []
+        tw = grounding.expand(grounding.content(text))
+        kinds = set(grounding.sensitivity(text)) | {
+            c for c in grounding.CLASSES if grounding.CLASS_WORDS.get(c, frozenset()) & tw}
+        return [k for k in grounding.CLASSES
+                if k in kinds and _rules.held_back(self.data, aud, "", [k]) is not None]
+
     def visible_priorities(self, rd: dict | None = None) -> tuple[list[dict], int]:
         """His values whoever reads this result may see, and how many his
         rules hold back (F2, round 8): a no on a subject — 'Never tell my
@@ -3146,9 +3177,15 @@ class Conscience:
         if not hi or not lo or grounding.normalise(hi) == grounding.normalise(lo):
             return _refusal("record_correction", "Say which value he protected and which "
                                                  "he gave up; they must be different.")
+        # A correction about something his rules keep from this AI is noted
+        # and answered the same whatever he holds about it (round 9 repair: 'He
+        # said that for my HIV meds, brand name matters more than cost'
+        # confirmed a guessed value word for word). Read by its own words.
+        closed = engine and self._value_closed(context, hi, lo)
         if self._same_correction(context, hi, lo):
             p = self._find_priority(context, hi, lo)
-            out = self._prio_view(p) if p else {"context": context}
+            out = (self._closed_correction(context) if closed else
+                   self._prio_view(p) if p else {"context": context})
             out.update(already_counted=True,
                        note="This same correction was already counted in this "
                             "conversation; one correction counts once.")
@@ -3219,7 +3256,29 @@ class Conscience:
         p["updated"] = _now()
         p["confidence"] = self._confidence(p)
         self._save()
+        if closed:
+            return self._closed_correction(context)
         return {**self._prio_view(p), **extra}
+
+    def _value_closed(self, context: str, hi: str, lo: str) -> bool:
+        """Do his rules keep a value with these words from whoever reads?"""
+        import rules as _rules
+        rd = provenance.reader()
+        if not rd.get("audiences"):
+            return False
+        text = f"{context} {hi} {lo}"
+        return _rules.held_back(self.data, rd["audiences"], text,
+                                ["values"] + grounding.sensitivity(text)) is not None
+
+    @staticmethod
+    def _closed_correction(context: str) -> dict:
+        return {"context": context, "noted": True, "noted_by": provenance.NOTED_BY_AI,
+                "held_back": {"why": (
+                    "This is about something his own rules keep from you, so what he holds "
+                    "about it is not shown. Your correction is noted for him to see; nothing "
+                    "of his was changed.")},
+                "tell_the_user": ("Tell him plainly that you noted his choice, and that his own "
+                                  "rules keep this subject from you.")}
 
     def priorities_for(self, context: str | None = None) -> list[dict]:
         """His values, most certain first — about a subject (whole words:
@@ -3239,7 +3298,8 @@ class Conscience:
             ps = [p for p in ps
                   if grounding.content(self.searched(p.get("context", ""), rd)) & q
                   or general(p)]
-            self.search_found(any(not general(p) for p in ps))
+            self.search_found(any(not general(p) for p in ps)
+                              or bool(self.subject_closed(context, rd)))
         return [self._prio_view(p) for p in
                 sorted(ps, key=lambda p: (general(p), -float(p.get("confidence") or 0)))]
 
@@ -4149,7 +4209,7 @@ class Conscience:
             out["note"] = ("The key this connection holds may not read the owner's "
                            "facts, so none are included.")
             if watch:
-                self.search_found(about)
+                self.search_found(about or bool(self.subject_closed(t, rd)))
             return out
         seen, held = self.visible_facts(rd, bulk=False)
         # anyone but the owner's own house gets a private fact only for a
@@ -4173,7 +4233,9 @@ class Conscience:
         named = {c for c in grounding.CLASSES if grounding.CLASS_WORDS.get(c, frozenset()) & tw}
         kept = sum(1 for f, _ in held if named & set(f.get("sensitivity") or []))
         if watch:
-            self.search_found(about or bool(scored))
+            # a subject his rules close to this reader is answered by the rule,
+            # whatever he has recorded: never a guess (round 9 repair)
+            self.search_found(about or bool(scored) or bool(self.subject_closed(t, rd)))
         if kept:
             out["held_back"] = {"count": kept, "why": (
                 "Some facts on this subject are private, or kept from this connection "

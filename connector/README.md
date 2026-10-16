@@ -187,6 +187,34 @@ console — never what the words mean:
 - **Invisible characters are nothing** (round 9): every default-ignorable code
   point and every combining mark is dropped wherever words are read.
 
+Round 9 repair (what the round-9 skeptics found):
+
+- **Him, and only him.** `check_disclosure` and `guidance_for` answer 'the
+  owner may always hear about themself' only when every part of the audience
+  is him: 'me and Karen Novak', 'moi et ChatGPT' and 'me and the man on the
+  phone' are asked about as that audience (silence is still a no).
+- **Read both ways.** A character that shows as nothing or as a blank (the
+  default-ignorables, and now U+2800, U+FFFC and U+1D159) is read as nothing
+  and, again, as a space by every reader that decides something — the door,
+  what kind of private a text is, a rule's topic, a draft, the secrets, a
+  message's scam signs — and what either reading finds counts. In a merchant
+  name it is a disguise, like a look-alike letter: he is asked.
+- **What his rules close is no guess.** A question about a kind of thing his
+  rules keep from that key (his health under 'Never tell my health to any AI')
+  is answered the same whatever he keeps, so it never counts toward the pause.
+- **No answer names what is held back.** `story_gaps` and `add_person` treat
+  someone his rules keep from that AI as nobody; `record_correction` about a
+  held value says only that it was noted; a rule's topic that is itself the
+  secret ('hiv') is shown and asked by its kind ('health'); `forget` by an id
+  it may not read answers as for an unknown id, and engine ids count as
+  searches.
+- **The sender is the address in `<…>`.** Another address in the From line
+  makes it nobody he recorded, and is a warning sign.
+- **No audience is anyone.** `check_draft` and `draft_guidance` with the
+  audience left out check it as for anyone; 'myself' is him, as 'me' is.
+- **The local model's system prompt fits** in 39,000 characters, however long
+  the facts, values and goals: what does not fit is left out, and it says so.
+
 **Confirmation needs a person.** The owner's own command-line confirmations —
 `conscience.py confirm` and `restore`, `forgetting.py approve`, `erase` and
 `bring-back`, `guardian.py review`, `egress.py open` and `keep` — refuse unless

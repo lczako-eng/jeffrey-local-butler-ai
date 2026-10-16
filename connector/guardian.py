@@ -334,6 +334,18 @@ def _other_alphabet(s: Any) -> bool:
                for ch in str(s or ""))
 
 
+def _hidden_in_name(s: Any) -> bool:
+    """Does this name hold a character that shows as nothing — a zero-width
+    space, a Hangul filler, a variation selector, a braille blank (round 9
+    repair, G5)? The shared fold reads them as nothing, so 'NET\u3164FLIX.COM'
+    read as NETFLIX.COM: at his Netflix price it passed as his plan, and the
+    real bill two days later became a 'duplicate' to claim back. Like a
+    look-alike letter, it is a disguise: he is asked. (A byte-order mark at
+    the very start, as some statement files begin, is not.)"""
+    t = str(s or "").strip().lstrip("\ufeff")
+    return grounding.has_hidden(t)
+
+
 # A registered name glued to a fee word on a statement ('PAYPAL *COSTCOMEMBER',
 # 'AMAZONPRIME'): read as the two words (F4, round 8).
 _GLUED_FEE = ("membership", "members", "member", "renewal", "prime")
@@ -1023,6 +1035,9 @@ class Guardian:
         if _other_alphabet(merchant) and any(
                 c in cores for f in _forms(merchant) for c in list(f) + ["".join(f)]):
             return "letters of another alphabet stand where Latin letters should be"
+        if _hidden_in_name(merchant) and any(
+                c in cores for f in _forms(merchant) for c in list(f) + ["".join(f)]):
+            return "a character that shows as nothing is hidden inside the name"
         toks = [t.strip("#,;:()[]*'\"") for t in _fold(merchant).split()]
         for t in toks:
             if not t:

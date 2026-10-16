@@ -180,6 +180,16 @@ class Life:
         again = forgetting.unforget(self.c.data, nm)
         people = self.c.data["people"]
         same_name = [p for p in people if isinstance(p, dict) and _key(p.get("name")) == _key(nm)]
+        if provenance.engine_writes():
+            # Someone his rules keep from this AI is, to it, nobody at all
+            # (round 9 repair): 'There is already a Dr Okafor (HIV specialist)'
+            # with his id, and his notes back for ('Dr Okafor', 'HIV
+            # specialist'), told it what who_am_i holds back. Its person is
+            # noted beside them, waiting for him, as for a name nobody has.
+            v = self._view("private")
+            same_name = [p for p in same_name if not self._rule(
+                v, f"{p.get('name', '')} {p.get('relationship', '')}",
+                [p.get("name", ""), p.get("relationship", "")])]
         same = [p for p in same_name
                 if not rel or _key(p.get("relationship")) == _key(rel)]
         if len(same) > 1 and not rel:
@@ -192,15 +202,16 @@ class Life:
             if provenance.engine_writes() and provenance.his(p):
                 out = self._propose(p, notes=notes, dates=dates)
                 out["matched_existing"] = True
-                return out
+                return self._notes_as_read(p, out)
             changed = self._add_to(p, notes, dates)
             if changed:
                 p["updated"] = _now()
                 self.c._save()
-            return {**self._person_out(p), "matched_existing": True,
-                    "changed": changed or ["nothing — this was already known"],
-                    "note": ("This is someone already known, so what was new was added "
-                             "to them; nothing was replaced.")}
+            return self._notes_as_read(p, {
+                **self._person_out(p), "matched_existing": True,
+                "changed": changed or ["nothing — this was already known"],
+                "note": ("This is someone already known, so what was new was added "
+                         "to them; nothing was replaced.")})
         src = provenance.source(text=nm)
         entry = {
             "name": nm, "relationship": rel, "notes": notes, "important_dates": dates,
@@ -226,6 +237,18 @@ class Life:
             out["note"] = (out.get("note", "") + " He once asked JEFFEREY to forget someone "
                            "by this name. Make sure this is what he wants now; if not, "
                            "forget_life undoes it.").strip()
+        return out
+
+    def _notes_as_read(self, p: dict, out: dict) -> dict:
+        """A person's notes and dates go back to an AI only as who_am_i would
+        show them: not when his rules keep them from it (round 9 repair)."""
+        if not provenance.engine_writes() or not (p.get("notes") or p.get("important_dates")):
+            return out
+        tags = [p.get("name", ""), p.get("relationship", "")]
+        if self._rule(self._view("private"),
+                      f"{p.get('notes', '')} {p.get('important_dates', '')}", tags):
+            out = {k: x for k, x in out.items() if k not in ("notes", "important_dates")}
+            out["notes_held_back"] = True
         return out
 
     @staticmethod
@@ -260,13 +283,18 @@ class Life:
         pid = str(person_id or "").strip()
         p = next((x for x in self.c.data["people"]
                   if isinstance(x, dict) and x.get("id") == pid), None)
+        if p is not None and provenance.engine_writes() and self._rule(
+                self._view("private"), f"{p.get('name', '')} {p.get('relationship', '')}",
+                [p.get("name", ""), p.get("relationship", "")]):
+            p = None          # someone his rules keep from this AI: no one, to it (round 9 repair)
         if p is None:
             return {"refused": True, "tool": "update_person",
                     "reason": f"Nobody is recorded with the id '{pid}'.",
                     "tell_the_user": "Nothing was changed. Use an id from who_am_i."}
         if provenance.engine_writes() and provenance.his(p):
             # someone he recorded: the record stays as it is (S3)
-            return self._propose(p, name, relationship, notes, important_dates)
+            return self._notes_as_read(
+                p, self._propose(p, name, relationship, notes, important_dates))
         ch = {"name": name, "relationship": relationship,
               "notes": [str(notes).strip()] if str(notes or "").strip() else [],
               "important_dates": ([str(important_dates).strip()]
@@ -682,7 +710,7 @@ class Life:
             mems = [m for m in mems if hit(m.get("text", ""), m.get("tags", []),
                                            m.get("people", []))]
             pics = [m for m in pics if hit(m.get("caption", ""), [], m.get("people", []))]
-            self.c.search_found(bool(mems or pics))
+            self.c.search_found(bool(mems or pics) or bool(self.c.subject_closed(t, v["rd"])))
             if not mems and not pics:
                 nothing = (f"Nothing recorded yet matches '{t}'. Say so honestly, and "
                            "ask him if he would like to tell it.")
@@ -710,13 +738,23 @@ class Life:
 
     def story_gaps(self) -> dict:
         """What's missing — so Jefferey can gently ask for it while there's
-        still time to ask."""
-        people = self.c.data.get("people", [])
-        mems = self.c.data.get("memories", [])
+        still time to ask. Only about what this reader may see (round 9
+        repair: 'Nothing recorded yet about Dr Okafor (HIV specialist)' went to
+        his JEFFEREY while who_am_i held Dr Okafor back by his own rule)."""
+        v = self._view("private")
+        people = [p for p in self.c.data.get("people", []) if isinstance(p, dict) and not
+                  self._rule(v, f"{p.get('name', '')} {p.get('relationship', '')}",
+                             [p.get("name", ""), p.get("relationship", "")])]
+        mems = [m for m in self.c.data.get("memories", []) if isinstance(m, dict) and not
+                self._rule(v, m.get("text", ""),
+                           list(m.get("tags") or []) + list(m.get("people") or []))]
+        # (what is held back is counted in who_am_i; here it is only not asked about)
+        everyone = [p for p in self.c.data.get("people", []) if isinstance(p, dict)]
+        every_moment = [m for m in self.c.data.get("memories", []) if isinstance(m, dict)]
         gaps = []
-        if not people:
+        if not everyone:
             gaps.append("Nobody is recorded yet. Who are the people that matter most?")
-        if not mems:
+        if not every_moment:
             gaps.append("No moments recorded. What's a day you'd want remembered?")
         # Someone he asked to forget is never asked about again.
         gone = forgetting.forgotten(self.c.data)
@@ -731,7 +769,7 @@ class Life:
                 continue
             if not any(p["name"].lower() in {x.lower() for x in m.get("people", [])} for m in mems):
                 gaps.append(f"Nothing recorded yet about {p['name']} ({p['relationship']}).")
-        if not any(m["visibility"] == "legacy" for m in mems):
+        if not any(m.get("visibility") == "legacy" for m in every_moment):
             gaps.append("Nothing marked 'legacy' yet — what should outlive you?")
         return {
             "gaps": gaps[:10],

@@ -2967,7 +2967,17 @@ class Representative:
         people = provenance.his_people(self.c.data)
         noted = [p for p in self.c.data.get("people") or []
                  if isinstance(p, dict) and not provenance.his(p)]
-        m = _EMAIL_ADDR.search(s)
+        # The address it was SENT from is the one in <…> — or, without one,
+        # the last address written (round 9 repair: the FIRST address was
+        # read, so '"anna.novak1985@example.com" <help.desk@example.net>' was
+        # his daughter). Any other address in the From line is only text the
+        # sender typed: then it is nobody he recorded.
+        found = list(_EMAIL_ADDR.finditer(s))
+        sent = [x for x in found if s.rfind("<", 0, x.start()) > s.rfind(">", 0, x.start())
+                and ">" in s[x.end():]]
+        m = (sent or found or [None])[-1]
+        others = sorted({grounding.email_key(x.group(0)) for x in found}
+                        - ({grounding.email_key(m.group(0))} if m else set()))
         digits = re.sub(r"\D", "", s)
         if m:
             addr, domain = m.group(0), m.group(1)
@@ -2995,6 +3005,11 @@ class Representative:
                 flags["sender_lookalike"] = (0.35, (
                     "the sender's address is written with letters from another alphabet or "
                     "with invisible characters, so it is nobody's address he has"))
+            elif others:
+                flags["sender_lookalike"] = (0.35, (
+                    f"the sender's name shows another e-mail address ({others[0]}) than the "
+                    f"one it was sent from ({key}) — anyone can type an address there, so "
+                    f"it is nobody's address he has"))
             else:
                 for group, kind in ((people, "recorded"), (noted, "noted")):
                     for p in group:
@@ -3053,7 +3068,30 @@ class Representative:
             return "number", "a phone number he has not saved", flags
         return "unknown", "someone he does not know", flags
 
-    def triage_message(self, sender: str, subject: str, body: str) -> dict:  # noqa: C901
+    # How serious a reading of a message is, for choosing between two.
+    _VERDICT_RANK = {"routine": 0, "needs_decision": 1, "check_first": 2, "money_watch": 3,
+                     "suspicious": 4, "likely_scam": 5, "safety": 6}
+
+    def triage_message(self, sender: str, subject: str, body: str) -> dict:
+        """A message that holds a character that shows as nothing is read both
+        ways — with each one as nothing, and as a space — and the more serious
+        reading is the answer, its hiding counted in both (round 9 repair, G5:
+        read only as nothing, braille blanks between the words of 'send $3000
+        bail in gift cards' glued them and hid the scam). See _triage_one."""
+        sender, subject, body = (str(x or "") for x in (sender, subject, body))
+        if not grounding.has_hidden(f"{subject}\n{body}"):
+            return self._triage_one(sender, subject, body)
+        a = self._triage_one(sender, subject, body)
+        _, _, tricks = triage_spelling(f"{subject}\n{body}")
+        b = self._triage_one(sender, grounding.spaced(subject), grounding.spaced(body),
+                             more_tricks=tricks)
+        b.update(subject=subject)
+        rank = lambda r: (bool(r.get("interrupt")),                    # noqa: E731
+                          self._VERDICT_RANK.get(r.get("verdict"), 0), r.get("scam_score", 0))
+        return a if rank(a) >= rank(b) else b
+
+    def _triage_one(self, sender: str, subject: str, body: str,  # noqa: C901
+                    more_tricks=()) -> dict:
         """Read a message the way a good friend would: what does it want,
         does it matter by THIS person's priorities, and is anyone trying
         to take advantage of them?
@@ -3068,6 +3106,7 @@ class Representative:
         sender, subject, body = (str(x or "") for x in (sender, subject, body))
         text = f"{subject}\n{body}"
         low, alt, tricks = triage_spelling(text)
+        tricks = list(tricks) + [t for t in more_tricks if t not in tricks]
 
         def seen(rx) -> bool:
             return bool(rx.search(low) or (alt != low and rx.search(alt)))
@@ -3412,14 +3451,27 @@ class Representative:
             ),
         }
 
+    _ANYONE_NOTE = ("anyone — no audience was given, so it was read as something anyone "
+                    "may see. Name who it is for, and check it again.")
+
     _DEFAULT_VOICE = ("Calm, articulate, warm, plain-spoken. Their language, their rhythm. "
                       "Short sentences. No corporate padding, no false apology, no threats.")
 
     def _recipient(self, recipient: str) -> tuple[str, frozenset, frozenset, bool]:
-        """(as written, broad names, strict names, a recorded person?)."""
+        """(as written, broad names, strict names, a recorded person?).
+
+        Round 9 repair: a draft or a letter whose audience is left out, empty
+        or only spaces may be read by anyone — a public post — so it is
+        checked as for 'anyone' (it was never checked at all: 'Dad has HIV'
+        with no audience was ok on every surface, and draft_guidance handed
+        over his private facts). Only an audience that is wholly him — 'me',
+        'myself', 'just me', 'moi' (grounding.only_self) — is not checked."""
         aud = str(recipient or "").strip()
-        if not aud or grounding.norm_audience(aud) == "me":
+        if aud and (grounding.norm_audience(aud) == "me" or grounding.only_self(aud)):
             return aud, frozenset(), frozenset(), True
+        if not aud:
+            import rules as _rules
+            return aud, frozenset({_rules.ANYONE}), frozenset({_rules.ANYONE}), False
         # A no meets everyone written down; a yes, and 'someone he knows',
         # only the people HE recorded or confirmed (S3, round 8)
         mine = provenance.his_people(self.c.data)
@@ -3486,11 +3538,13 @@ class Representative:
             out["disclosure"] = {
                 "recipient": aud,
                 "held_back": held,
-                "do_not_mention": R.denied_subjects(aud),
+                "do_not_mention": R.denied_subjects(aud or _rules.ANYONE),
                 "rule": ("His own rules keep these subjects from this person. Do not "
                          "mention them, hint at them, or explain why. If asked, say it "
                          "isn't yours to share."),
             }
+            if not aud:
+                out["disclosure"]["checked_as"] = self._ANYONE_NOTE
             rd = provenance.reader()
             reps = [r["instruction"] for r in R.rules("representation")
                     if _rules._aud(r) in (strict | {_rules.ANYONE})
@@ -3526,12 +3580,16 @@ class Representative:
         if not body.strip():
             return {"ok": False, "problems": [], "note": "There is no draft to check."}
         aud, broad, strict, known = self._recipient(audience)
-        low = grounding.normalise(body)
+        # a draft that holds a character that shows as nothing is read both
+        # ways, as nothing and as a space (round 9 repair, G5: 'Jo is on
+        # che\u2800mo' was ok to the neighbours)
+        bodies = grounding.readings(body)
+        lows = [grounding.normalise(b) for b in bodies]
         problems: list[dict] = []
         if broad:
             R = _rules.ConscienceRules(self.c)
             kinds = grounding.sensitivity(body)
-            for subject in R.denied_subjects(aud):
+            for subject in R.denied_subjects(aud or _rules.ANYONE):
                 if grounding.tag_hits([subject], body, kinds):
                     problems.append({"subject": subject, "why": (
                         f"it touches '{subject}', which his own rule keeps from this person")})
@@ -3555,8 +3613,8 @@ class Representative:
                     may, _, _ = _rules.verdict(
                         self.c.data, broad, strict,
                         lambda r: grounding.tag_hits(r.get("tags") or [], said, tags))
-                    if may is not True and grounding.draft_carries(
-                            said, f.get("sensitivity") or [], body, names):
+                    if may is not True and any(grounding.draft_carries(
+                            said, f.get("sensitivity") or [], b, names) for b in bodies):
                         what = " and ".join(grounding.CLASS_WORDS_PLAIN.get(k, k)
                                             for k in f.get("sensitivity") or []) or "him"
                         problems.append({"fact_id": f.get("id"), "ask_owner": True, "why": (
@@ -3567,20 +3625,22 @@ class Representative:
                 # it private ('Jo … chemo') or of his health or money; or two
                 # of its words and at least half of them ('Ed has MS' from
                 # 'Ed has MS and uses a cane')
-                if grounding.draft_repeats(said, body, names):
+                if any(grounding.draft_repeats(said, b, names) for b in bodies):
                     what = " and ".join(grounding.CLASS_WORDS_PLAIN.get(k, k)
                                         for k in f.get("sensitivity") or []) or "him"
                     problems.append({"fact_id": f.get("id"), "why": (
                         f"it repeats something private about {what}")})
         for rx, why in _DRAFT_SAFETY:
-            if re.search(rx, low):
+            if any(re.search(rx, low) for low in lows):
                 problems.append({"why": why})
-        if broad and not known and re.search(
+        if broad and not known and any(re.search(
                 r"\bcome (?:to|by|over to) (?:my|the|our) (?:house|home|place|door)\b"
-                r"|\b(?:my|our) (?:home )?address is\b", low):
+                r"|\b(?:my|our) (?:home )?address is\b", low) for low in lows):
             problems.append({"why": "it invites someone he has not told JEFFEREY about to "
                                     "his home — suggest a public place instead"})
         out = {"ok": not problems, "audience": aud, "problems": problems}
+        if not aud:
+            out["checked_as"] = self._ANYONE_NOTE
         if any(p.get("ask_owner") for p in problems):
             out["ask_owner"] = True
         out["advice"] = ("Nothing in it goes against his rules or his safety." if not problems
