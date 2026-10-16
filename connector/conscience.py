@@ -2872,10 +2872,10 @@ class Conscience:
         guessing a PIN. Read by the KIND only, never by a rule's own topic
         word, so the answer tells nothing about which words his rules name.
 
-        Round 9, second repair: only a question made of nothing but the closed
-        kinds' own words (grounding.kind_words_only) — 'my health and my boat
-        number 4800' … '4824' named his health, so it was never counted, and
-        twenty-five guesses brought no pause and no notice to him."""
+        Unless it carries a number (grounding.guess_shaped): 'my health and my
+        boat number 4800' … '4824' named his health, so it was never counted,
+        and twenty-five guesses brought no pause and no notice to him. Asking
+        in plain words — 'what medication does he take' — is still no guess."""
         import rules as _rules
         rd = rd or provenance.reader()
         aud = rd.get("audiences") or frozenset()
@@ -2886,7 +2886,7 @@ class Conscience:
             c for c in grounding.CLASSES if grounding.CLASS_WORDS.get(c, frozenset()) & tw}
         closed = [k for k in grounding.CLASSES
                   if k in kinds and _rules.held_back(self.data, aud, "", [k]) is not None]
-        return closed if closed and grounding.kind_words_only(text, closed) else []
+        return closed if closed and not grounding.guess_shaped(text) else []
 
     def visible_priorities(self, rd: dict | None = None) -> tuple[list[dict], int]:
         """His values whoever reads this result may see, and how many his

@@ -244,6 +244,24 @@ Round 9, second repair (what the confirm check of the repair found):
   'NET̲FLIX.COM', 'NETFLİX.COM', 'NETFLıX.COM' ask him; CAA-QUÉBEC's own accent
   still matches. When he says such a name is his (`add_alias`), it is.
 
+Round 9, last fixes (what the confirm check of the second repair found):
+
+- **A question about what his rules close is no guess unless it carries a
+  number.** The second repair counted 'what medication does he take' and 'how
+  often does he see his doctor' as guesses, and paused his own JEFFEREY. Now
+  only a number — digits of any script, or number words — makes such a question
+  count (`grounding.guess_shaped`): 'my health and my boat number 4800' still
+  pauses at the twenty-first.
+- **Marks are checked place by place.** A statement name may drop his accents
+  ('CAA QUEBEC' for 'CAA-Québec') but not add one, move one ('CAA-QUEBÉC'), or
+  write a letter another way (a circled Ⓝ, a Roman numeral Ⅰ, full-width,
+  dotless ı): `guardian._marked_unlike` lines the name up with his own names
+  for the plan and asks him about anything that differs.
+- **His relationship to someone is one relationship however it is joined:**
+  'my ex‑wife' with a non-breaking hyphen, 'my ex wife', 'my exwife' and 'my
+  ex⠀wife' all meet a no for his ex-wife (`grounding.same_relationship`; a
+  no only).
+
 **Confirmation needs a person.** The owner's own command-line confirmations —
 `conscience.py confirm` and `restore`, `forgetting.py approve`, `erase` and
 `bring-back`, `guardian.py review`, `egress.py open` and `keep` — refuse unless

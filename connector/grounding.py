@@ -1344,49 +1344,35 @@ CLASS_ALIASES = {
 }
 
 
-# ------------------------------------ a question in a kind's own words (r9 fix 2)
-# A question about a kind his rules close to a reader ('my diabetes', 'ma
-# santé', 'my credit card') is answered by the rule, so it is no guess. But
-# only when it says nothing else: round 9's repair left out of the guess count
-# every question that NAMED a closed kind, so 'my health and my boat number
-# 4800' … '4824' never counted, and the twenty-guess limit was gone. A
-# question is the kind's own only when every word of it that says what it is
-# about is a word of that kind — of what makes a thing his health or money,
-# a phrase of it ('blood pressure', 'credit card'), or the kind's own name. A
-# number, a code, a name or any other word, and it is a question like any
-# other.
-def _kind_vocab(kinds) -> frozenset:
-    out: set[str] = set()
-    for k in kinds:
-        out |= _SENSE_WORDS.get(k, frozenset()) | CLASS_WORDS.get(k, frozenset())
-        out |= _CATEGORY.get(k, frozenset()) | {stem(w) for w in k.split("_")}
-        out |= {stem(w) for a, c in CLASS_ALIASES.items() if c == k for w in a.split()}
-    return frozenset(out)
+# ------------------------------------------- a question that guesses (r9, last fix)
+# A question about a kind his rules close to a reader ('my diabetes', 'what
+# medication does he take', 'ma santé') is answered by the rule, so it is no
+# guess and never counts toward the twenty-miss pause. Round 9's repair left
+# out every question that NAMED a closed kind, so 'my health and my boat
+# number 4800' … '4824' never counted; its second repair counted every
+# question with one word outside the kind ('take', 'often', 'lately'), so his
+# own JEFFEREY was paused again for asking about his health in plain words.
+# What a guess at a held secret needs is a number — a PIN, a code, a date, an
+# amount — in digits of any script or in words. So a question that names a
+# closed kind is no guess unless it carries a number; then it counts like any
+# other. (Words alone confirm nothing: a held fact is never matched.)
+_NUMBER_WORDS = frozenset(
+    "zero two three four five six seven eight nine ten eleven twelve twenty thirty"
+    " forty fifty sixty seventy eighty ninety hundred thousand"
+    " deux trois quatre cinq sept huit neuf dix onze douze vingt trente quarante"
+    " cinquante soixante cent mille".split())
 
 
-def kind_words_only(text, kinds) -> bool:
-    """Is every word of this question that says what it is about a word of
-    one of these kinds' own vocabulary (see above), in every reading of it?"""
-    kinds = tuple(k for k in kinds or () if k in CLASSES)
-    t = str(text or "")
-    if not kinds or not t.strip():
-        return False
-    vocab = _kind_vocab(kinds)
-    for r in readings(t):
-        ws = content(r)
-        if not ws:
-            return False
-        joined = f" {_joined(_normalise(r))} {_joined(fold(r))} "
-        covered: set[str] = set()
-        for k in kinds:
-            for p, form in zip(_SENSE_PHRASES.get(k, ()), _PHRASE_FORMS.get(k, ())):
-                if form in joined:
-                    covered |= content(p) | {stem(w) for w in _words(fold(p))}
-        for w in ws:
-            fw = fold(w, frozenset())
-            if not ({w, stem(w), fw, stem(fw)} & (vocab | covered)):
-                return False
-    return True
+def guess_shaped(text) -> bool:
+    """Does any reading of this question carry a number — a digit of any
+    script (circled, full-width, Roman numerals included) or a number word?"""
+    for r in readings(str(text or "")):
+        t = unicodedata.normalize("NFKC", r)
+        if any(unicodedata.category(ch).startswith("N") for ch in t):
+            return True
+        if set(_words(fold(t))) & _NUMBER_WORDS or set(_words(t)) & _NUMBER_WORDS:
+            return True
+    return False
 
 
 def fact_match(text, category, classes, topic_words: set[str],
@@ -1843,6 +1829,17 @@ def audience_readings(audience) -> tuple[str, ...]:
     return tuple(out)
 
 
+def same_relationship(a, b) -> bool:
+    """Is this audience the relationship recorded for someone, however it is
+    joined (r9 last fix): 'my ex-wife' with a non-breaking hyphen, 'my ex
+    wife', 'my exwife' and 'my ex⠀wife' are all his ex-wife. For a NO only:
+    the callers widen a no with it, never a yes."""
+    def compact(x):
+        return re.sub(r"[^a-z0-9]+", "", fold(norm_audience(x)))
+    ca = compact(a)
+    return bool(ca) and ca == compact(b)
+
+
 def norm_audiences(s) -> frozenset:
     """norm_audience of every reading of this audience (one, unless it holds
     a character that shows as nothing)."""
@@ -1887,7 +1884,8 @@ def _rule_names_one(audience, people=()) -> set[str]:
                 pw = {w for w in words(pn) if w not in _TITLES}
                 if not pn:
                     continue
-                if n == pn or (nw and pw and (nw <= pw or pw <= nw)) or (rel and n == rel):
+                if n == pn or (nw and pw and (nw <= pw or pw <= nw)) or (
+                        rel and same_relationship(n, rel)):
                     out |= {pn} | ({rel} if rel else set())
                     out |= _emails_in(p.get("notes", ""))
     out.discard("")
@@ -2151,7 +2149,7 @@ def _audience_aliases_one(audience, people=()) -> tuple[frozenset, frozenset]:
         exact = agree and (bool(email and email in noted) or bool(not email and pn in strict))
         # 'my ex-wife' is the person recorded as his ex-wife; 'knovak@…'
         # holds her surname (verify I-24) — for a NO, never for a yes
-        if rel and norm_audience(raw) == rel:
+        if rel and any(same_relationship(r, rel) for r in audience_readings(raw)):
             broad |= {pn, rel}
         if email:
             local = email.split("@", 1)[0]

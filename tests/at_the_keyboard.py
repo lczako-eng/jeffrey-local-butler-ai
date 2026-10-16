@@ -26,6 +26,7 @@ import termios
 import time
 
 CODE = re.compile(rb"type the number ((?:\d ){2}\d)")
+QUIET = 0.4                 # seconds with nothing new on the screen before typing
 
 
 def _controlling_terminal() -> None:          # runs in the child, after setsid
@@ -47,8 +48,9 @@ def run(cmd: list[str], env: dict, cwd, answer: str = "code",
     buf, seen = b"", 0
     extra = list(more)
     deadline = time.time() + timeout
+    last = time.time()
     while time.time() < deadline:
-        rd, _, _ = select.select([master], [], [], 0.5)
+        rd, _, _ = select.select([master], [], [], 0.1)
         if rd:
             try:
                 chunk = os.read(master, 4096)
@@ -57,6 +59,14 @@ def run(cmd: list[str], env: dict, cwd, answer: str = "code",
             if not chunk:
                 break
             buf += chunk
+            last = time.time()
+        # Type only once the screen has stopped for a moment: the confirm
+        # screens throw away anything typed before they ask (so nothing can
+        # be typed ahead for him), and a header line ending in ':' is not the
+        # question yet (the round-9 flake: 'all' was typed after 'wait for
+        # your ok:', thrown away, and the real question got nothing).
+        if time.time() - last < QUIET:
+            continue
         fresh = buf[seen:]
         m = CODE.search(fresh)
         if m and b"press return" in fresh[m.end():]:

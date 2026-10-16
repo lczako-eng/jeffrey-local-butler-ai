@@ -357,50 +357,60 @@ def _hidden_in_name(s: Any) -> bool:
 # letter the fold reads as a Latin one, 'ı', 'ł', a full-width 'Ｎ' — that his
 # own name for the plan does not have is made to look like it: he is asked.
 # His registered name's own accents still match it, however they are typed.
-def _own_letters(names) -> tuple[set, set]:
-    """(each mark with the letter it sits on, each letter the fold changes)
-    in his own names for a plan."""
-    marks: set[tuple[str, str]] = set()
-    letters: set[str] = set()
-    for n in names:
-        base = ""
-        for ch in unicodedata.normalize("NFD", str(n or "")):
-            if unicodedata.category(ch).startswith("M"):
-                marks.add((base, ch))
-            elif ch.isalpha():
-                base = grounding.fold(ch, frozenset()) or ch.casefold()
-                if not ch.isascii():
-                    letters.add(ch.casefold())
-    return marks, letters
+def _skeleton(name: Any) -> list[tuple[str, str, str]]:
+    """A name as its letters and digits, in order: (what the fold reads it
+    as, the marks that sit on it, how it is written). Spaces, punctuation and
+    characters that show as nothing are left out; a letter the fold reads as
+    two ('ß') is two places, the first carrying how it is written."""
+    out: list[list[str]] = []
+    for ch in unicodedata.normalize("NFD", str(name or "").strip().lstrip("\ufeff")):
+        if unicodedata.category(ch).startswith("M"):
+            if out:
+                out[-1][1] += ch
+            continue
+        f = ch.casefold() if ch.isascii() else grounding.fold(ch, frozenset())
+        f = "".join(c for c in (f or "") if c.isalnum())
+        for i, c in enumerate(f):
+            out.append([c, "", ch if i == 0 else ""])
+    return [tuple(p) for p in out]
+
+
+def _plain(p: tuple[str, str, str]) -> bool:
+    return not p[1] and p[2].isascii()
 
 
 def _marked_unlike(merchant: Any, names) -> bool:
-    """Does this statement name carry a mark the fold takes off, or a letter
-    the fold reads as another, that none of his own names for the plan has?"""
-    t = unicodedata.normalize("NFD", str(merchant or "").strip().lstrip("\ufeff"))
-    if t.isascii():
+    """Does this statement name carry an accent, a mark or a letter written
+    another way (full-width, circled, a Roman numeral, a dotless i) that his
+    own name for the plan does not have AT THAT PLACE? A statement may drop
+    his accents (banks often do: 'CAA QUEBEC' for 'CAA-Québec'); it may not
+    add one, or move one (r9 last fix: 'CAA-QUEBÉC', 'CAA-QUÉBÉC', a circled
+    Ⓝ in NETFLIX.COM passed as his plan, and the real bill was then called a
+    duplicate)."""
+    st = _skeleton(merchant)
+    if all(_plain(p) for p in st):
         return False
-    marks, letters = _own_letters(names)
-    base = ""
-    for ch in t:
-        if ch.isascii():
-            if ch.isalpha():
-                base = ch.casefold()
-            continue
-        if unicodedata.category(ch).startswith("M"):
-            if (base, ch) not in marks:
-                return True
-            continue
-        if not ch.isalpha():
-            continue                       # spaces, dashes, quotes: not a letter
-        folded = grounding.fold(ch, frozenset())
-        if folded and folded != ch.casefold() and folded.isascii():
-            if ch.casefold() not in letters:
-                return True                # 'ı', 'ł', a full-width 'Ｎ'
-            base = folded
-        else:
-            base = ch.casefold()
-    return False
+    seq = "".join(p[0] for p in st)
+    # each word of each of his names, as he wrote it ('CAA', 'Québec',
+    # 'adhésion'): a statement often bills under part of a name
+    own_words = []
+    for n in names or ():
+        for w in re.split(r"[\W_]+", unicodedata.normalize("NFC", str(n or ""))):
+            sk = _skeleton(w)
+            if sk:
+                own_words.append(("".join(p[0] for p in sk), sk))
+
+    def explained(i: int, p: tuple[str, str, str]) -> bool:
+        for word, sk in own_words:
+            k = seq.find(word)
+            while k >= 0:
+                if k <= i < k + len(sk) and p[1] == sk[i - k][1] \
+                        and p[2].casefold() == sk[i - k][2].casefold():
+                    return True
+                k = seq.find(word, k + 1)
+        return False
+
+    return not all(_plain(p) or explained(i, p) for i, p in enumerate(st))
 
 
 # A registered name glued to a fee word on a statement ('PAYPAL *COSTCOMEMBER',
