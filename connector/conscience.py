@@ -2870,7 +2870,12 @@ class Conscience:
         own JEFFEREY, asking twenty times about the health 'Never tell my
         health to any AI' keeps from it, was paused for an hour as if it were
         guessing a PIN. Read by the KIND only, never by a rule's own topic
-        word, so the answer tells nothing about which words his rules name."""
+        word, so the answer tells nothing about which words his rules name.
+
+        Round 9, second repair: only a question made of nothing but the closed
+        kinds' own words (grounding.kind_words_only) — 'my health and my boat
+        number 4800' … '4824' named his health, so it was never counted, and
+        twenty-five guesses brought no pause and no notice to him."""
         import rules as _rules
         rd = rd or provenance.reader()
         aud = rd.get("audiences") or frozenset()
@@ -2879,8 +2884,9 @@ class Conscience:
         tw = grounding.expand(grounding.content(text))
         kinds = set(grounding.sensitivity(text)) | {
             c for c in grounding.CLASSES if grounding.CLASS_WORDS.get(c, frozenset()) & tw}
-        return [k for k in grounding.CLASSES
-                if k in kinds and _rules.held_back(self.data, aud, "", [k]) is not None]
+        closed = [k for k in grounding.CLASSES
+                  if k in kinds and _rules.held_back(self.data, aud, "", [k]) is not None]
+        return closed if closed and grounding.kind_words_only(text, closed) else []
 
     def visible_priorities(self, rd: dict | None = None) -> tuple[list[dict], int]:
         """His values whoever reads this result may see, and how many his
@@ -3054,6 +3060,14 @@ class Conscience:
             c = min(c, ENGINE_CONFIDENCE_CAP)
         src = provenance.source(values=(higher, lower), context=context)
         status = provenance.status_for(src)
+        # A value about something his rules keep from this AI is noted and
+        # answered the same whatever he holds about it (round 9, second
+        # repair: 'He stated the opposite himself', with his value 'brand name
+        # over cost' given back, confirmed a guessed value word for word, on
+        # MCP, HTTP and the terminal, while priorities_for held it back). Read
+        # by its own words, as record_correction is. His question still
+        # reaches him.
+        closed = engine and self._value_closed(context, higher, lower)
         p = self._find_priority(context, higher, lower)
         extra: dict = {}
         if p is None:
@@ -3109,6 +3123,8 @@ class Conscience:
                            q + " If it is right, type /pending in 'Talk to JEFFEREY on this "
                                "Mac' to see it, and /confirm to make it so.")
                 self._save()
+                if closed:
+                    return self._closed_correction(context, "value")
                 return {**self._prio_view(p), "changed": False,
                         "question_for_owner": q,
                         "note": ("He stated the opposite himself, so it was not reversed — "
@@ -3126,6 +3142,8 @@ class Conscience:
         p["evidence"] = int(p.get("for") or 0) + int(p.get("against") or 0) or 1
         p["confidence"] = self._confidence(p)
         self._save()
+        if closed:
+            return self._closed_correction(context, "value")
         out = {**self._prio_view(p), **extra}
         if engine and _real_number(confidence) is not None and _real_number(confidence) > c:
             out["note"] = (f"Kept at {c:.0%} sure: an AI may not say it is surer than that "
@@ -3271,11 +3289,11 @@ class Conscience:
                                 ["values"] + grounding.sensitivity(text)) is not None
 
     @staticmethod
-    def _closed_correction(context: str) -> dict:
+    def _closed_correction(context: str, what: str = "correction") -> dict:
         return {"context": context, "noted": True, "noted_by": provenance.NOTED_BY_AI,
                 "held_back": {"why": (
                     "This is about something his own rules keep from you, so what he holds "
-                    "about it is not shown. Your correction is noted for him to see; nothing "
+                    f"about it is not shown. Your {what} is noted for him to see; nothing "
                     "of his was changed.")},
                 "tell_the_user": ("Tell him plainly that you noted his choice, and that his own "
                                   "rules keep this subject from you.")}

@@ -1817,6 +1817,61 @@ _COMPILED = [(k, w, why, re.compile(rx) if rx else None) for k, w, why, rx in _S
 _WEIGHT = {k: w for k, w, _, _ in _SIGNALS}
 _WHY = {k: why for k, _, why, _ in _SIGNALS}
 _EMAIL_ADDR = re.compile(r"[^\s<>\"'@,;:()]+@((?:[a-z0-9-]+\.)+[a-z]{2,})")
+
+# ------------------------------------------- the sent-from address (r9, fix 2)
+# The address a message was SENT from is the one in the last <…> — or, with no
+# brackets, the last address written. It is read as written (accents and
+# marks kept, case aside), never through the fold: 'anna.novak1985@exämple.com'
+# and 'anná.novak1985@example.com' were his daughter's, because the fold takes
+# accents off. And it must be an ordinary address — a name or dots before the
+# @, a web name of plain letters after it: when it could not be read (an IP
+# literal '[192.0.2.7]', 'localhost', a quoted '"help desk"@…', a domain in
+# another script), the address typed in the display name won, and a scam
+# from '"anna.novak1985@example.com" <help.desk@[192.0.2.7]>' was hers.
+_READABLE_ADDR = re.compile(r"[^\s<>\"'@,;:()\[\]\\]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+"
+                            r"[A-Za-z]{2,63}")
+_AT_TOKEN = re.compile(r"[^\s<>,;]*@[^\s<>,;]*")
+_ADDR_ANY = re.compile(r"[^\s<>\"'@,;:()\[\]]+@[^\s<>\"'@,;:()\[\]]+")
+
+
+def _exact_addr(a: str) -> str:
+    """An address as written — composed, trimmed, case aside; accents and
+    marks kept."""
+    t = unicodedata.normalize("NFC", str(a or "")).strip().strip("<>\"'()[],;: ").rstrip(".")
+    t = t.lower()
+    return t[7:] if t.startswith("mailto:") else t
+
+
+def _exact_addrs(text: str) -> set[str]:
+    """Every address written in his notes, as _exact_addr reads it."""
+    t = unicodedata.normalize("NFC", grounding.visible(str(text or "")))
+    return {_exact_addr(x) for x in _ADDR_ANY.findall(t)} - {""}
+
+
+def _sent_from(sender: str) -> tuple[str | None, bool, list[str]]:
+    """(the address it was sent from as written, whether it is an ordinary
+    address JEFFEREY can read, every other address in the From line) — or
+    (None, False, []) when there is no address at all."""
+    raw = unicodedata.normalize("NFC", str(sender or "")).strip()
+    if not re.search(r"[^\s<>,;@]@[^\s<>,;@]", raw):
+        return None, False, []                    # no address ('@anna' is a handle)
+    marks = list(re.finditer(r"<([^<>]*)>", raw))
+    if raw.count("<") != raw.count(">") or (raw.count("<") and not marks):
+        toks = _AT_TOKEN.findall(raw) or [raw]
+        return toks[-1], False, toks[:-1]          # a bracket left open: unreadable
+    if marks:
+        last = marks[-1]
+        cand = last.group(1)
+        rest = raw[:last.start()] + " " + raw[last.end():]
+        others = _AT_TOKEN.findall(rest)
+    else:
+        toks = _AT_TOKEN.findall(raw)
+        cand, others = toks[-1].strip("()\"'"), toks[:-1]   # 'Anna (anna@example.com)'
+    cand = cand.strip()
+    if cand.lower().startswith("mailto:"):
+        cand = cand[7:]
+    bare = cand.rstrip(".,;:")
+    return bare, bool(_READABLE_ADDR.fullmatch(bare)), [o for o in others if "@" in o]
 _BRAND_WORDS = re.compile(
     r"\b(?:cra|arc|canada revenue agency|revenue canada|agence du revenu|canada post|"
     r"postes canada|purolator|rbc|royal bank|td|td bank|bmo|scotiabank|cibc|desjardins|"
@@ -2971,18 +3026,22 @@ class Representative:
         # the last address written (round 9 repair: the FIRST address was
         # read, so '"anna.novak1985@example.com" <help.desk@example.net>' was
         # his daughter). Any other address in the From line is only text the
-        # sender typed: then it is nobody he recorded.
-        found = list(_EMAIL_ADDR.finditer(s))
-        sent = [x for x in found if s.rfind("<", 0, x.start()) > s.rfind(">", 0, x.start())
-                and ">" in s[x.end():]]
-        m = (sent or found or [None])[-1]
-        others = sorted({grounding.email_key(x.group(0)) for x in found}
-                        - ({grounding.email_key(m.group(0))} if m else set()))
+        # sender typed: then it is nobody he recorded. It is read as written,
+        # and one JEFFEREY cannot read is nobody's he has (second repair).
+        sent, readable, typed = _sent_from(sender)
         digits = re.sub(r"\D", "", s)
-        if m:
-            addr, domain = m.group(0), m.group(1)
+        if sent is not None and not readable:
+            flags["sender_lookalike"] = (0.35, (
+                f"the address it was sent from ({sent[:80]}) is not an ordinary e-mail address "
+                f"JEFFEREY can read — anyone can put a known address in the name before it, "
+                f"so it is nobody's address he has"))
+            return "email", ("an address JEFFEREY cannot read as an ordinary one, so nobody "
+                             "he has recorded"), flags
+        if sent is not None:
+            addr = sent
+            domain = addr.rsplit("@", 1)[1].lower()
             display = s[:s.index("<")] if "<" in s else ""
-            local = addr.split("@", 1)[0]
+            local = triage_spelling(addr.split("@", 1)[0])[0].strip()
             borrowed = _borrowed_name(domain)
             if borrowed:
                 flags["sender_lookalike"] = (0.35, (
@@ -3000,7 +3059,8 @@ class Representative:
                         f"the sender's name says '{claimed.group()}', but the address "
                         f"({domain}) is not theirs" + (" — it is a free email account"
                                                        if domain in _FREE_MAIL else "")))
-            key = grounding.email_key(addr)
+            key = _exact_addr(addr)
+            others = sorted({_exact_addr(x) for x in typed} - {key, ""})
             if disguised:
                 flags["sender_lookalike"] = (0.35, (
                     "the sender's address is written with letters from another alphabet or "
@@ -3013,9 +3073,18 @@ class Representative:
             else:
                 for group, kind in ((people, "recorded"), (noted, "noted")):
                     for p in group:
-                        if key in grounding.emails_of(p.get("notes", "")):
+                        if key in _exact_addrs(p.get("notes", "")):
                             return kind, (f"{p.get('name')}, someone he has recorded"
                                           if kind == "recorded" else _noted_as(p)), flags
+                # the same as an address he has, but for an accent or a mark:
+                # made to look like it
+                folded = grounding.email_key(addr)
+                if any(folded in grounding.emails_of(p.get("notes", ""))
+                       for p in list(people) + list(noted)):
+                    flags["sender_lookalike"] = (0.35, (
+                        "the sender's address looks like the address of someone he has "
+                        "recorded, but a letter in it carries an accent or a mark the real one "
+                        "does not — it is nobody's address he has"))
             kind = "official" if _official(domain) else "email"
             return kind, ("the real address of a company he may deal with" if kind == "official"
                           else "an email address he has not recorded"), flags
@@ -3465,9 +3534,16 @@ class Representative:
         checked as for 'anyone' (it was never checked at all: 'Dad has HIV'
         with no audience was ok on every surface, and draft_guidance handed
         over his private facts). Only an audience that is wholly him — 'me',
-        'myself', 'just me', 'moi' (grounding.only_self) — is not checked."""
+        'myself', 'just me', 'moi' (grounding.only_self) — is not checked.
+
+        Round 9, second repair: an audience made only of characters that show
+        as nothing ('\u200b', '\u3164', '\u2800', ' \ufeff ') is no audience
+        either — it was never checked, and draft_guidance handed over his
+        private facts — and 'not me', 'pas moi', 'never me' are not him."""
         aud = str(recipient or "").strip()
-        if aud and (grounding.norm_audience(aud) == "me" or grounding.only_self(aud)):
+        if grounding.is_blank(aud):
+            aud = ""
+        if aud and grounding.only_self(aud):
             return aud, frozenset(), frozenset(), True
         if not aud:
             import rules as _rules
@@ -3477,7 +3553,7 @@ class Representative:
         mine = provenance.his_people(self.c.data)
         broad, _ = grounding.audience_aliases(aud, self.c.data.get("people") or [])
         broad_mine, strict = grounding.audience_aliases(aud, mine)
-        broad = frozenset(grounding.norm_audience(a) for a in broad | broad_mine)
+        broad = frozenset(x for a in broad | broad_mine for x in grounding.norm_audiences(a))
         strict = frozenset(grounding.norm_audience(a) for a in strict)
         # someone he knows only by a whole address or a whole name (G3)
         known = any(grounding.norm_audience(p.get("name", "")) in strict for p in mine)
@@ -3547,7 +3623,7 @@ class Representative:
                 out["disclosure"]["checked_as"] = self._ANYONE_NOTE
             rd = provenance.reader()
             reps = [r["instruction"] for r in R.rules("representation")
-                    if _rules._aud(r) in (strict | {_rules.ANYONE})
+                    if _rules._yes_to(r, strict | {_rules.ANYONE})
                     and not _rules.words_held(r, rd, self.c.data)]
             if reps:
                 out["speak_of_them_this_way"] = reps

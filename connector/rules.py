@@ -118,6 +118,22 @@ def _written(r: dict) -> str:
     return str(r.get("audience_written") or r.get("audience") or "")
 
 
+# A RULE'S AUDIENCE IS READ BOTH WAYS (round 9, second repair). A character
+# that shows as nothing or as a blank in it ('Karen\u2800Novak') is read as
+# nothing and as a space: a NO is for everyone either reading names, a YES
+# only for whom both readings name.
+def _auds(r: dict) -> frozenset:
+    """Every reading of this rule's audience, as norm_audience reads it."""
+    out = {a for a in grounding.norm_audiences(_written(r)) if a}
+    return frozenset(out | {_aud(r)})
+
+
+def _yes_to(r: dict, names) -> bool:
+    """Does this rule name an audience known by these names, in every
+    reading (what a YES needs)?"""
+    return _auds(r) <= set(names)
+
+
 def unknown(r: dict, data: dict | None = None) -> tuple[str, ...]:
     """The parts of a NO's audience nobody knows (F1, round 8): not a person
     he recorded himself, not one of his keys, not an anyone-, family- or
@@ -138,7 +154,7 @@ def for_himself(r: dict) -> bool:
     default (G1, round 9)?"""
     if not isinstance(r, dict):
         return False
-    return (bool(r.get("audience_default")) or _aud(r) == SELF
+    return (bool(r.get("audience_default")) or SELF in _auds(r)
             or grounding.names_self(_written(r)))
 
 
@@ -233,13 +249,12 @@ def _says_no_to(r: dict, names, people) -> bool:
     audience, each word of it, or the recorded person it names (verify I-24:
     a no for 'Karen Novak' let 'Karen' and 'my ex-wife' through) — and, for
     a no that names his family or his children ('ma famille', 'my kids'),
-    the family (D1)."""
-    a = _aud(r)
-    if a in names:
+    the family (D1). Any reading of its audience (round 9, second repair)."""
+    if _auds(r) & set(names):
         return True
     if "family" in names and grounding.names_family(_written(r)):
         return True
-    return bool(grounding.rule_names(r.get("audience", ""), people) & set(names))
+    return bool(grounding.rule_names(_written(r), people) & set(names))
 
 
 def _ai_no(data: dict, hit) -> dict | None:
@@ -272,11 +287,11 @@ def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, l
         if no:
             return False, no[0], []
         # a yes for himself widens nothing (G1, round 9)
-        yes = [r for r in disc if r.get("allow") and _aud(r) in names_yes
+        yes = [r for r in disc if r.get("allow") and _yes_to(r, names_yes)
                and not for_himself(r)]
         if yes:
             return True, yes[0], []
-        say = [r for r in reps if _aud(r) in names_yes]
+        say = [r for r in reps if _yes_to(r, names_yes)]
         if say:
             return True, say[0], [r.get("instruction", "") for r in say]
     return None, None, []
@@ -303,7 +318,10 @@ def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
     while the same key over ChatGPT was refused). An engine is always one of
     the readers (D1): a no that names any AI holds for every key that
     reaches one, his caretaker key too, whatever yes there is."""
-    aud = frozenset(grounding.norm_audience(a) for a in audiences or () if a)
+    # every reading of each reader's name meets a no; only the names whose
+    # readings agree meet a yes (round 9, second repair)
+    readings = [grounding.norm_audiences(a) for a in audiences or () if a]
+    aud = frozenset().union(*readings) - {""} if readings else frozenset()
     if not aud:
         return None
     hit = lambda r: grounding.tag_hits(r.get("tags") or [], text, tags)  # noqa: E731
@@ -312,8 +330,9 @@ def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
         if rule:
             return rule
     people = aud - VENDOR_NAMES
+    sure = frozenset(x for rs in readings if len(rs) == 1 for x in rs) - VENDOR_NAMES
     if people:
-        ok, rule, _ = verdict(data, people, people, hit)
+        ok, rule, _ = verdict(data, people, sure, hit)
         if ok is False:
             return rule
     return None
@@ -335,10 +354,10 @@ def binds(r: dict, rd: dict | None = None, data: dict | None = None) -> bool:
         return True                      # every reader that reaches an engine is an AI
     if not rd.get("people_rules"):
         return False                     # his rules about people never hold for his own key
-    names = frozenset(grounding.norm_audience(a) for a in aud) - VENDOR_NAMES
+    names = frozenset(x for a in aud for x in grounding.norm_audiences(a)) - VENDOR_NAMES
     if not r.get("allow") and _no_aud(r, data) == ANYONE:
         return True
-    return _aud(r) in names or (not r.get("allow") and _says_no_to(
+    return bool(_auds(r) & names) or (not r.get("allow") and _says_no_to(
         r, names, (data or {}).get("people") or []))
 
 
@@ -676,8 +695,9 @@ class ConscienceRules:
         aud = str(audience or "").strip().lower()
         want = set(_tags(tags))
         # only when the whole audience is him (round 9 repair: 'me and Karen
-        # Novak' was a silent yes, because any part of it was him)
-        if grounding.norm_audience(aud) == SELF or grounding.only_self(audience):
+        # Novak' was a silent yes, because any part of it was him), in both
+        # readings, with no 'not' in it (second repair: 'not me')
+        if grounding.only_self(audience):
             return {"allowed": True, "audience": aud, "reason": "the owner may always hear about themself"}
         # 'Karen Novak <k@example.com>' meets a rule for 'karen' (I-24: only
         # the exact string used to match, so a 'never tell Karen' rule let
@@ -799,7 +819,7 @@ class ConscienceRules:
         want = set(_tags(list(tags)))
         rd = provenance.reader()
         return [r["instruction"] for r in self.rules("representation")
-                if _aud(r) in names
+                if _yes_to(r, names)
                 and grounding.tag_hits(r.get("tags") or [], text or " ".join(sorted(want)), want)
                 and not words_held(r, rd, self.c.data)]
 
@@ -809,22 +829,26 @@ class ConscienceRules:
         broad, strict = self._aliases(audience)
         ai = grounding.names_ai(audience)
         rd = provenance.reader()
+        people = self.c.data.get("people") or []
         out = []
         for r in self.rules("disclosure"):
             if r.get("allow") or not r.get("tags"):
                 continue
             # a topic word his rules keep from this reader is named by its kind
             tags = shown_tags(r, rd, self.c.data)        # (round 9 repair)
+            # a no meets this audience as verdict reads it — any reading of
+            # its own audience, each word of it, and the person it names
+            # (round 9, second repair: 'Karen' and 'Karen\u2800Novak' met
+            # check_disclosure's no but not do_not_mention)
             if ai and every_ai(r, self.c.data):
                 out += tags
-            elif _no_aud(r, self.c.data) != ANYONE and (
-                    _aud(r) in broad or "family" in broad and grounding.names_family(_written(r))):
+            elif _no_aud(r, self.c.data) != ANYONE and _says_no_to(r, broad, people):
                 out += tags
-            elif unknown(r, self.c.data) and _aud(r) in broad:
+            elif unknown(r, self.c.data) and _says_no_to(r, broad, people):
                 out += tags                      # a no nobody knows names this very one
             elif _no_aud(r, self.c.data) == ANYONE:
                 # a yes for exactly this audience opens it again
-                if not any(x.get("allow") and _aud(x) in strict
+                if not any(x.get("allow") and _yes_to(x, strict)
                            and set(x.get("tags") or []) & set(r["tags"])
                            for x in self.rules("disclosure")):
                     out += tags

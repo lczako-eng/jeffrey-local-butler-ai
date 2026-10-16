@@ -140,7 +140,8 @@ RELEASE: dict[str, frozenset[str]] = {
     # answered the same whatever he holds (round 9 repair)
     "record_correction": frozenset(_PRIORITY | {"flipped", "already_counted", "noted",
                                                 "held_back"}),
-    "set_priority": frozenset(_PRIORITY | {"reversed", "changed"}),
+    # ...and so is a value an AI states about it (round 9, second repair)
+    "set_priority": frozenset(_PRIORITY | {"reversed", "changed", "noted", "held_back"}),
     # facts only reach a key that may read facts (conscience.explain_basis);
     # whole words, each with why it matched (I-28)
     "explain_basis": frozenset({"topic", "priorities", "facts", "more_facts",

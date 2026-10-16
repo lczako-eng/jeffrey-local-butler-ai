@@ -122,12 +122,21 @@ def visible(text) -> str:
 # splits the word. So every reader that decides something (the door, what
 # kind of private a text is, a rule's topic, a draft, the secrets) reads a
 # text that holds one both ways, and finds what either reading finds.
+#
+# Round 9, second repair: WHAT IS HIDDEN IS WHAT THE FOLD READS AS NOTHING.
+# Two lists drifted: the fold read U+16FE4 (a Khitan filler, a combining
+# mark that shows as nothing) as nothing, but has_hidden did not count it,
+# so 'Unlock<16FE4>the<16FE4>front<16FE4>door' was never also read with
+# spaces and the door allowed it. Now a character is hidden exactly when the
+# shared fold reads it as nothing (a format character, a filler, a variation
+# selector, a combining mark standing on its own), so the two cannot differ.
 def _hidden(ch: str) -> bool:
-    return is_ignorable(ch) or unicodedata.category(ch) == "Cf"
+    return not ch.isascii() and _fold_char(ch, False) == ""
 
 
 def has_hidden(text) -> bool:
-    """Does this text hold a character that shows as nothing (G5)?"""
+    """Does this text hold a character that shows as nothing (G5) — any
+    character the shared fold reads as nothing?"""
     t = str(text or "")
     return not t.isascii() and any(_hidden(ch) for ch in t if not ch.isascii())
 
@@ -871,8 +880,10 @@ OWN_CLASSES = ("health", "money", "private", "third_party")
 
 
 def first_person(text) -> bool:
-    """Is this fact written in the first person — about him (G4)?"""
-    return bool(_FIRST_PERSON.search(fold(str(text or ""), frozenset())))
+    """Is this fact written in the first person — about him (G4)? Read both
+    ways (round 9, second repair: 'I\u200btake\u200bOzempic' glued to
+    'itakeozempic' was nobody's, and a draft that carried it was not asked)."""
+    return any(_FIRST_PERSON.search(fold(r, frozenset())) for r in readings(str(text or "")))
 
 
 @functools.lru_cache(maxsize=1 << 12)
@@ -1333,6 +1344,51 @@ CLASS_ALIASES = {
 }
 
 
+# ------------------------------------ a question in a kind's own words (r9 fix 2)
+# A question about a kind his rules close to a reader ('my diabetes', 'ma
+# santé', 'my credit card') is answered by the rule, so it is no guess. But
+# only when it says nothing else: round 9's repair left out of the guess count
+# every question that NAMED a closed kind, so 'my health and my boat number
+# 4800' … '4824' never counted, and the twenty-guess limit was gone. A
+# question is the kind's own only when every word of it that says what it is
+# about is a word of that kind — of what makes a thing his health or money,
+# a phrase of it ('blood pressure', 'credit card'), or the kind's own name. A
+# number, a code, a name or any other word, and it is a question like any
+# other.
+def _kind_vocab(kinds) -> frozenset:
+    out: set[str] = set()
+    for k in kinds:
+        out |= _SENSE_WORDS.get(k, frozenset()) | CLASS_WORDS.get(k, frozenset())
+        out |= _CATEGORY.get(k, frozenset()) | {stem(w) for w in k.split("_")}
+        out |= {stem(w) for a, c in CLASS_ALIASES.items() if c == k for w in a.split()}
+    return frozenset(out)
+
+
+def kind_words_only(text, kinds) -> bool:
+    """Is every word of this question that says what it is about a word of
+    one of these kinds' own vocabulary (see above), in every reading of it?"""
+    kinds = tuple(k for k in kinds or () if k in CLASSES)
+    t = str(text or "")
+    if not kinds or not t.strip():
+        return False
+    vocab = _kind_vocab(kinds)
+    for r in readings(t):
+        ws = content(r)
+        if not ws:
+            return False
+        joined = f" {_joined(_normalise(r))} {_joined(fold(r))} "
+        covered: set[str] = set()
+        for k in kinds:
+            for p, form in zip(_SENSE_PHRASES.get(k, ()), _PHRASE_FORMS.get(k, ())):
+                if form in joined:
+                    covered |= content(p) | {stem(w) for w in _words(fold(p))}
+        for w in ws:
+            fw = fold(w, frozenset())
+            if not ({w, stem(w), fw, stem(fw)} & (vocab | covered)):
+                return False
+    return True
+
+
 def fact_match(text, category, classes, topic_words: set[str],
                topic: str | None = None) -> tuple[int, str] | None:
     """Does a fact belong to a subject with these words? (score, reason) —
@@ -1565,7 +1621,12 @@ def is_anyone(audience) -> bool:
     (other than the owner's own keys)? Only an explicit anyone-word does
     ('the public or the press', 'nobody but my doctor', 'les gens', 'not a
     soul', 'le monde'); 'Le Monde', 'Mr. Nobody', 'my GP' and 'Bob' each
-    name only themselves."""
+    name only themselves. Read both ways (round 9, second repair): it is
+    everyone when either reading is."""
+    return any(_is_anyone_one(r) for r in audience_readings(audience))
+
+
+def _is_anyone_one(audience) -> bool:
     text = str(audience or "")
     raw = _plain_words(text)
     if not raw.strip():
@@ -1638,7 +1699,12 @@ def names_ai(audience, extra=()) -> bool:
     ('ChatGPT', 'any AI', "l'IA", 'chatbots', 'artificial intelligence',
     'Google', 'the cloud', 'the public and ChatGPT', 'JEFFEREY', 'the local
     model', 'my computer', 'Сlaude', "AI's", 'claude-raw')? `extra`: the
-    names of the engines reading right now."""
+    names of the engines reading right now. Read both ways: it names one
+    when either reading does."""
+    return any(_names_ai_one(r, extra) for r in audience_readings(audience))
+
+
+def _names_ai_one(audience, extra=()) -> bool:
     raw = _plain_words(re.sub(r"(?i)(?<![^\W_])a\.\s?i(?![^\W_])\.?", "ai", str(audience or "")))
     if not raw.strip():
         return False
@@ -1728,7 +1794,12 @@ def _family_part(part: str, raw_part: str = "") -> bool:
 def names_family(audience) -> bool:
     """Does this audience name his family, or the people who use the family
     key ('ma famille', 'my kids', 'the grandchildren', 'my daughter', 'my
-    sister', 'the in-laws', 'ma belle-fille', 'my brother Mike')?"""
+    sister', 'the in-laws', 'ma belle-fille', 'my brother Mike')? Read both
+    ways: it does when either reading does."""
+    return any(_names_family_one(r) for r in audience_readings(audience))
+
+
+def _names_family_one(audience) -> bool:
     raw = _plain_words(audience)
     raws = _PART_BREAK.split(str(audience or ""))
     for k, part in enumerate(_PART_BREAK.split(raw)):
@@ -1739,12 +1810,49 @@ def names_family(audience) -> bool:
 
 def norm_audience(s) -> str:
     """'My Sister' and 'sister' are one audience; 'the family' is 'family';
-    'everyone', 'everybody', 'the public' and 'the world' are 'anyone'."""
+    'everyone', 'everybody', 'the public' and 'the world' are 'anyone'.
+    One reading — a character that shows as nothing read as nothing; every
+    check of who a rule is for reads both (norm_audiences)."""
     n = normalise(s).strip(" .,:;!\"'")
     if n in _ANYONE_ALL or _ANY_DETERMINER.sub("", n) in _ANYONE_ALL:
         return "anyone"
     n = _DETERMINER.sub("", n).strip(" .,:;!\"'")
     return "anyone" if n in _ANYONE_ALL else n
+
+
+# ------------------------------------ a name read both ways (round 9, fix 2)
+# A character that shows as nothing or as a blank inside a person's name —
+# 'Karen⠀Novak', 'KarenㅤNovak', 'Karen​Novak' — was read only
+# as nothing ('karennovak'), so she was nobody: 'Never tell Karen when I
+# travel' did not meet her, and 'Anyone may know when I travel' let her
+# hear it. Every check of who a rule is for now reads an audience both
+# ways, as nothing and as a space: a NO holds when either reading meets it,
+# a YES only when both readings do. Accents written as separate marks are
+# put on their letters first ('Renée' is 'Renée'), so a name typed that
+# way is one name.
+def audience_readings(audience) -> tuple[str, ...]:
+    """The ways an audience is read: as written, or — when it holds a
+    character that shows as nothing — with each read as nothing and again
+    as a space. Runs of space are one."""
+    t = unicodedata.normalize("NFC", str(audience or ""))
+    out: list[str] = []
+    for r in readings(t):
+        r = " ".join(r.split())
+        if r not in out:
+            out.append(r)
+    return tuple(out)
+
+
+def norm_audiences(s) -> frozenset:
+    """norm_audience of every reading of this audience (one, unless it holds
+    a character that shows as nothing)."""
+    return frozenset(norm_audience(r) for r in audience_readings(s))
+
+
+def is_blank(audience) -> bool:
+    """Is this audience nothing at all once what shows as nothing is read as
+    nothing — empty, spaces, '​', 'ㅤ', ' ﻿ '?"""
+    return not any(r.strip() for r in audience_readings(audience))
 
 
 def _emails_in(text) -> set[str]:
@@ -1756,26 +1864,35 @@ def rule_names(audience, people=()) -> frozenset:
     (verify I-24): the audience as written, each word of its name, and — when
     it names someone recorded in his life story — that person, their
     relationship to him, and the addresses noted for them. A no for 'Karen
-    Novak' then meets 'Karen', 'Mrs. Novak', 'my ex-wife' and her address."""
+    Novak' then meets 'Karen', 'Mrs. Novak', 'my ex-wife' and her address.
+    A no meets every reading of its audience and of each person's name (round
+    9, second repair: 'Never tell Karen\u2800Novak' is a no for Karen Novak)."""
+    out: set[str] = set()
+    for r in audience_readings(audience):
+        out |= _rule_names_one(r, people)
+    return frozenset(out)
+
+
+def _rule_names_one(audience, people=()) -> set[str]:
     n = norm_audience(audience)
     if not n or n in (SELF, "anyone"):
-        return frozenset({n} if n else ())
+        return {n} if n else set()
     out = {n} | {w for w in words(n) if len(w) >= 2 and w not in STOP and w not in _TITLES}
     nw = {w for w in words(n) if w not in _TITLES}
     for p in people or ():
         if not isinstance(p, dict):
             continue
-        pn = norm_audience(p.get("name", ""))
-        rel = norm_audience(p.get("relationship", ""))
-        pw = {w for w in words(pn) if w not in _TITLES}
-        if not pn:
-            continue
-        if n == pn or (nw and pw and (nw <= pw or pw <= nw)) or (rel and n == rel):
-            out |= {pn} | ({rel} if rel else set())
-            out |= _emails_in(p.get("notes", ""))
+        for pn in norm_audiences(p.get("name", "")):
+            for rel in norm_audiences(p.get("relationship", "")):
+                pw = {w for w in words(pn) if w not in _TITLES}
+                if not pn:
+                    continue
+                if n == pn or (nw and pw and (nw <= pw or pw <= nw)) or (rel and n == rel):
+                    out |= {pn} | ({rel} if rel else set())
+                    out |= _emails_in(p.get("notes", ""))
     out.discard("")
     out.discard(SELF)
-    return frozenset(out)
+    return out
 
 
 # ------------------------------- an audience no one knows is everyone (F1)
@@ -1806,7 +1923,13 @@ _SELF_FOLD = _SELF_ALONE | _SELF_ONLY | frozenset({"moi-meme"})
 def names_self(audience) -> bool:
     """Does this audience — the part before 'but' or 'except' — name the
     owner himself ('me', 'Me', 'ME', 'myself', 'just me', 'only me', 'I',
-    'moi', 'moi-même', 'juste moi', 'mе' with a Cyrillic е, 'my​self')?"""
+    'moi', 'moi-même', 'juste moi', 'mе' with a Cyrillic е, 'my​self')?
+    Read both ways: it does when either reading does (a no for him holds for
+    everyone, so reading more of them as him only widens a no)."""
+    return any(_names_self_one(r) for r in audience_readings(audience))
+
+
+def _names_self_one(audience) -> bool:
     text = " ".join(str(audience or "").split())
     if not text:
         return False
@@ -1830,11 +1953,38 @@ def only_self(audience) -> bool:
     (right for a no, which then holds for everyone), and check_disclosure's
     'the owner may always hear about himself' used it, so 'me and Karen
     Novak', 'moi et ChatGPT' and 'me and the man on the phone' were a silent
-    yes. An audience with anyone else in it is asked about as that audience."""
+    yes. An audience with anyone else in it is asked about as that audience.
+
+    Round 9, second repair: a word that says no — not, never, no, pas,
+    jamais, ni, sauf, except, but, other than, besides … — anywhere in it
+    means it is not only him ('not me', 'pas moi', 'never me', 'not even me'
+    were read as 'me' made stronger, and were a silent yes); and an audience
+    that holds a character that shows as nothing is only him when BOTH its
+    readings are ('m\u200be' is also 'm e')."""
+    rs = audience_readings(audience)
+    return bool(rs) and all(_only_self_one(r) for r in rs)
+
+
+# The words that say no, or leave someone out, in an audience (round 9,
+# second repair): with one of them anywhere, it is never only him.
+_NEGATION = re.compile(
+    r"(?<![^\W_])(?:not|never|no|none|nobody|noone|nor|neither|pas|jamais|ni|non|sauf"
+    r"|aucun|aucune|personne|except|excepting|excepted|exception|excluding|exclude|without"
+    r"|but|besides|other\s+than|rather\s+than|instead\s+of|apart\s+from|aside\s+from"
+    r"|hormis|excepte|exceptee|a\s+part|plutot\s+que|au\s+lieu\s+de|sans)(?![^\W_])")
+
+
+def _only_self_one(audience) -> bool:
     text = " ".join(str(audience or "").split())
     if not text:
         return False
+    if _NEGATION.search(fold(text, frozenset())) or _NEGATION.search(normalise(text)):
+        return False                     # 'not me', 'pas moi', 'everyone but me'
+    if norm_audience(text) == SELF:
+        return True                      # 'me', 'Me.', 'ME!'
     n = fold(text, _SELF_FOLD)
+    if _NEGATION.search(n):
+        return False
     if re.search(r"[^\w' ,;/&+|\-]", n):
         return False                     # an address, a bracket, a sign: someone else
     parts = [p for p in _PART_BREAK.split(n) if p and p.strip(" ,;/&+|-")]
@@ -1849,8 +1999,14 @@ def only_self(audience) -> bool:
 
 
 def person_key(name, relationship="") -> tuple[str, str]:
-    """A person he recorded, the way an audience is compared with them."""
-    return (norm_audience(fold(name)), norm_audience(fold(relationship)))
+    """A person he recorded, the way an audience is compared with them. A
+    name whose two readings differ ('Karen\u2800Novak') is no name a rule's
+    audience is known by (round 9, second repair): a no for her then holds
+    for everyone, as a no for someone nobody knows does."""
+    def one(x) -> str:
+        ks = {norm_audience(fold(r)) for r in audience_readings(x)} or {""}
+        return ks.pop() if len(ks) == 1 else ""
+    return (one(name), one(relationship))
 
 
 @functools.lru_cache(maxsize=1 << 12)
@@ -1889,9 +2045,13 @@ def unknown_parts(audience, people=(), keys=()) -> tuple[str, ...]:
     """The parts of a 'no''s audience nobody knows (F1): not a person he
     recorded (`people`: person_key tuples of the people HE recorded), not
     one of his keys' names, not an anyone-, family- or AI-word. Empty when
-    every part is known."""
-    return _unknown_parts(str(audience or ""), tuple(people),
-                          frozenset(norm_audience(k) for k in keys))
+    every part is known. Read both ways: a part nobody knows in either
+    reading is one nobody knows (its no then holds for everyone)."""
+    out: list[str] = []
+    ks = frozenset(norm_audience(k) for k in keys)
+    for r in audience_readings(audience):
+        out += [x for x in _unknown_parts(r, tuple(people), ks) if x not in out]
+    return tuple(out)
 
 
 _ADDRESSED = re.compile(r"^(.*?)<\s*([^<>\s]+@[^<>\s]+)\s*>\s*$")
@@ -1943,7 +2103,21 @@ def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
     word of a display name, an e-mail address's name part, and the person
     and relationship recorded in his life story ('Karen' → his ex-wife →
     family). A rule that says YES is matched against `strict` only — the
-    whole name or address as written, or the recorded person it exactly is."""
+    whole name or address as written, or the recorded person it exactly is.
+
+    Read both ways (round 9, second repair): an audience that holds a
+    character that shows as nothing ('Karen\u2800Novak') is every name either
+    reading is known by for a no (broad), and only the names both readings
+    are known by for a yes (strict)."""
+    rs = audience_readings(audience)
+    if len(rs) <= 1:
+        return _audience_aliases_one(rs[0] if rs else "", people)
+    pairs = [_audience_aliases_one(r, people) for r in rs]
+    return (frozenset().union(*(b for b, _ in pairs)),
+            frozenset.intersection(*(st for _, st in pairs)))
+
+
+def _audience_aliases_one(audience, people=()) -> tuple[frozenset, frozenset]:
     raw = normalise(audience)
     if not raw or norm_audience(raw) == SELF:
         return frozenset(), frozenset()
@@ -1968,18 +2142,13 @@ def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
         n = norm_audience(name)
         (broad if email else strict).update({name, n})
         broad |= {w for w in words(n) if w not in STOP and w not in _TITLES}
-    for p in people or ():
-        if not isinstance(p, dict):
-            continue
-        pn = norm_audience(p.get("name", ""))
-        if not pn:
-            continue
+    for p, pn, rel, agree in _person_readings(people):
         pw = set(words(pn))
-        rel = norm_audience(p.get("relationship", ""))
         noted = emails_of(p.get("notes", ""))
         # a person is this audience exactly by a whole address noted for them,
-        # or — with no address given — by their whole recorded name (G3)
-        exact = bool(email and email in noted) or bool(not email and pn in strict)
+        # or — with no address given — by their whole recorded name (G3); a
+        # name whose two readings differ is never exactly anyone, for a yes
+        exact = agree and (bool(email and email in noted) or bool(not email and pn in strict))
         # 'my ex-wife' is the person recorded as his ex-wife; 'knovak@…'
         # holds her surname (verify I-24) — for a NO, never for a yes
         if rel and norm_audience(raw) == rel:
@@ -2000,6 +2169,20 @@ def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
         s.discard("")
         s.discard(SELF)
     return frozenset(broad), frozenset(strict)
+
+
+def _person_readings(people):
+    """(person, name, relationship, whether every reading agrees) for each
+    reading of each recorded person's name and relationship."""
+    for p in people or ():
+        if not isinstance(p, dict):
+            continue
+        pns = [x for x in norm_audiences(p.get("name", "")) if x]
+        rels = sorted(norm_audiences(p.get("relationship", ""))) or [""]
+        agree = len(pns) == 1 and len(rels) == 1
+        for pn in pns:
+            for rel in rels:
+                yield p, pn, rel, agree
 
 
 # ----------------------------------------------------- the fold's own words

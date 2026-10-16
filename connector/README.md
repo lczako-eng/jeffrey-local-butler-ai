@@ -215,6 +215,35 @@ Round 9 repair (what the round-9 skeptics found):
 - **The local model's system prompt fits** in 39,000 characters, however long
   the facts, values and goals: what does not fit is left out, and it says so.
 
+Round 9, second repair (what the confirm check of the repair found):
+
+- **A 'no' in the audience is never him.** 'not me', 'pas moi', 'never me',
+  'everyone but me' — any not, never, no, pas, jamais, ni, sauf, except, but,
+  other than or besides in it — are asked about as that audience, and a draft
+  to them is checked.
+- **A name is read both ways.** A character that shows as nothing or as a
+  blank inside a name ('Karen⠀Novak') is read as nothing and as a space in
+  every check of who a rule is for: a no holds if either reading meets it, a
+  yes only if both do. `do_not_mention` meets an audience as `check_disclosure`
+  does (any word of the name, the person it names).
+- **Only a question in its kind's own words is no guess.** 'my health and my
+  boat number 4800' counts toward the pause like any other question; 'my
+  diabetes', 'ma santé' and 'my credit card' still do not, when his rules close
+  them.
+- **A value an AI states about what his rules hold back** (`set_priority`) is
+  answered 'noted' the same whatever he holds; his question still reaches him.
+- **The sender is the sent-from address, exactly.** It must be an ordinary
+  address JEFFEREY can read (no IP literal, 'localhost', quoted name or domain
+  in another script) and match his recorded one as written, accents and marks
+  kept. Anything else is a stranger, with a warning sign.
+- **An audience that shows as nothing is no audience:** checked as for anyone,
+  and it says so.
+- **Hidden is whatever the fold reads as nothing** — one list, so they cannot
+  drift (U+16FE4 between words hid the door words and a password).
+- **A mark his own name does not have is a disguise.** 'NÉTFLIX.COM',
+  'NET̲FLIX.COM', 'NETFLİX.COM', 'NETFLıX.COM' ask him; CAA-QUÉBEC's own accent
+  still matches. When he says such a name is his (`add_alias`), it is.
+
 **Confirmation needs a person.** The owner's own command-line confirmations —
 `conscience.py confirm` and `restore`, `forgetting.py approve`, `erase` and
 `bring-back`, `guardian.py review`, `egress.py open` and `keep` — refuse unless

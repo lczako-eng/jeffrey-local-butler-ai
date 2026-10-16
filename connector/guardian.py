@@ -341,9 +341,66 @@ def _hidden_in_name(s: Any) -> bool:
     read as NETFLIX.COM: at his Netflix price it passed as his plan, and the
     real bill two days later became a 'duplicate' to claim back. Like a
     look-alike letter, it is a disguise: he is asked. (A byte-order mark at
-    the very start, as some statement files begin, is not.)"""
-    t = str(s or "").strip().lstrip("\ufeff")
+    the very start, as some statement files begin, is not; nor is an accent
+    written as a separate mark that sits on its letter — that is _marked_unlike's
+    to judge.)"""
+    t = unicodedata.normalize("NFC", str(s or "").strip().lstrip("\ufeff"))
     return grounding.has_hidden(t)
+
+
+# A MARK HIS OWN NAME DOES NOT HAVE IS A DISGUISE (round 9, second repair).
+# The fold takes accents and marks off so that 'CAA-QUÉBEC' is his 'CAA-
+# Québec' — and so 'NÉTFLIX.COM', 'NET\u0332FLIX.COM' (a line under the T),
+# 'NET\u20ddFLIX.COM' (a ring round it) and 'NETFLİX.COM' (a dot on the I) at
+# his Netflix price passed as his plan, and the real bill two days later was
+# a duplicate to claim back. A statement name that carries a mark — or a
+# letter the fold reads as a Latin one, 'ı', 'ł', a full-width 'Ｎ' — that his
+# own name for the plan does not have is made to look like it: he is asked.
+# His registered name's own accents still match it, however they are typed.
+def _own_letters(names) -> tuple[set, set]:
+    """(each mark with the letter it sits on, each letter the fold changes)
+    in his own names for a plan."""
+    marks: set[tuple[str, str]] = set()
+    letters: set[str] = set()
+    for n in names:
+        base = ""
+        for ch in unicodedata.normalize("NFD", str(n or "")):
+            if unicodedata.category(ch).startswith("M"):
+                marks.add((base, ch))
+            elif ch.isalpha():
+                base = grounding.fold(ch, frozenset()) or ch.casefold()
+                if not ch.isascii():
+                    letters.add(ch.casefold())
+    return marks, letters
+
+
+def _marked_unlike(merchant: Any, names) -> bool:
+    """Does this statement name carry a mark the fold takes off, or a letter
+    the fold reads as another, that none of his own names for the plan has?"""
+    t = unicodedata.normalize("NFD", str(merchant or "").strip().lstrip("\ufeff"))
+    if t.isascii():
+        return False
+    marks, letters = _own_letters(names)
+    base = ""
+    for ch in t:
+        if ch.isascii():
+            if ch.isalpha():
+                base = ch.casefold()
+            continue
+        if unicodedata.category(ch).startswith("M"):
+            if (base, ch) not in marks:
+                return True
+            continue
+        if not ch.isalpha():
+            continue                       # spaces, dashes, quotes: not a letter
+        folded = grounding.fold(ch, frozenset())
+        if folded and folded != ch.casefold() and folded.isascii():
+            if ch.casefold() not in letters:
+                return True                # 'ı', 'ł', a full-width 'Ｎ'
+            base = folded
+        else:
+            base = ch.casefold()
+    return False
 
 
 # A registered name glued to a fee word on a statement ('PAYPAL *COSTCOMEMBER',
@@ -1002,6 +1059,12 @@ class Guardian:
                     return True
         return False
 
+    @staticmethod
+    def _own_names(e: dict) -> list[str]:
+        """His own names for a plan, as written: the name he registered and
+        every statement name he said himself is it."""
+        return [str(e.get("merchant") or "")] + [str(x) for x in e.get("written_names") or []]
+
     def _cores(self, e: dict) -> set[str]:
         """The words of a registered name a look-alike would borrow."""
         out: set[str] = set()
@@ -1038,6 +1101,10 @@ class Guardian:
         if _hidden_in_name(merchant) and any(
                 c in cores for f in _forms(merchant) for c in list(f) + ["".join(f)]):
             return "a character that shows as nothing is hidden inside the name"
+        if _marked_unlike(merchant, self._own_names(e)) and any(
+                c in cores for f in _forms(merchant) for c in list(f) + ["".join(f)]):
+            return ("a letter in it carries an accent or a mark, or is written in a way, "
+                    "that your own name for it does not have")
         toks = [t.strip("#,;:()[]*'\"") for t in _fold(merchant).split()]
         for t in toks:
             if not t:
@@ -1510,12 +1577,19 @@ class Guardian:
         new_line = (_billed_through(descriptor) or not _clear_forms(str(descriptor))
                     or plain != " ".join(_clear_forms(str(descriptor))[0]))
 
+        # a name with a mark his own names do not have is a new name to him
+        # (round 9, second repair): he may say it is his, and then it is
+        marked = _marked_unlike(descriptor, self._own_names(entry))
+
         def run() -> dict:
             known = alias in entry.get("aliases", []) or alias == entry["key"]
-            if known and (not new_line or plain in entry.get("statement_names", [])):
+            if known and not marked and (not new_line
+                                         or plain in entry.get("statement_names", [])):
                 return {"merchant": entry["merchant"], "note": "Already known by that name."}
             change = {"descriptor": str(descriptor), "alias": alias, "entry": entry["id"],
                       "merchant": entry["merchant"], "statement": plain}
+            if marked:
+                change["written"] = unicodedata.normalize("NFC", str(descriptor).strip())
             if self.owner_present():
                 self._apply_alias(change)
                 self.c._save()
@@ -1537,6 +1611,10 @@ class Guardian:
             names = entry.setdefault("statement_names", [])
             if change["statement"] not in names:
                 names.append(change["statement"])
+        if change.get("written"):
+            written = entry.setdefault("written_names", [])
+            if change["written"] not in written:
+                written.append(change["written"])
         if log:
             self._log(f"Charge register: '{change['descriptor']}' counts as {entry['merchant']}",
                   "name added")

@@ -326,6 +326,16 @@ nothing, or as a blank) is brought to you, the same as a name spelled with
 look-alike letters. And "you and someone else" is never just you: telling
 "me and Karen" something is telling Karen.
 
+A few more of the same kind. "Not me" or "everyone but me" is never you. A
+name with a hidden character inside it ("Karen" and "Novak" joined by a blank
+that is not a real space) is still Karen when one of your rules says no to
+her, and never somebody new your yes could open things to. A message is from
+someone you know only when the very address it was sent from is the one you
+gave, letter for letter, accents included. A shop name with an accent or a
+small mark that your own name for it does not have ("NÉTFLIX") is brought to
+you. And an AI that keeps asking about your health with a number tacked on
+the end is guessing like any other, and is stopped the same way.
+
 ### Who may see what
 
 Whatever an AI writes down is kept private, and marked **"noted by the AI,
