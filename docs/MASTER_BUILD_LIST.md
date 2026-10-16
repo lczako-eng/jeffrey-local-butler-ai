@@ -275,7 +275,7 @@ moment. Two consequences that change the build, not just the pitch:
 
 | # | What | Time |
 |---|---|---|
-| **4.1** | **Encrypt the external SSD.** `docs/ENCRYPT_THE_DRIVE.md` in the Self-Cloud repo. Check the format first — exFAT needs an erase, so the second copy comes first | an afternoon |
+| **4.1** | **Encrypt the external SSD.** `docs/ENCRYPT_THE_DRIVE.md` (now also in this repo, in plain words). Check the format first — exFAT needs an erase, so the second copy comes first | an afternoon |
 | 4.2 | **Turn on FileVault** on the Mac. Same photos, and the laptop leaves the house more than the drive does | 5 min |
 | 4.3 | **Install and use JEFFEREY daily** — the conscience only fills if he talks to it | ongoing |
 | 4.4 | **Merge `claude/canon-addenda`** in the Self-Cloud repo | 1 min |

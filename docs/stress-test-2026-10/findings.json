@@ -4136,7 +4136,7 @@
    ],
    "files": "tools/go.py:36-37,86-111; tools/photo_index.py:272-289",
    "repro": "printf '%s\\n' \"$HOME/Family\\\\ Photos \" | 'Show me my life.command' -> \"✗ There's nothing at ~/Family\\ Photos.\" (exit). Fake ~/Pictures/Photos Library.photoslibrary -> photo_index.walk yields 6 files for one photo. SELFCLOUD_ROOT=drive + return -> host ~/Pictures, wall.conf saved in host home.",
-   "impact": "This is the bug the owner already hit in the drive launcher: fixed there, still here. His folders ('Petting Zoo', 'Uncle Bill') have spaces. Pressing return on a normal Mac indexes Apple Photos' thumbnails, renders, face crops and shared-album copies as separate photos, and most of his 80k iCloud originals are not local anyway. On a relative's Mac it would read their photos into his drive.",
+   "impact": "This is the bug the owner already hit in the drive launcher: fixed there, still here. His real folder names have spaces. Pressing return on a normal Mac indexes Apple Photos' thumbnails, renders, face crops and shared-album copies as separate photos, and most of his 80k iCloud originals are not local anyway. On a relative's Mac it would read their photos into his drive.",
    "fix": "Reuse the drive launcher's un-escape and ask-again loop. Skip *.photoslibrary packages and explain how to export from Photos (or add an osxphotos or PhotoKit export step). When a drive is present, default to <drive>/library and store wall.conf on the drive.",
    "index": 5,
    "skeptic": "kept",

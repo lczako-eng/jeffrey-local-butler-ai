@@ -967,7 +967,7 @@ onboarding,onboarding-33,"Drive the software cannot write to (stand-in for an NT
 onboarding,onboarding-34,Make-drive with no external drive plugged in,user,PASS,none,yes
 onboarding,onboarding-35,Make-drive run again on an already provisioned drive,owner,PASS,none,yes
 onboarding,onboarding-36,Stranger told to encrypt the drive,stranger,GAP,medium,yes
-onboarding,onboarding-37,Show me my life: drag a photo folder with a space in its name,owner (his folders include 'Petting Zoo' and 'Uncle Bill'),FAIL,medium,yes
+onboarding,onboarding-37,Show me my life: drag a photo folder with a space in its name,owner (his folder names have spaces),FAIL,medium,yes
 onboarding,onboarding-38,Show me my life: user types the folder name instead of dragging,elderly user,FAIL,low,yes
 onboarding,onboarding-39,Show me my life: press return (default ~/Pictures) on a Mac using Apple Photos / iCloud,owner (80k photos in iCloud),FAIL,medium,yes
 onboarding,onboarding-40,Show me my life first run with no internet,"owner on a plane, or a care home with bad wifi",FAIL,low,yes

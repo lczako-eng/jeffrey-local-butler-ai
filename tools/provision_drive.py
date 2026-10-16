@@ -784,8 +784,8 @@ def provision(volume: Path, name: str, rename: bool, force: bool,
     elif enc is False:
         warn("this drive is NOT encrypted. Everything on it is readable by "
              "whoever holds it.")
-        say("    Read ENCRYPT_THE_DRIVE.md in the Self-Cloud repo before you "
-            "put photographs on it.\n")
+        say("    Read docs/ENCRYPT_THE_DRIVE.md (in this JEFFEREY folder) before "
+            "you put photographs on it.\n")
     else:
         warn("JEFFEREY could NOT verify that this drive is encrypted. Check it "
              "yourself: Finder → right-click the drive — if it offers 'Encrypt', "

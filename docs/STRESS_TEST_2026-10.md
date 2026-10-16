@@ -2,6 +2,8 @@
 
 *For Laszlo first, then for the engineering agents. Run 2026-10-12 to 2026-10-13. Data: `docs/stress-test-2026-10/`.*
 
+> **Update, 2026-10-16:** the fixes are in. See [§10](#10-after-the-fixes-2026-10-16) for where every issue stands now. Sections 1 to 9 are the record of what the test found, and they are left as they were.
+
 ## 1. The honest answer
 
 JEFFEREY is not ready for your family. It is not ready for a stranger who pays. You can use it yourself, carefully, but not yet the way the product promises.
@@ -623,3 +625,140 @@ A critic read all 1,521 titles and found five real-world areas with little or no
 - **Self-Cloud code is private and unseen.** Only its docs were read. Every Self-Cloud behaviour is unverifiable here. That is part of why the seam area has no passing scenario.
 - **No real users.** No elderly person, family member or stranger touched it. The accessibility and onboarding findings come from testers imagining those people, not from watching them.
 - **Only part of the findings were checked.** 96 scenarios could not be executed here (they need a real Mac, a real person, or a missing feature). To stay inside the owner's usage limit, 127 medium findings were never checked by a skeptic. One finding (voice#5) was refuted, and two issues (I-43, I-66) are contested.
+
+## 10. After the fixes (2026-10-16)
+
+*Added after the repair work on branch `claude/substantiation-discussion-8dmu3c`,
+every commit after `0ec43b3`. Sections 1 to 9 above are the record of what the test
+found on 2026-10-13, and they are left as they were.*
+
+### The honest answer now
+
+Every one of the 67 issues on JEFFEREY's side, or shared with Self-Cloud, has a fix
+in the code. 52 are fixed outright. 5 more are fixed, with a tail of unusual wordings
+still missed. 10 are fixed in part, and what is left of each is written down below. The two issues that are yours (I-22, I-46) are unchanged.
+
+The biggest change is the rule this report asked for: **nothing an AI writes
+becomes yours, and nothing irreversible or widening happens, because an AI asked.**
+That is now enforced in the code, by who wrote something, not by guessing what the
+words mean:
+
+- **Your words are made only by your hands.** Anything an AI writes waits as
+  "noted by the AI, not yet confirmed by him" until you confirm it at your own
+  keyboard (`/confirm`, or `python3 connector/conscience.py confirm`). That covers
+  facts, memories, priorities, rules, your profile, your people and your goals.
+  Until then it is used, labelled, at reduced confidence, and never on your forms.
+- **An AI can narrow, never widen.** It can add a "no" at once. A "yes", taking a
+  "no" away, a key, a permission or a spending limit is only ever a proposal.
+- **Confirming needs a person.** Every owner command refuses unless a person is at
+  the keyboard and types a number shown at that moment. `--yes` and piped answers
+  are refused.
+- **Forgetting is safe.** Nothing is wiped by an empty or short word. Forgetting is
+  two steps, goes to a trash you can bring back from, and anything that is yours
+  needs you. A real erase reaches the log and every copy.
+- **Your home is never "act".** No permission can let an AI open a door, give a
+  code, turn off an alarm or a camera, or let anyone in. Moving money, gift cards,
+  crypto and speaking in your voice are never "act" either. Any description that
+  touches getting into the house asks you, under any permission.
+- **Forms** fill only your confirmed details, only into the "Filled forms" folder,
+  with hidden PDF actions stripped. Signing boxes need your approval.
+- **The drive** is paired with your Mac. If it is not plugged in, JEFFEREY stops
+  and says so. It never starts a second life on the laptop.
+- **The action log tells the truth.** An act that was not what you approved is
+  marked that way, and you are told.
+
+### How the fixes were checked
+
+There were nine rounds. In each one:
+
+1. Engineers turned every reproduction into a test first and watched it fail.
+2. They fixed the code, and the full test runner had to pass before any commit.
+3. Independent skeptics, who had not written the code, froze a copy and tried to
+   break it with fresh cases: scammers, prompt-injected AIs, French, look-alike and
+   invisible letters, and elderly phrasing, on all three surfaces.
+4. A repair engineer fixed only what the skeptics proved.
+5. A confirm check ran everything again.
+
+Nothing was pushed with a failing test. The suite now has 24 test files and over
+700 tests, plus frozen corpora of several thousand cases. Round 6 introduced the
+frozen corpora because rounds 4 and 5 kept fixing one case and breaking its
+neighbour. Rounds 7 to 9 then replaced guessing with decisions: where meaning is
+uncertain, the answer is **ask the owner**, never a silent yes.
+
+### Where each issue stands
+
+| | Issues |
+|---|---|
+| **Fixed** | I-01 to I-06, I-08 to I-10, I-12, I-14 to I-16, I-19, I-20, I-23, I-25 to I-27, I-29 to I-35, I-37 to I-41, I-45, I-47 to I-52, I-55, I-57 to I-69 |
+| **Fixed, with a known tail of wording** | I-07 (secret scan), I-13 (scam triage), I-24 (drafts), I-28 (grounding), I-36 (merchant names). See below. |
+| **Part fixed** | I-11: no per-category fact keys (care, health, money) and no caregiver preset. I-17: no primary or replica role, no shared `node.json` identity, no resale wipe. I-18: R-evolv's own "Self Cloud" naming. I-21: no hashes in the lock file and no tagged releases. I-42: the caretaker key is not yet refused on an unencrypted drive. I-43: owner presence is a person at the terminal typing a fresh number, not Touch ID, and grants are not signed. I-44: no merchant allow-lists and no co-approver, though per-period caps exist. I-53: no family-only photos for the wall on the home network. I-54: no speaker verification. I-56: no cancellable delay and no per-person key destruction. |
+| **Yours** | I-22 (make the product branch the default and tag a release) and I-46 (public claims). Unchanged. |
+
+### The honest tail: reading words cannot be complete
+
+Some protections still have to read words written by an AI or a stranger: whether a
+note holds a password, whether a message is a scam, whether a draft repeats
+something private, whether a charge is your membership, whether an errand touches
+your door. Each round closed every case the skeptics found. Each round they found
+rarer neighbours, for example:
+
+- a code word written as one word ("Codeword: pineapple");
+- a health condition in slang ("my ticker");
+- a door opened in other words ("Pop the back for the nurse");
+- a character from an obscure script hidden between two words.
+
+These are second lines of defence. The first line is structural (above): an AI's
+words never become yours, never widen anything, and never act on your home or your
+money without you. Where a second line misses, the usual result is that something
+is said to an AI that it should not hear. Nothing is done, paid or opened. The
+skeptics' unfixed cases are kept with their reproductions in the round records,
+for the next pass.
+
+**Accepted friction.** Asking first means JEFFEREY sometimes asks when it need not.
+Examples: "Let the cat in", an errand with "promo code" in it, a second gym charge
+that is probably a price rise. A "no" for someone you have not recorded holds for
+everyone except your own JEFFEREY, until you record them.
+
+### What is still not built
+
+Of the 55 missing capabilities (section 6), a read-only audit of the pushed code on
+2026-10-15 found:
+
+- **5 built:** moving your laptop life onto the drive, restoring a snapshot,
+  sender-aware triage, the blank-name voice fix, and engine refusals.
+- **21 partly built.**
+- **23 absent.**
+- **6 not JEFFEREY's:** they belong to you, the laptop agent, or the commercial side.
+
+The ones that matter most, in order:
+
+1. **A backup verifier and a second verified copy of the drive.** Still absent. It is
+   the single most important thing, and still a "now" item. Until it exists, the
+   drive is the only copy of your memories.
+2. **The iCloud dedup-and-separation pipeline.** Still only on the laptop, in no
+   repository. This needs the laptop agent.
+3. **Keys for the wall, photo search and recall.** These still check no key.
+4. **A caregiver role, reminders, and a plain warning not to rely on JEFFEREY for
+   medication.**
+5. **Touch ID for owner-only actions** (I-43).
+
+The encryption runbook is now in this repository: `docs/ENCRYPT_THE_DRIVE.md`.
+
+### What this still could not prove
+
+Everything in section 9 still applies. The fixes were tested on Linux, with
+simulated engines. **Nothing has been run on your Mac since the fixes.** The first
+real test is you updating and running `python3 tools/install.py --check`.
+
+### The verdict now
+
+- **For you, yourself:** usable, carefully, once a second copy of the drive exists.
+- **For your family:** not yet. It needs:
+  - the backup verifier;
+  - keys on the wall and photo search;
+  - a caregiver role;
+  - Touch ID for owner actions;
+  - one real pass on your Mac.
+- **For a stranger who pays:** not yet. Everything in "Before a stranger pays"
+  (section 7) is still open: a signed installer, a licence and privacy notice in
+  English and French, and Windows or a clear "Mac only".

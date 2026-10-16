@@ -897,8 +897,8 @@ class I61Folders(Temp):
         self.assertEqual(go.unescape("/Users/l/Family\\ Photos "), "/Users/l/Family Photos")
         self.assertEqual(go.unescape("/x/Photos\\ d\\'été "), "/x/Photos d'été")
         self.assertEqual(go.unescape("/x/Kandahar\\ \\(2011\\) "), "/x/Kandahar (2011)")
-        self.assertEqual(go.unescape("'/x/Uncle Bill' "), "/x/Uncle Bill")
-        self.assertEqual(go.unescape("/x/Petting Zoo"), "/x/Petting Zoo")
+        self.assertEqual(go.unescape("'/x/Aunt May' "), "/x/Aunt May")
+        self.assertEqual(go.unescape("/x/Summer Trip"), "/x/Summer Trip")
         self.assertEqual(go.unescape("   "), "")
 
     def test_ask_folder_unescapes_and_asks_again(self):

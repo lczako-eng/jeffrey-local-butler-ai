@@ -57,10 +57,12 @@ file already on the drive:
 | the cloud icon | the Self-Cloud logo as the drive's Finder icon (eject and re-plug if it doesn't show) |
 
 **Then encrypt it.** The drive holds the family's photographs in plain text
-until you do. The runbook is `Self-Cloud/docs/ENCRYPT_THE_DRIVE.md` in the
-other repo; the short version, if the drive is already APFS: Finder →
+until you do. The runbook is [`docs/ENCRYPT_THE_DRIVE.md`](docs/ENCRYPT_THE_DRIVE.md)
+in this repo; the short version, if the drive is already APFS: Finder →
 right-click the drive → **Encrypt "Self-Cloud"…**, choose a passphrase, write
-the passphrase on paper and put the paper somewhere that is not the drive.
+the passphrase on paper and put the paper somewhere that is not the drive. (No
+"Encrypt…" in the menu? The drive is a Time Machine disk — the runbook says
+what to do.)
 **Do not begin until a second copy of the photographs exists** (iCloud and the
 Mac both count). Do not cancel iCloud until two copies exist and a restore has
 been tested.
