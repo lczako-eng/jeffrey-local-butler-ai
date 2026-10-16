@@ -306,7 +306,17 @@ home (groceries, household supplies) is not the home itself. Anything that repea
 always brings to you. And whatever you have allowed, anything about getting
 into your home — a door, a gate, the garage, a key, a lock, a code, the
 alarm, the intercom, or letting someone in (even the cat) — he brings to you
-first. It is your door: you decide.
+first. It is your door: you decide. That includes telling anyone a PIN or a
+code, holding the front door for someone, taking the chain off, opening a
+smart-lock or camera app (Yale, August, Ring, Nest…), and saying the house will
+be empty.
+
+If an AI searches your memories again and again for words that are not there —
+the way someone guesses a PIN — its searches stop for an hour and you are told.
+A message is from someone you know only when it comes from the very address or
+number you gave JEFFEREY for them; a name alone is not enough. And before an
+AI sends something that tells your own private news (your health, your money)
+to someone your rules do not let hear it, it has to ask you.
 
 ### Who may see what
 
@@ -318,7 +328,9 @@ you know until you confirm them; a change it asks for to someone you
 recorded, to your rules or to the details on your forms waits for you and
 changes nothing until you confirm it; a goal it writes down is marked as the
 AI's in your brief. A "no" an AI writes down for you (never tell Bob about
-my money) holds at once — a no only keeps more at home.
+my money) holds at once — a no only keeps more at home. A "no" that says
+"keep it to myself", or that names nobody at all, keeps it from everyone and
+every AI except your own JEFFEREY.
 Your health, money, children, the safety of your home and other people's
 secrets are never sent to a plain Claude or ChatGPT. Only you let more people
 see something:

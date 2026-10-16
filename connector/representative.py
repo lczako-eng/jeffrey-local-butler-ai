@@ -986,11 +986,11 @@ def vault_fits(name: str, *texts: str) -> bool:
 #      back 'routine', 'do not interrupt' or 'real and actionable': at the
 #      least, 'check_first' — call back on a number he already has.
 
-_INVISIBLE = re.compile(
-    "[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u202a-\u202e"
-    "\u2060-\u2064\u2066-\u206f\u3164\ufeff\uffa0\U000e0000-\U000e007f]")
-_HIDDEN_IN_WORD = re.compile(
-    "[^\\W\\d_][\u00ad\u034f\u200b-\u200f\u2060-\u2064\ufeff]+[^\\W\\d_]")
+# Every default-ignorable code point (round 9, G5: the shared list in
+# grounding — variation selectors, Mongolian selectors and the tag block
+# beyond U+E007F were missing here)
+_INVISIBLE = re.compile("[" + grounding.IGNORABLE_CLASS + "]")
+_HIDDEN_IN_WORD = re.compile("[^\\W\\d_][" + grounding.IGNORABLE_CLASS + "]+[^\\W\\d_]")
 # Letters from other alphabets that look like ours ('Саnаdа' is Cyrillic).
 _LOOKALIKE = {
     # Cyrillic
@@ -2946,12 +2946,20 @@ class Representative:
         phone shows a saved contact), 'shortcode' (a company's short number),
         'number' (a number he has not saved), 'email' (an address he has not
         recorded) or 'unknown'. An email's display name is whatever the
-        sender typed, so it never makes anyone 'recorded'."""
-        s, _, _ = triage_spelling(sender)
+        sender typed, so it never makes anyone 'recorded'.
+
+        Round 9 (G3): someone he recorded only by a WHOLE address
+        (case-folded, trimmed, through the fold) or a WHOLE phone number
+        (digits only, a leading 1 for North America set aside) noted for
+        them — never a part of one ('5@example.com' was his daughter), and
+        never by a name alone. An address written with letters of another
+        alphabet or invisible characters is nobody's he knows."""
+        s, _, tricks = triage_spelling(sender)
         s = s.strip()
         flags: dict[str, tuple[float, str]] = {}
         if not s:
             return "unknown", "not given", flags
+        disguised = any("alphabet" in t or "invisible" in t for t in tricks)
         # 'someone he has recorded' is someone HE recorded or confirmed: a
         # 'grandson' an AI wrote down is nobody he knows (S3, round 8) — and
         # is named as what he is, someone an AI noted down, never 'a stranger'
@@ -2982,12 +2990,17 @@ class Representative:
                         f"the sender's name says '{claimed.group()}', but the address "
                         f"({domain}) is not theirs" + (" — it is a free email account"
                                                        if domain in _FREE_MAIL else "")))
-            for p in people:
-                if addr in str(p.get("notes", "")).casefold():
-                    return "recorded", f"{p.get('name')}, someone he has recorded", flags
-            for p in noted:
-                if addr in str(p.get("notes", "")).casefold():
-                    return "noted", _noted_as(p), flags
+            key = grounding.email_key(addr)
+            if disguised:
+                flags["sender_lookalike"] = (0.35, (
+                    "the sender's address is written with letters from another alphabet or "
+                    "with invisible characters, so it is nobody's address he has"))
+            else:
+                for group, kind in ((people, "recorded"), (noted, "noted")):
+                    for p in group:
+                        if key in grounding.emails_of(p.get("notes", "")):
+                            return kind, (f"{p.get('name')}, someone he has recorded"
+                                          if kind == "recorded" else _noted_as(p)), flags
             kind = "official" if _official(domain) else "email"
             return kind, ("the real address of a company he may deal with" if kind == "official"
                           else "an email address he has not recorded"), flags
@@ -3001,11 +3014,11 @@ class Representative:
         words = [w for w in re.findall(r"[^\W\d_]+", s) if w not in _PERSON_WORDS]
         if set(words) & _STRANGER_WORDS:
             return "unknown", "someone he does not know (a buyer or a stranger)", flags
-        if len(digits) >= 7:
+        if len(digits) >= 7 and not disguised:
+            key = grounding.phone_key(digits)
             for group, kind in ((people, "recorded"), (noted, "noted")):
                 for p in group:
-                    num = re.sub(r"\D", "", str(p.get("notes", "")))
-                    if num and digits[-10:] in num:
+                    if key in grounding.phones_of(p.get("notes", "")):
                         return kind, (f"{p.get('name')}, someone he has recorded"
                                       if kind == "recorded" else _noted_as(p)), flags
         for group, kind in ((people, "recorded"), (noted, "noted")):
@@ -3013,8 +3026,16 @@ class Representative:
                 pw = [w for w in re.findall(r"[^\W\d_]+", grounding.normalise(p.get("name", "")))
                       if len(w) >= 2]
                 if words and pw and set(pw) <= set(words):
-                    return kind, (f"{p.get('name')}, someone he has recorded"
-                                  if kind == "recorded" else _noted_as(p)), flags
+                    # A name alone is whatever the sender typed (G3, round 9):
+                    # never someone he recorded. It is read as an AI's note
+                    # is — known to nobody, every warning sign counting in
+                    # full — and named as what it is, never 'a stranger'.
+                    alone = ("but a name alone can be typed by anyone, so JEFFEREY cannot tell "
+                             "it is them; check on a number or address he already has")
+                    return "named", (
+                        f"only the name '{p.get('name')}' — someone in his life story has "
+                        f"that name, {alone}" if kind == "recorded"
+                        else f"{_noted_as(p)}; and only by the name, {alone}"), flags
         if words:
             if 4 <= len(digits) <= 6:
                 return "shortcode", "a company's short number", flags
@@ -3062,7 +3083,9 @@ class Representative:
         # someone an AI noted down is not someone he knows — every sign still
         # counts — but the name the message gives is the note's, so it is no
         # 'wrong number from a stranger' (round 8 repair, S3)
-        noted = kind == "noted"
+        # ...and so is a name alone of someone he knows (G3, round 9): never
+        # 'someone he has recorded', and never 'a stranger' either
+        noted = kind in ("noted", "named")
         # verify I-13: a bare name he has not recorded may be his saved
         # contact — or any name a stranger chose on Marketplace or WhatsApp.
         # It is never 'known'; the family signals weigh it a little lighter.
@@ -3300,7 +3323,10 @@ class Representative:
                         "his schedule, or who lives with him. If it is about a sale, "
                         "meet in a public place (many police stations have a safe "
                         "exchange zone) with someone else there.")
-            if noted:
+            if kind == "named":
+                advice += (" It is from " + sender_is + ". If that is who they are, he can "
+                           "check by calling them on the number he already has for them.")
+            elif noted:
                 advice += (" It is from " + sender_is + ". If that is who they are, he can "
                            "check by calling them on the number he already has, and confirm "
                            "them himself (/pending, then /confirm, in 'Talk to JEFFEREY on "
@@ -3341,8 +3367,10 @@ class Representative:
             verdict = "needs_decision"
             advice = ("Nothing here asks for money, a card, a code or a secret. It is from "
                       + sender_is + ": tell him who it says it is from and what it says, and "
-                      "ask him whether that is right. If it is, he confirms them himself "
-                      "(/pending, then /confirm, in 'Talk to JEFFEREY on this Mac').")
+                      "ask him whether that is right."
+                      + ("" if kind == "named" else
+                         " If it is, he confirms them himself (/pending, then /confirm, in "
+                         "'Talk to JEFFEREY on this Mac')."))
         else:
             verdict = "routine"
             advice = ("JEFFEREY saw nothing here that asks for money, a card, a code, a secret "
@@ -3356,7 +3384,7 @@ class Representative:
                        "here: tell the owner never to read it out or pass it on.")
 
         # Does it touch anything they've told Jefferey matters?
-        basis = self.c.explain_basis(subject or body[:80])
+        basis = self.c.explain_basis(subject or body[:80], watch=False)
         return {
             "sender": sender,
             "subject": subject,
@@ -3399,7 +3427,8 @@ class Representative:
         broad_mine, strict = grounding.audience_aliases(aud, mine)
         broad = frozenset(grounding.norm_audience(a) for a in broad | broad_mine)
         strict = frozenset(grounding.norm_audience(a) for a in strict)
-        known = any(grounding.norm_audience(p.get("name", "")) in broad for p in mine)
+        # someone he knows only by a whole address or a whole name (G3)
+        known = any(grounding.norm_audience(p.get("name", "")) in strict for p in mine)
         return aud, broad, strict, known
 
     def draft_guidance(self, purpose: str, recipient: str = "") -> dict:
@@ -3414,9 +3443,13 @@ class Representative:
         and its subject listed in do_not_mention; his representation rules
         for this person come back in his own words."""
         import rules as _rules
+        # a key paused for searches that find nothing is paused here too (G2)
+        paused = self.c.search_paused("draft_guidance")
+        if paused:
+            return paused
         # explain_basis returns facts only to a key that may read them, and
         # nothing for a purpose that names nothing (I-23, I-28).
-        basis = self.c.explain_basis(purpose)
+        basis = self.c.explain_basis(purpose, watch=False)
         profile = self.c.data.get("profile", {})
         signer = profile.get("full_name") or (
             f"{profile.get('first_name','')} {profile.get('last_name','')}".strip() or None)
@@ -3513,6 +3546,23 @@ class Representative:
                 if f.get("visibility", "engines") == "engines" and not f.get("sensitivity"):
                     continue
                 said = f.get("fact", "")
+                # his own private fact (G4, round 9): a fact in the first
+                # person is about him, and a draft that carries a word of it
+                # or of its kind, to someone who may not hear it, is his to
+                # decide — whoever the draft names ('Dad has HIV')
+                if grounding.first_person(said):
+                    tags = self.c._fact_tags(f)
+                    may, _, _ = _rules.verdict(
+                        self.c.data, broad, strict,
+                        lambda r: grounding.tag_hits(r.get("tags") or [], said, tags))
+                    if may is not True and grounding.draft_carries(
+                            said, f.get("sensitivity") or [], body, names):
+                        what = " and ".join(grounding.CLASS_WORDS_PLAIN.get(k, k)
+                                            for k in f.get("sensitivity") or []) or "him"
+                        problems.append({"fact_id": f.get("id"), "ask_owner": True, "why": (
+                            f"it says something private about him ({what}) to someone his "
+                            f"rules do not let hear it — ask him first")})
+                        continue
                 # the person it is about, by name, with a word of what makes
                 # it private ('Jo … chemo') or of his health or money; or two
                 # of its words and at least half of them ('Ed has MS' from
@@ -3531,7 +3581,13 @@ class Representative:
             problems.append({"why": "it invites someone he has not told JEFFEREY about to "
                                     "his home — suggest a public place instead"})
         out = {"ok": not problems, "audience": aud, "problems": problems}
+        if any(p.get("ask_owner") for p in problems):
+            out["ask_owner"] = True
         out["advice"] = ("Nothing in it goes against his rules or his safety." if not problems
+                         else "Ask him first, in plain words, whether he wants this said — it "
+                              "tells something private about him to someone his rules do not "
+                              "let hear it. Never send it as is; without his yes, rewrite it "
+                              "without these." if out.get("ask_owner")
                          else "Rewrite it without these before he sees it; never send it as is.")
         return out
 
@@ -3636,8 +3692,10 @@ _DETAIL_WORDS = {"full_name": "name", "address_line1": "address", "address_line2
 
 def _same_detail(key: str, given: str, his: str) -> bool:
     """Is what was handed in his own confirmed detail, only written another
-    way (case, spacing, a full stop; a phone number's dashes, a date's
-    order)? An address of e-mail must be the very same address."""
+    way (case, spacing, dots, dashes; a phone number's brackets, a date's
+    order)? Round 9 (G6): 'K1A0B1' is his 'K1A 0B1' — spaces, dots, dashes
+    and case never make his own detail someone else's. An address of e-mail
+    must be the very same address. What is written is always his own value."""
     n = grounding.normalise
     if key in ("email", "website"):
         return n(given) == n(his)
@@ -3647,8 +3705,8 @@ def _same_detail(key: str, given: str, his: str) -> bool:
     if key == "date_of_birth":
         a, b = re.findall(r"\d+", given), re.findall(r"\d+", his)
         return bool(b) and sorted(x.lstrip("0") for x in a) == sorted(x.lstrip("0") for x in b)
-    plain = lambda x: " ".join(re.sub(r"[^\w\s]", " ", n(x)).split())  # noqa: E731
-    return plain(given) == plain(his)
+    plain = lambda x: re.sub(r"[\W_]+", "", grounding.fold(n(x), frozenset()))  # noqa: E731
+    return bool(plain(his)) and plain(given) == plain(his)
 
 
 def _noted_as(p: dict) -> str:

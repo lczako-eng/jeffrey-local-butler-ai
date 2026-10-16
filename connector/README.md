@@ -162,6 +162,30 @@ console — never what the words mean:
   name glued to a fee word is never by itself his membership: it asks him, and
   never makes the real bill a duplicate, until he says the line is his.
 - **A no for someone nobody knows** holds for everyone but his own JEFFEREY.
+- **A no for himself is a no for everyone** (round 9). A no whose audience is
+  'me', 'myself', 'just me', 'moi' — in any case or letters — or that names
+  no one at all holds for everyone and every AI but his own JEFFEREY; a
+  disclosure no left without an audience is stored for 'anyone', and
+  `set_rule` says so plainly. A yes for himself widens nothing.
+- **No search is an oracle** (round 9). `forget`, `forget_life`, `remove_rule`,
+  `close_goal`, `explain_basis`, `priorities_for` and `tell_story` match an
+  engine's words only against what release would show it, list only what it
+  may read (its `also_mentioned` and counts too), and count what is held back
+  only by the kind of thing the subject names. Twenty searches by one key
+  that find nothing within ten minutes pause that key's searches for an hour
+  (`conscience.searches.json` beside the memories holds only times); he is
+  told in his notices. His own console is never paused.
+- **A sender is someone he recorded only by a whole match** (round 9): the
+  whole address (case, spaces and look-alike letters aside) or the whole
+  number (a leading 1 aside) noted for them. A name alone, or a display name
+  with another address, never is; an address in another alphabet's letters
+  is nobody's. Drafts and yes rules read a recipient the same way.
+- **His own private facts in a draft** (round 9): a fact written in the first
+  person is about him. `check_draft` to someone his rules do not let hear it
+  answers `ask_owner` when the draft carries a word of that fact or of its
+  kind (health, money, legal, family confidences), whoever it names.
+- **Invisible characters are nothing** (round 9): every default-ignorable code
+  point and every combining mark is dropped wherever words are read.
 
 **Confirmation needs a person.** The owner's own command-line confirmations —
 `conscience.py confirm` and `restore`, `forgetting.py approve`, `erase` and

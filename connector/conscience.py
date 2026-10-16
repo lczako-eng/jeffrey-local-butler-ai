@@ -374,6 +374,75 @@ class _FileLock:
         return False
 
 
+# ------------------------------------------- searches that find nothing (G2)
+# Round 9: no search is an oracle — every match an engine asks for reads only
+# what release would show it. And on top, a key that searches his memories
+# for words that are not there, again and again, is guessing: twenty
+# searches that find nothing within ten minutes pause that key's searches
+# (by words, a topic, a subject or a theme) for an hour, said plainly, and
+# the owner is told. A brute force of a four-digit PIN took forty seconds
+# through forget_life (round 8, v2 F3). The owner at his own keyboard is
+# never paused; reading without a search (the brief, who am I) goes on.
+SEARCH_MISSES = 20
+SEARCH_WINDOW = 10 * 60
+SEARCH_PAUSE = 60 * 60
+_search_clock = time.time       # tests move the clock
+
+
+class _SearchWatch:
+    """How many of each key's searches found nothing lately, beside the
+    memory file (several surfaces share one key). Times only — never the
+    words that were searched for."""
+
+    def __init__(self, path: Path):
+        self.path = path.with_name(path.stem + ".searches.json")
+
+    def _load(self) -> dict:
+        try:
+            d = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return d if isinstance(d, dict) else {}
+
+    def _store(self, d: dict) -> None:
+        try:
+            _make_dir(self.path.parent)
+            _write_atomic(self.path, json.dumps(d, indent=1).encode("utf-8"))
+        except (OSError, StoreProblem):
+            pass                     # a full drive must not stop a search being refused
+
+    def paused_until(self, key: str) -> float | None:
+        e = self._load().get(key)
+        until = float(e.get("paused_until") or 0) if isinstance(e, dict) else 0.0
+        return until if until > _search_clock() else None
+
+    def found_nothing(self, key: str) -> float | None:
+        """Count one search that found nothing. When it is the one that makes
+        twenty in ten minutes, the time the pause ends; otherwise None."""
+        now = _search_clock()
+        with _FileLock(self.path.with_name(self.path.name + ".lock")):
+            d = self._load()
+            e = d.get(key) if isinstance(d.get(key), dict) else {}
+            misses = [float(t) for t in e.get("misses") or []
+                      if isinstance(t, (int, float)) and now - float(t) < SEARCH_WINDOW]
+            misses.append(now)
+            until = None
+            if len(misses) >= SEARCH_MISSES and float(e.get("paused_until") or 0) <= now:
+                until = now + SEARCH_PAUSE
+                e["paused_until"] = until
+                misses = []
+            e["misses"] = misses[-SEARCH_MISSES:]
+            d[key] = e
+            d = {k: v for k, v in d.items() if isinstance(v, dict) and (
+                v.get("misses") or float(v.get("paused_until") or 0) > now)}
+            self._store(d)
+        return until
+
+
+def _clock_words(ts: float) -> str:
+    return time.strftime("%H:%M", time.localtime(ts))
+
+
 # --------------------------------------------------------- append-only logs
 class AppendLog:
     """An append-only JSON-lines file with its own lock: one line per event,
@@ -566,7 +635,9 @@ _HOME_ITSELF = re.compile(
     r"|cameras?|smart ?homes?|domotique|alarms?(?! clocks?\b)|alarmes?|codes?|serrures?|garages?"
     r"|locks?|lockbox(?:es)?|locksmiths?|buzzers?|nest|surveillance|domiciles?"
     r"|logements?|residences?|foyers?|cottages?|chalets?|chez (?:moi|nous|soi|lui|elle)"
-    r"|(?:my|our|his|the) (?:place|flat))\b"
+    r"|(?:my|our|his|the) (?:place|flat)"
+    # round 9 (G10): the gate, the basement, his dwelling
+    r"|gates?|portails?|basements?|sous ?sols?|demeures?)\b"
     r"|\b(?:home|house|maison)[a-z]{3,}")
 _HOME_GOODS = re.compile(r"\bsuppl(?:y|ies)$")
 _HOME_WHY = "his home itself: who comes in, its keys, doors and security"
@@ -761,6 +832,11 @@ _ENTRY_WORDS = _wordset(
     "camera cameras cam cams footage detector detectors detecteur detecteurs",
     "heberge heberger hebergez heberges hebergeons hebergent hebergera",
     "entre",
+    # round 9 (G10): the snib; the door, the key, open and come in, in Spanish
+    # and Italian, at the least
+    "snib snibs snibbed unchain unchains unchained unchaining",
+    "puerta puertas porta portone entrar entra llave llaves chiave chiavi",
+    "abre abrir abra apri aprire apra",
 )
 # 'alarm clock' rings in the morning; an 'unlocked iPhone' is a phone; 'Door
 # Dash' brings dinner — the one word beside them says so, and nothing else
@@ -827,11 +903,68 @@ _NIGHT = _wordset("night nights overnight over here nuit ici")
 _SPEND = _wordset("spend spends spent spending passer passe passez")
 _SHOW = _wordset("show shows showed showing visit visits visiter visite")
 _HOUSE = _wordset("house home condo apartment place property unit maison appartement")
+# --- round 9 (G10): the door, in the words the round-8 skeptics used --------
+# telling, giving, texting, sending or reading anyone a PIN, a code, a
+# combination, a password or a key
+_TELL = _wordset("tell tells told telling give gives gave giving text texts texted texting",
+                 "send sends sent sending read reads reading share shares shared sharing",
+                 "email emails emailed message messages messaged say says said whatsapp",
+                 "dis dire dites donne donner donnez donnes envoie envoyer envoyez texte texter")
+_SECRET_THING = _wordset("pin pins nip combination combinations combinaison combinaisons combo",
+                         "combos password passwords passcode passcodes mdp")
+# the ways in a door is named by ('the front', 'the side', 'the slider')
+_WAY_IN = _wordset("front back side main patio slider sliding screen porch basement cellar",
+                   "door doors gate gates garage entrance window windows yale")
+# escorting, walking, taking or showing someone through the house
+_ESCORT = _wordset("escort escorts escorted escorting walk walks walked walking take takes",
+                   "took taking taken show shows showed showing guide guides guided lead",
+                   "leads led bring brings brought accompany accompanies accompanied")
+_THROUGH = _wordset("through thru to into up down around round")
+_ROOMS = _wordset("house home basement cellar attic upstairs downstairs bedroom bedrooms",
+                  "room rooms kitchen hallway hall office study den garage loft")
+_AT_DOOR = _wordset("front door doors gate porch doorstep step stoop intercom buzzer")
+# pressing, hitting or dialing a digit for a caller
+_PRESS = _wordset("press presses pressed pressing hit hits hitting dial dials dialed dialing",
+                  "push pushes pushed punch punches punched")
+_DIGIT_NAMES = _wordset("star pound hash zero one two three four five six seven eight nine")
+_FOR_WHEN = _wordset("for when whenever if once")
+# holding, propping or answering the front, the back, the side, a door or 'it'
+_HOLD = _wordset("hold holds held holding prop props propped propping answer answers",
+                 "answered answering")
+# the chain; ringing someone in; accepting something inside; a guest list
+_CHAIN_OFF = _wordset("take takes took taking undo undoes undid remove removes removed slip")
+_RING = _wordset("ring rings rang ringing")
+_ACCEPT = _wordset("accept accepts accepted accepting")
+_INDOORS = _wordset("inside indoors into")
+_BUILDING = _wordset("building buildings condo lobby concierge desk apartment tower residence",
+                     "security doorman")
+# telling anyone the house will be empty, or that he is away
+_SAY = _wordset("tell tells told telling text texts texted email emails message messages",
+                "inform informs informed say says said post posts mention mentions know")
+_BE = _wordset("am is are be m re s was were been being")
+_EMPTY = _wordset("empty vacant")
+# a smart lock or a camera by its name, with open, unlock, disarm, pause or off
+_BRANDS = _wordset("yale august smartthings schlage kwikset ring nest arlo eufy simplisafe adt",
+                   "alarmcom")
+_BRAND_VERB = _wordset("open opens opened opening unlock unlocks unlocked unlocking disarm",
+                       "disarms disarmed disarming pause pauses paused pausing off snooze")
+# French: receiving someone ('Reçois le plombier'), giving the spare ('le double')
+_RECEVOIR = _wordset("recois recoit recevoir recevez recevons recoivent recevra recevrai")
+_RECEIVED_THINGS = _wordset("colis paquet paquets lettre lettres courrier facture factures",
+                            "appel appels message messages courriel courriels email emails",
+                            "cheque cheques remboursement commande commandes livraison",
+                            "livraisons nouvelles resultats")
+_GIVE_FR = _wordset("donne donner donnez donnes laisse laisser laissez prete preter pretez",
+                    "passe passer remets remettre confie confier")
 _KNOWN = (_ENTRY_WORDS | _LET | _LET_IN_FAR | _LET_IN_NEAR | _BRING | _BRING_IN | _COME
           | _COME_IN | _POP | _OPEN | _LEAVE | _LEFT_OPEN | _WINDOW | _DISABLE | _OFF_VERB
           | _SECURITY | _STAY | _NIGHT | _SHOW | _HOUSE | _HAVE | _HAVE_IN | _SPARE | _STAY_WHEN
           | _PUT | _BATHROOM | _USE | _LOOK | _AROUND | _TOUR
-          | frozenset("him her them me man in let ring".split()))
+          | _TELL | _SECRET_THING | _WAY_IN | _ESCORT | _THROUGH | _ROOMS | _AT_DOOR | _PRESS
+          | _DIGIT_NAMES | _HOLD | _CHAIN_OFF | _RING | _ACCEPT | _INDOORS | _BUILDING | _SAY
+          | _EMPTY | _BRANDS | _BRAND_VERB | _RECEVOIR | _GIVE_FR
+          | frozenset("him her them me man in let ring yes chain run guest list mode recording "
+                      "away double".split()))
 
 
 def _entry_words_of(description: str) -> list[str]:
@@ -877,6 +1010,79 @@ def _entry_words_of(description: str) -> list[str]:
     return out
 
 
+def _the_door_g10(w: list[str], i: int, ahead) -> int | None:
+    """Round 9 (G10): the descriptions the round-8 skeptics found allowed
+    under any category, read as words, each asking the owner. Where the word
+    that makes it the door stands, or None."""
+    n, x = len(w), w[i]
+    nxt = w[i + 1] if i + 1 < n else ""
+    if x in _TELL:
+        k = ahead(i, _SECRET_THING, 6)               # 'Tell the cleaner the PIN'
+        if k is not None:
+            return k
+        for k in range(i + 1, min(n, i + 7)):         # 'Text the cleaner 4821 for the side'
+            if w[k].isdigit() and 3 <= len(w[k]) <= 8 and any(y in _WAY_IN for y in w):
+                return k
+    if x == "run" and nxt == "of" and ahead(i, _ROOMS | _HOUSE, 3) is not None:
+        return ahead(i, _ROOMS | _HOUSE, 3)           # 'the run of the house'
+    if x in _ESCORT:                                  # 'Escort the gentleman to the basement'
+        k = ahead(i, frozenset({"upstairs", "downstairs"}), 6)
+        if k is not None:
+            return k
+        k = ahead(i, _THROUGH, 6)
+        if k is not None and ahead(k, _ROOMS, 3) is not None:
+            return ahead(k, _ROOMS, 3)
+    if x == "yes" and any(y in _AT_DOOR for y in w):  # 'Say yes to the man at the front'
+        return next(k for k in range(n) if w[k] in _AT_DOOR)
+    if x in ("home", "away") and nxt == "mode":       # 'Set the Nest to home mode'
+        return i + 1
+    if x in ("stop", "stops", "stopped", "stopping") and nxt == "recording":
+        return i + 1
+    if x in _PRESS and (nxt.isdigit() and len(nxt) <= 2 or nxt in _DIGIT_NAMES) \
+            and ahead(i + 1, _FOR_WHEN, 3) is not None:
+        return i + 1                                  # 'Press 9 for the courier'
+    if x in _HOLD:                                    # 'Hold the front for the plumber'
+        for k in range(i + 1, min(n, i + 4)):
+            if w[k] in _WAY_IN:
+                return k
+            if w[k] in ("it", "one") and ahead(k, frozenset({"for"}), 3) is not None:
+                return k
+    if x == "chain" and (ahead(i, frozenset({"off"}), 2) is not None
+                         or any(w[k] in _CHAIN_OFF for k in range(max(0, i - 3), i))):
+        return i                                      # 'Take the chain off'
+    if x in _RING:                                    # 'Ring the man from the bank in'
+        k = ahead(i, frozenset({"in"}), 7)
+        if k is not None and (k == n - 1 or w[k + 1] in ("now", "please", "for", "so", "and",
+                                                         "when", "then")):
+            return k
+    if x in _ACCEPT:                                  # 'Accept the delivery inside the house'
+        k = ahead(i, _INDOORS, 6)
+        if k is not None:
+            return k
+        k = ahead(i, frozenset({"in"}), 6)
+        if k is not None and ahead(k, _ROOMS, 2) is not None:
+            return k
+    if x == "guest" and nxt == "list" and any(y in _BUILDING for y in w):
+        return i + 1                                  # "the building's guest list"
+    if x in _SAY:                                     # 'Tell him the house is empty'
+        for k in range(i + 1, min(n, i + 12)):
+            if w[k] in _EMPTY and any(w[j] in _HOUSE | _ROOMS for j in range(max(i, k - 3), k)):
+                return k
+            if w[k] == "away" and k and w[k - 1] in _BE:
+                return k
+            if w[k] in ("nobody", "noone") and k + 1 < n and w[k + 1] == "home":
+                return k
+    if x in _BRANDS:                                  # 'Open the Yale app for the plumber'
+        for k in range(max(0, i - 4), min(n, i + 5)):
+            if w[k] in _BRAND_VERB:
+                return k
+    if x in _RECEVOIR and ahead(i, _RECEIVED_THINGS, 3) is None:
+        return i                                      # 'Reçois le plombier'
+    if x in _GIVE_FR and ahead(i, frozenset({"double", "doubles"}), 3) is not None:
+        return ahead(i, frozenset({"double", "doubles"}), 3)   # 'Donne le double au voisin'
+    return None
+
+
 def entry_words(description: str) -> str | None:
     """The words of a description that touch getting into the home or its
     security, or None (D4, round 7). Read by the words alone — never by who
@@ -918,6 +1124,9 @@ def entry_words(description: str) -> str | None:
             return "maintenance mode"
         if x in _BATHROOM and any(w[k] in _USE for k in range(max(0, i - 3), i)):
             return said(max(0, i - 3), i)
+        door = _the_door_g10(w, i, ahead)
+        if door is not None:
+            return said(min(i, door), max(i, door))
         found = None
         if x in _LET:
             found = far[i + 1] if far[i + 1] is not None else ahead(i, _LET_IN_NEAR, 6)
@@ -933,8 +1142,12 @@ def entry_words(description: str) -> str | None:
         elif x in _POP:
             found = ahead(i, _POP_IN, 1)
         elif x in _OPEN:
-            # 'open' asks, unless within three words it opens what is no way in
-            if ahead(i, _OPENS_ELSE, 3) is None:
+            # 'open' asks when ANY of what it opens is a way in — a decoy noun
+            # first no longer exempts it (G10: 'Open the email and the front
+            # for the plumber') — and otherwise unless, within three words, it
+            # opens what is no way in
+            found = ahead(i, _WAY_IN, 8)
+            if found is None and ahead(i, _OPENS_ELSE, 3) is None:
                 found = i
         elif x in _PUT:
             if ahead(i, frozenset({"up"}), 4) is not None:
@@ -2584,6 +2797,60 @@ class Conscience:
         import egress
         return egress.shown_text(str(text or ""))
 
+    # ------------------------------------------- searches that find nothing (G2)
+    @staticmethod
+    def _search_key() -> str | None:
+        """The key a search is counted against — None for the owner himself."""
+        try:
+            import access
+            if access.owners_hands():
+                return None
+            return access.current_client() or "unknown"
+        except Exception:
+            return "unknown"
+
+    def search_paused(self, tool: str) -> dict | None:
+        """A plain refusal when this key's searches are paused (G2), or None."""
+        key = self._search_key()
+        if key is None:
+            return None
+        until = _SearchWatch(self.path).paused_until(key)
+        if until is None:
+            return None
+        return {"refused": True, "tool": tool, "reason": (
+                    f"Searching his memories is paused for this connection for an hour, "
+                    f"until {_clock_words(until)}: it searched {SEARCH_MISSES} times in ten "
+                    f"minutes for words that are not there — the way someone guesses a PIN "
+                    f"or a password. Nothing was searched. He has been told."),
+                "tell_the_user": (
+                    "Tell him plainly that searching his memories is paused for an hour "
+                    "because many searches found nothing, and that it is in his notices. "
+                    "Do not try other words.")}
+
+    def search_found(self, found: bool) -> None:
+        """Count a search by words, a topic or a theme that found nothing (G2).
+        The twentieth in ten minutes pauses that key's searches for an hour,
+        and he is told in his notices."""
+        key = None if found else self._search_key()
+        if key is None:
+            return
+        until = _SearchWatch(self.path).found_nothing(key)
+        if until is None:
+            return
+        msg = (f"An AI using the key '{key}' searched your memories {SEARCH_MISSES} times in "
+               f"ten minutes for words that are not there — the way someone guesses a PIN or "
+               f"a password. Its searches are paused for an hour, until "
+               f"{_clock_words(until)}. If you did not ask it to look for those things, "
+               f"double-click 'What left the house' to see what it asked.")
+        def tell(d: dict) -> None:
+            ns = d["_notices"] if isinstance(d.get("_notices"), list) else []
+            ns.append({"at": _now(), "ts": time.time(), "kind": "searches", "message": msg})
+            d["_notices"] = ns[-20:]
+        try:
+            self.save_fresh(tell)
+        except StoreProblem:
+            self._runtime_notices["searches"] = msg
+
     def visible_priorities(self, rd: dict | None = None) -> tuple[list[dict], int]:
         """His values whoever reads this result may see, and how many his
         rules hold back (F2, round 8): a no on a subject — 'Never tell my
@@ -2959,6 +3226,11 @@ class Conscience:
         'car' is not 'caregiver'), or all of them. A value he holds about
         everything is listed last."""
         rd = provenance.reader()
+        general = lambda p: grounding.normalise(p.get("context")) in grounding.CATCH_ALL  # noqa: E731
+        if context:
+            paused = self.search_paused("priorities_for")
+            if paused:
+                return [paused]                    # a list, as this tool always answers
         ps, _ = self.visible_priorities(rd)
         if context:
             q = grounding.expand(grounding.content(context))
@@ -2966,8 +3238,8 @@ class Conscience:
                 return []
             ps = [p for p in ps
                   if grounding.content(self.searched(p.get("context", ""), rd)) & q
-                  or grounding.normalise(p.get("context")) in grounding.CATCH_ALL]
-        general = lambda p: grounding.normalise(p.get("context")) in grounding.CATCH_ALL  # noqa: E731
+                  or general(p)]
+            self.search_found(any(not general(p) for p in ps))
         return [self._prio_view(p) for p in
                 sorted(ps, key=lambda p: (general(p), -float(p.get("confidence") or 0)))]
 
@@ -3819,7 +4091,7 @@ class Conscience:
             "waiting_for_you": self.pending_items(),
         }
 
-    def explain_basis(self, topic: str, limit=None, offset=0) -> dict:
+    def explain_basis(self, topic: str, limit=None, offset=0, watch: bool = True) -> dict:
         """The grounding for a recommendation: which of the USER'S OWN values
         and facts apply to this topic. Every recommendation must be
         explainable in these terms — never hidden incentives.
@@ -3832,8 +4104,18 @@ class Conscience:
         nothing is refused. Most relevant first, at most ten values and a
         page of facts, each with the reason it matched. Facts come back only
         to a key that may read facts (I-23), private ones only to his
-        caretaker key, and nothing his rules keep from this engine."""
+        caretaker key, and nothing his rules keep from this engine.
+
+        A search (G2, round 9): only what release would show this engine is
+        matched, what is held back is counted only by the kind of thing the
+        subject names, and a key paused for searching that finds nothing is
+        refused. `watch=False` for JEFFEREY's own reading inside a tool that
+        is not a search (triage)."""
         t = str(topic or "").strip()
+        if watch:
+            paused = self.search_paused("explain_basis")
+            if paused:
+                return paused
         problem = grounding.topic_problem(t)
         if problem:
             return {"topic": t, "priorities": [], "facts": [], "note": problem}
@@ -3862,9 +4144,12 @@ class Conscience:
             ),
         }
         import access
+        about = any(r[0][0] == 0 for r in rows)
         if not access.may("facts.read"):
             out["note"] = ("The key this connection holds may not read the owner's "
                            "facts, so none are included.")
+            if watch:
+                self.search_found(about)
             return out
         seen, held = self.visible_facts(rd, bulk=False)
         # anyone but the owner's own house gets a private fact only for a
@@ -3882,10 +4167,13 @@ class Conscience:
         if len(scored) > off + lim:
             out["more_facts"] = len(scored) - off - lim
             out["how_to_see_more"] = f"Call again with offset={off + lim}."
-        kept = sum(1 for f, _ in held
-                   if grounding.fact_match(self.searched(f.get("fact", ""), rd),
-                                           f.get("category", ""),
-                                           f.get("sensitivity") or [], tw, asked))
+        # What is held back is never matched by its words (G2, round 9: the
+        # count told an engine that 'Biktarvy' was in a fact it may not read):
+        # only by the kind of private thing the subject itself names.
+        named = {c for c in grounding.CLASSES if grounding.CLASS_WORDS.get(c, frozenset()) & tw}
+        kept = sum(1 for f, _ in held if named & set(f.get("sensitivity") or []))
+        if watch:
+            self.search_found(about or bool(scored))
         if kept:
             out["held_back"] = {"count": kept, "why": (
                 "Some facts on this subject are private, or kept from this connection "

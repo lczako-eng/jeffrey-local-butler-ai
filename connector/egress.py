@@ -148,7 +148,8 @@ RELEASE: dict[str, frozenset[str]] = {
                                  "their_priorities_here", "their_facts_here",
                                  "voice", "voice_is", "rules", "disclosure",
                                  "speak_of_them_this_way", "meeting_safety"}),
-    "check_draft": frozenset({"ok", "audience", "problems", "advice"}),
+    # ask_owner: his own private fact, to someone who may not hear it (G4)
+    "check_draft": frozenset({"ok", "audience", "problems", "advice", "ask_owner"}),
     # facts, profile, rules, the daily brief
     "remember_fact": frozenset({"id", "fact", "category", "added", "visibility",
                                 "sensitivity", "status", "noted_by"}),
@@ -848,21 +849,69 @@ _ANSWER_KW = re.compile(r"(?<![^\W_])(?:" + _rx(
     r"maiden" + _S + r"names?", r"nom" + _S + r"de" + _S + r"jeune" + _S + r"fille",
     r"(?:magic|secret)" + _S + r"words?", r"mots?" + _S + r"(?:magiques?|secrets?)",
     r"questions?" + _S + r"(?:secretes?|de" + _S + r"securite)",
-    r"reponses?" + _S + r"secretes?") + r")(?![^\W_])", re.I)
+    r"reponses?" + _S + r"secretes?",
+    # round 9 (G8): the family code word that defeats the grandparent scam,
+    # a safe word, a recovery phrase, a memorable word, a login, a voice ID
+    # phrase, 'Security Q' — the whole value after them is the secret
+    r"(?:family" + _S + r")?code" + _S + r"words?", r"safe" + _S + r"words?",
+    r"mots?" + _S + r"de" + _S + r"passe" + _S + r"famili(?:al|aux|ale|ales)",
+    r"mots?" + _S + r"codes?", r"mots?" + _S + r"de" + _S + r"securite",
+    r"(?:recovery|seed|backup)" + _S + r"(?:phrases?|words?)",
+    r"phrases?" + _S + r"de" + _S + r"(?:recuperation|recouvrement)",
+    r"memorable" + _S + r"(?:words?|phrases?|answers?)", r"mots?" + _S + r"memorables?",
+    r"log-?ins?", r"sign-?ins?", r"identifiants?",
+    r"voice" + _S + r"(?:id|print)(?:" + _S + r"(?:phrases?|passphrases?|passwords?))?",
+    r"(?:security|secret)" + _S + r"q") + r")(?![^\W_])", re.I)
 _ANSWER_SAYS = frozenset([":", "=", "-", "is", "was", "are", "est", "c'est", "etait", "sont",
                           "'s"])
+# '… set to Pickles', '… changed to Pickles' (G8)
+_ANSWER_SET = frozenset("set changed reset updated switched".split())
 _ANSWER_SKIP = frozenset("answer answers reponse reponses".split())
+# 'Q: first pet? A: Fluffy', 'Question: … Answer: …' (G8)
+_QA = re.compile(r"(?<![^\W_])(?:q|question)\s*[:.)\-]\s*[^\n]{1,160}?(?<![^\W_])"
+                 r"(?:a|answer|reponse|r)\s*[:.)\-]\s*(?=\S)", re.I)
+# A value after ':' or '/' following an account's name, mixing letters and
+# digits, is its password (G8): 'Netflix: Bluebird77', 'Apple ID anna@… /
+# Bluebird77', 'RBC: Swan9595'.
+_ACCOUNT = re.compile(r"(?<![^\W_])(?:netflix|apple" + _S + r"id|icloud|google|gmail|facebook"
+                      r"|cra" + _S + r"my" + _S + r"account|my" + _S + r"service" + _S
+                      + r"canada|rbc|td|bmo|scotiabank|scotia|cibc|desjardins|national"
+                      + _S + r"bank|banque" + _S + r"nationale|tangerine|simplii|eq(?:"
+                      + _S + r"bank)?)(?![^\W_])", re.I)
 
 
 def _answer_hits(n: str) -> list[tuple[int, int, str]]:
     out = []
+    for m in _QA.finditer(n):
+        end_c = _clause(n, m.end(), read_on=False)
+        s0, e0 = _tail(n, m.end(), end_c)
+        if e0 > s0 and re.search(r"[^\W_]", n[s0:e0]):
+            out.append((s0, e0, ANSWER))
+    for m in _ACCOUNT.finditer(n):
+        end_c = _clause(n, m.end(), read_on=False)
+        toks = list(_TOK.finditer(n, m.end(), min(end_c, m.end() + 80)))
+        for i, t in enumerate(toks[:6]):
+            g = t.group()
+            if g in (":", "/"):
+                if i + 1 >= len(toks):
+                    break
+                raw, at = toks[i + 1].group(), toks[i + 1].start()
+            elif g.startswith("/") and len(g) > 1:
+                raw, at = g[1:], t.start() + 1           # 'TD/Kite1212'
+            else:
+                continue
+            lead = len(raw) - len(raw.lstrip(_LEAD))
+            v = raw.lstrip(_LEAD).rstrip(_TRAIL)
+            if v and any(c.isdigit() for c in v) and any(c.isalpha() for c in v):
+                out.append((at + lead, at + lead + len(v), PASSWORD))
     for m in _ANSWER_KW.finditer(n):
         end_c = _clause(n, m.end(), read_on=True)
         toks = list(_TOK.finditer(n, m.end(), end_c))
         start = None
         for i, t in enumerate(toks[:7]):
             low = t.group().lower()
-            if low in _ANSWER_SAYS:
+            if low in _ANSWER_SAYS or (low == "to" and i and toks[i - 1].group().lower()
+                                       in _ANSWER_SET):
                 if i + 1 < len(toks):
                     start = toks[i + 1].start()
                 break
@@ -1337,12 +1386,23 @@ def _words(n: str) -> list[tuple[int, int, str]]:
 
 
 def _shapes(n: str) -> list[tuple[int, int, str]]:
-    return _key_hits(n) + _house_hits(n) + _number_hits(n) + _id_hits(n)
+    return (_key_hits(n) + _house_hits(n) + _number_hits(n) + _id_hits(n)
+            + _digit_word_hits(n))
 
 
 def _everything(n: str) -> list[tuple[int, int, str]]:
     return (_key_hits(n) + _keyword_hits(n) + _answer_hits(n) + _number_hits(n)
-            + _id_hits(n))
+            + _id_hits(n) + _digit_word_hits(n))
+
+
+def _digit_word_hits(n: str) -> list[tuple[int, int, str]]:
+    """A PIN said in words — 'four eight two one', 'quatre huit deux un' — in
+    a note that names a card, a PIN or a code is a code (G8, round 9:
+    'Debit card: four eight two one' went out in clear)."""
+    if not (_CARD_CTX.search(n) or _KW.search(n)):
+        return []
+    return [(m.start(), m.end(), CODE) for m in _DWORD_RUN.finditer(n)
+            if len(re.findall(r"[^\W\d_]+", m.group())) >= 4]
 
 
 def _find(text: str, scan=_everything) -> list[tuple[int, int, str]]:

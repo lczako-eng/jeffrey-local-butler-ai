@@ -1102,7 +1102,8 @@ class RuleIn(BaseModel):
     kind: str = Field(description="disclosure | reaction | representation")
     tags: str
     instruction: str
-    audience: str = "me"
+    # left out: a no is for everyone, any other rule for him (G1, round 9)
+    audience: str = ""
     allow: bool = True
 
 
@@ -1112,7 +1113,9 @@ def set_rule(r: RuleIn) -> dict:
     """Write one of the owner's standing rules, in their words. Only at their
     word. From you a no (disclosure, allow=false) holds at once, noted by the
     AI; any other rule is a proposal that changes nothing until he confirms it.
-    A no for someone he has not recorded holds for everyone but his own JEFFEREY."""
+    Left without an audience, a no is for everyone. A no for himself ('me',
+    'myself'), or for someone he has not recorded, holds for everyone but his
+    own JEFFEREY."""
     try:
         return rules.set_rule(r.kind, r.tags, r.instruction, r.audience, r.allow)
     except ValueError as e:

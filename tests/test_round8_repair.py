@@ -686,16 +686,22 @@ class F4AProcessorsNameIsNeverHisMembership(HisOwnTest):
         self.assertEqual(r["pack"]["amount_in_dispute"], 0.0, r["pack"])
 
     def test_the_guardian_alone_says_the_same(self):
+        # (round 9, G7: each Guardian below has a folder of its own — beside
+        # one memory file, 'conscience.json.2', '.3' and '.4' shared one
+        # history folder, so g3 and g4 started from g2's register)
         r = self.py("""
             import datetime as dt
             from conscience import Conscience
             from guardian import Guardian
+            def own(n):
+                return os.path.join(os.path.dirname(os.environ["JEFFEREY_CONSCIENCE_PATH"]),
+                                    f"g{n}", "conscience.json")
             g = Guardian(Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"]),
                          owner_present=lambda: True, today=lambda: dt.date(2026, 10, 15))
             g.expect_charge("Costco Membership", 65, "yearly")
             res = [g.check_charge(n, 65, d)["verdict"] for n, d in (
                 ("PAYPAL *COSTCOMEMBER", "2026-02-01"), ("COSTCO MEMBERSHIP", "2026-03-01"))]
-            g2 = Guardian(Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"] + ".2"),
+            g2 = Guardian(Conscience(own(2)),
                           owner_present=lambda: True, today=lambda: dt.date(2026, 10, 15))
             g2.expect_charge("Costco Membership", 65, "yearly")
             res += [g2.check_charge(n, 65, d)["verdict"] for n, d in (
@@ -703,25 +709,29 @@ class F4AProcessorsNameIsNeverHisMembership(HisOwnTest):
                 ("COSTCO MEMBERSHIP", "2026-03-01"))]
             # a plan that is no membership, billed through PayPal, then directly:
             # the second is his question, never a duplicate claimed from Netflix
-            g3 = Guardian(Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"] + ".3"),
+            g3 = Guardian(Conscience(own(3)),
                           owner_present=lambda: True, today=lambda: dt.date(2026, 10, 15))
             g3.expect_charge("Netflix", 16.49, "monthly")
             n = [g3.check_charge(x, 16.49, d) for x, d in (
                 ("PAYPAL *NETFLIX", "2026-02-01"), ("NETFLIX.COM", "2026-02-05"))]
             res += [x["verdict"] for x in n] + [n[1]["recoverable"]]
             # once he says himself that the PayPal line is his gym, it is quiet
-            g4 = Guardian(Conscience(os.environ["JEFFEREY_CONSCIENCE_PATH"] + ".4"),
+            g4 = Guardian(Conscience(own(4)),
                           owner_present=lambda: True, today=lambda: dt.date(2026, 10, 15))
             g4.expect_charge("GoodLife Fitness membership", 54.99, "monthly")
             res.append(g4.check_charge("SQ *GOODLIFE FITNESS", 54.99, "2026-08-01")["verdict"])
             res.append(g4.add_alias("SQ *GOODLIFE FITNESS", "GoodLife Fitness membership")
                        .get("status"))
             res.append(g4.check_charge("SQ *GOODLIFE FITNESS", 54.99, "2026-09-01")["verdict"])
+            # each one holds only its own register and its own charges
+            res.append([sorted(str(e.get("merchant")) for e in x.c.data.get("expected_charges") or [])
+                        for x in (g2, g3, g4)])
             out(res)
         """)
         self.assertEqual(r, ["ask_owner", "expected", "ask_owner", "ask_owner", "expected",
                              "expected", "ask_owner", 0.0, "ask_owner", "registered",
-                             "expected"])
+                             "expected", [["Costco Membership"], ["Netflix"],
+                                          ["GoodLife Fitness membership"]]])
 
 
 # ===================================================== by decision: unchanged

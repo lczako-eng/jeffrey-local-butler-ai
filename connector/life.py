@@ -652,12 +652,18 @@ class Life:
         `ceiling` comes from the bound client's key, never from an argument
         the model picks. Unknown values fall to `legacy`. A theme is matched
         by whole words ('art' is not 'heart'); a theme nothing matches says
-        so instead of returning everything."""
+        so instead of returning everything. A theme is a search (G2, round
+        9): it reads only what would leave the house, and a key paused for
+        searching that finds nothing is refused."""
+        t = str(theme or "").strip()
+        if t:
+            paused = self.c.search_paused("tell_story")
+            if paused:
+                return paused
         v = self._view(ceiling)
         mems, h1 = self._moments(v)
         pics, h2, media_ok = self._pictures(v)
         people, h3 = self._people(v)
-        t = str(theme or "").strip()
         nothing = None
         if t:
             tw = grounding.expand(grounding.content(t))
@@ -676,6 +682,7 @@ class Life:
             mems = [m for m in mems if hit(m.get("text", ""), m.get("tags", []),
                                            m.get("people", []))]
             pics = [m for m in pics if hit(m.get("caption", ""), [], m.get("people", []))]
+            self.c.search_found(bool(mems or pics))
             if not mems and not pics:
                 nothing = (f"Nothing recorded yet matches '{t}'. Say so honestly, and "
                            "ask him if he would like to tell it.")

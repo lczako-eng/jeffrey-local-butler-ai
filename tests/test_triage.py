@@ -1645,9 +1645,16 @@ class AfterTheFixes(TriageTest):
                  for b in ("Hi Dad, when will you be home? I'll bring dinner over.",
                            "Are you alone tonight? Want me to come keep you company?")])
         """, JEFFEREY_CLIENT="jefferey")
-        for x in r[:4]:
+        for x in r[:2]:
             self.assertNotEqual(x["verdict"], "safety", x)
             self.assertIn("someone he has recorded", x["sender_is"])
+        # (round 9, G3: a name alone — 'Anna', with no address or number — is
+        # never someone he recorded; anyone can type it. Asking when he is
+        # home or alone is then a safety question again, said plainly.)
+        for x in r[2:4]:
+            self.assertEqual(x["verdict"], "safety", x)
+            self.assertNotIn("someone he has recorded", x["sender_is"])
+            self.assertIn("a name alone can be typed by anyone", x["sender_is"])
         self.assertEqual(r[5]["verdict"], "safety")
         self.assertIn("life story", r[5]["advice"])
 

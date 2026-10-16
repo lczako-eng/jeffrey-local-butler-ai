@@ -941,17 +941,19 @@ def conscience_exclude(contains: str = "", ids: list[str] | None = None,
 
 @door(mcp.tool())
 @gate("facts.write")
-def set_rule(kind: str, tags: str, instruction: str, audience: str = "me",
+def set_rule(kind: str, tags: str, instruction: str, audience: str = "",
              allow: bool = True) -> dict:
     """Write one of the owner's standing rules, in THEIR words. kind:
     'disclosure' (who may hear what — set allow true/false), 'reaction' (how
     to respond when THEY raise this), 'representation' (how to speak of them
     to others). tags: the subject ('health', 'father', 'money', 'karen').
-    audience: 'me', 'anyone', or a named person/group. Only ever at the
-    owner's word; never write a rule for them. From you a no (disclosure,
-    allow=false) holds at once, noted by the AI; any other rule is a proposal
-    that changes nothing until he confirms it himself. A no for someone he
-    has not recorded holds for everyone but his own JEFFEREY; the result says so."""
+    audience: 'anyone', or a named person/group; left out, a no is for
+    everyone and a reaction rule is for him. Only ever at the owner's word;
+    never write a rule for them. From you a no (disclosure, allow=false)
+    holds at once, noted by the AI; any other rule is a proposal that changes
+    nothing until he confirms it himself. A no for himself ('me', 'myself'),
+    for no one named, or for someone he has not recorded holds for everyone
+    but his own JEFFEREY; the result says so."""
     return rules.set_rule(kind, tags, instruction, audience, allow)
 
 

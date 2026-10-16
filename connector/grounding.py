@@ -77,9 +77,38 @@ def _is_symbol(tok: str) -> bool:
     return len(tok) == 1 and unicodedata.category(tok) == "So"
 
 
+# Round 9 (G5): the code points Unicode calls default-ignorable — invisible,
+# never a letter, never a space — read as nothing by every reader of words.
+# Round 8's fold dropped only the 'format' characters, so a variation
+# selector (U+FE0F), the combining grapheme joiner (U+034F) or a Hangul
+# filler inside a word hid it from every reader: 'I take Ozem️pic',
+# 'Pass️word: Tulip7392', 'Jo is on che️mo', 'Let the plumber
+# i️n', 'Turn off the al͏arm'.
+IGNORABLE_RANGES = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+                    (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+                    (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+                    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3),
+                    (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
+IGNORABLE_CLASS = "".join(f"\\U{a:08x}" if a == b else f"\\U{a:08x}-\\U{b:08x}"
+                          for a, b in IGNORABLE_RANGES)
+_IGNORABLE = re.compile("[" + IGNORABLE_CLASS + "]")
+
+
+def is_ignorable(ch: str) -> bool:
+    """Is this one character default-ignorable (G5)?"""
+    cp = ord(ch)
+    return any(a <= cp <= b for a, b in IGNORABLE_RANGES)
+
+
+def visible(text) -> str:
+    """The text with every default-ignorable code point taken out (G5)."""
+    t = str(text or "")
+    return t if t.isascii() else _IGNORABLE.sub("", t)
+
+
 @functools.lru_cache(maxsize=1 << 16)
 def _normalise(t: str) -> str:
-    t = unicodedata.normalize("NFKC", t).translate(_QUOTES).casefold()
+    t = unicodedata.normalize("NFKC", visible(t)).translate(_QUOTES).casefold()
     return re.sub(r"\s+", " ", t).strip()
 
 
@@ -144,10 +173,17 @@ _SPECIAL = {"ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ø": "o", "Ø": "O", "�
 _SMALL_CAP = "LATIN LETTER SMALL CAPITAL "
 
 
+def _mark(c: str) -> bool:
+    """A combining mark of any kind — nonspacing, spacing or enclosing (G5:
+    'chë̱mo', 'e⃝'). Some of them have no combining class, so
+    the class alone missed them."""
+    return unicodedata.category(c).startswith("M")
+
+
 @functools.lru_cache(maxsize=1 << 14)
 def _fold_char(ch: str, accents: bool) -> str:
-    if unicodedata.category(ch) == "Cf":
-        return ""                                 # zero-width spaces, soft hyphens
+    if unicodedata.category(ch) == "Cf" or is_ignorable(ch):
+        return ""          # zero-width spaces, soft hyphens, variation selectors, fillers (G5)
     if ch in _LOOK:
         return _LOOK[ch]
     if ch.isdecimal():
@@ -170,11 +206,12 @@ def _fold_char(ch: str, accents: bool) -> str:
         elif unicodedata.name(c, "").startswith(_SMALL_CAP) and \
                 len(unicodedata.name(c)) == len(_SMALL_CAP) + 1:
             out.append(unicodedata.name(c)[-1].lower())
-        elif not accents and unicodedata.combining(c):
-            continue
+        elif _mark(c) or is_ignorable(c):
+            continue                              # a combining mark on its own (G5)
         elif not accents:
+            # every combining mark after decomposition (G5): 'é' is 'e'
             base = "".join(x for x in unicodedata.normalize("NFKD", c)
-                           if not unicodedata.combining(x))
+                           if not _mark(x) and not is_ignorable(x))
             out.append("".join(_LOOK.get(x, x) for x in base) or c)
         else:
             out.append(c)
@@ -461,7 +498,7 @@ def _abbreviation(w: str, low: str, shouting: bool, toks: list[str], i: int) -> 
 
 @functools.lru_cache(maxsize=1 << 16)
 def _content(t: str, names: bool = False) -> frozenset:
-    n = unicodedata.normalize("NFKC", t).translate(_QUOTES)
+    n = unicodedata.normalize("NFKC", visible(t)).translate(_QUOTES)
     long = re.findall(r"[^\W\d_]{3,}", n)
     shouting = bool(long) and sum(w.isupper() for w in long) >= 0.6 * len(long)
     toks = [m.group("w") for m in _TOKEN.finditer(n) if m.group("w")]
@@ -564,7 +601,7 @@ def any_case_words(text) -> set[str]:
 
 @functools.lru_cache(maxsize=1 << 15)
 def _subject_names(t: str) -> frozenset:
-    n = unicodedata.normalize("NFKC", _undotted(t)).translate(_QUOTES)
+    n = unicodedata.normalize("NFKC", _undotted(visible(t))).translate(_QUOTES)
     sens = set().union(*_SENSE_WORDS.values())
     out = set()
     for m in re.finditer(r"[^\W\d_]+(?:'[^\W\d_]+)?", n):
@@ -600,7 +637,7 @@ def subject_names(text) -> set[str]:
 @functools.lru_cache(maxsize=1 << 15)
 def _sensitive_content(t: str) -> frozenset:
     words = _any_case(t) - _subject_names(t)
-    n = unicodedata.normalize("NFKC", _undotted(t))
+    n = unicodedata.normalize("NFKC", _undotted(visible(t)))
     long = re.findall(r"[^\W\d_]{3,}", n)
     shouting = bool(long) and sum(w.isupper() for w in long) >= 0.6 * len(long)
     sens = set().union(*_SENSE_WORDS.values())
@@ -680,9 +717,28 @@ _DRAFT_SAME = {"chemotherapy": "chemo", "poz": "hiv", "rehabilitation": "rehab",
                "melanoma": "cancer", "carcinoma": "cancer", "sarcoma": "cancer",
                "myeloma": "cancer", "tumour": "cancer", "tumor": "cancer",
                "oncology": "cancer", "oncologist": "cancer", "cancers": "cancer",
-               "mastectomy": "cancer", "radiotherapy": "radiation"}
+               "mastectomy": "cancer", "radiotherapy": "radiation",
+               # round 9 (G4): French, and the words the skeptics used
+               "chimio": "chemo", "chimiotherapie": "chemo", "vih": "hiv",
+               "seropositif": "hiv", "seropositive": "hiv", "undetectable": "hiv",
+               "faillite": "bankrupt", "bankruptcy": "bankrupt", "enceinte": "pregnant",
+               "pregnancy": "pregnant", "grossesse": "pregnant"}
 _DRAFT_PHRASES = (("multiple sclerosis", "ms"), ("sclerose en plaques", "ms"),
-                  ("hiv positive", "hiv"), ("hiv+", "hiv"))
+                  ("hiv positive", "hiv"), ("hiv+", "hiv"),
+                  # round 9 (G4)
+                  ("the big c", "cancer"), ("le gros c", "cancer"), ("viral load", "hiv"),
+                  ("charge virale", "hiv"), ("having a baby", "pregnant"),
+                  ("expecting a baby", "pregnant"), ("attend un bebe", "pregnant"),
+                  ("a fait faillite", "bankrupt"))
+_DRAFT_PHRASE_RX = tuple((re.compile(r"(?<![^\W_])" + re.escape(p) + r"(?![^\W_])"), w)
+                         for p, w in _DRAFT_PHRASES)
+# 'Anna is expecting', 'expecting in May' — not 'expecting a parcel' or rain
+_EXPECTING = re.compile(r"(?<![^\W_])expecting(?=\s*(?:[.!?,;:]|$)|\s+(?:in|this|next|again|"
+                        r"another|twins|a\s+(?:boy|girl)|her|their|our|his)(?![^\W_]))")
+# SEP is 'sclérose en plaques' in capitals, or after 'la', 'une', 'sa' …;
+# 'Sep 12' is September
+_SEP = re.compile(r"(?<![^\W_])SEP(?![^\W_])|(?i:(?<![^\W_])(la|une|sa|ma|de|d'une|avec)\s+sep"
+                  r"(?![^\W_]))")
 _DRAFT_LEX_EXTRA = frozenset("""ms hiv aids copd ra aa ptsd adhd ocd als ibs uti chemo cancer
     rehab lupus crohn colitis celiac epilepsy seizure seizures shingles hepatitis cirrhosis
     kidney liver transplant angina pacemaker glaucoma cataract cataracts macular osteoporosis
@@ -693,14 +749,18 @@ _DRAFT_LEX_EXTRA = frozenset("""ms hiv aids copd ra aa ptsd adhd ocd als ibs uti
 
 def _draft_prepared(text: str) -> str:
     t = fold_map(text)[0]                             # look-alike letters, case kept
+    t = _SEP.sub(lambda m: f"{m.group(1) or ''} MS", t)
     return re.sub(r"(?<![^\W_])Ms\.?(?=\s+[A-Z])", " ", t)   # 'Ms Wu' is a title
 
 
 @functools.lru_cache(maxsize=1 << 14)
-def _draft_words(text: str) -> frozenset:
-    t = fold(_draft_prepared(text), _DRAFT_ABBR | FOLD_WORDS)
-    for p, w in _DRAFT_PHRASES:
-        t = t.replace(p, f" {w} ")
+def _draft_words(text: str, known: frozenset = frozenset()) -> frozenset:
+    """`known`: more words the fold may read back ('J0', 'J o' are 'Jo' when
+    the fact compared is about Jo — round 9, G4)."""
+    t = fold(_draft_prepared(text), _DRAFT_ABBR | FOLD_WORDS | known)
+    for rx, w in _DRAFT_PHRASE_RX:
+        t = rx.sub(f" {w} ", t)
+    t = _EXPECTING.sub(" pregnant ", t)
     out = set()
     for w in _any_case(t):
         out.add(_DRAFT_SAME.get(w, w))
@@ -732,13 +792,80 @@ def _fact_people(fact: str, people: tuple) -> frozenset:
     return frozenset(out)
 
 
+def _known_for(fact: str, people: tuple) -> frozenset:
+    """The words a draft's fold may read back when it is compared with this
+    fact: the fact's own words and the names of the people he recorded."""
+    out = {w for w in _words(fold(fact)) if len(w) >= 2}
+    for name in people:
+        out |= {w for w in _words(fold(name)) if len(w) >= 2}
+    return frozenset(out)
+
+
+# --- his own private facts in a draft (G4, round 9) ------------------------
+# Round 8 looked for the PERSON a private fact is about, and a first-person
+# fact names nobody: with 'I have HIV' kept, 'I have HIV', 'Dad has HIV',
+# 'Laszlo has HIV' and 'He has HIV' to the neighbours were all 'nothing in it
+# goes against his rules'. A fact in the first person — I, my, me, I'm, I've,
+# je, j', mon, ma, mes, moi — is about him. A draft to an audience that may
+# not hear it, carrying any sensitive word of that fact or of its kind (his
+# health, his money, legal matters, family confidences), is brought to him,
+# whoever the draft names. Friction is accepted.
+_FIRST_PERSON = re.compile(r"(?<![\w'])(?:i|i'm|im|i've|ive|i'd|i'll|my|me|mine|myself|je|mon|ma"
+                           r"|mes|moi)(?![\w'])|(?<![\w'])j'(?=\w)")
+OWN_CLASSES = ("health", "money", "private", "third_party")
+
+
+def first_person(text) -> bool:
+    """Is this fact written in the first person — about him (G4)?"""
+    return bool(_FIRST_PERSON.search(fold(str(text or ""), frozenset())))
+
+
+@functools.lru_cache(maxsize=1 << 12)
+def _carries_kind(draft: str, kinds: tuple, known: frozenset) -> bool:
+    dw = _draft_words(draft, known)
+    t = fold(_draft_prepared(draft), _DRAFT_ABBR | FOLD_WORDS | known)
+    for rx, w in _DRAFT_PHRASE_RX:
+        t = rx.sub(f" {w} ", t)
+    joined = f" {' '.join(_words(t))} "
+    for cls in kinds:
+        lex = _SENSE_WORDS.get(cls, frozenset()) | (_DRAFT_LEX_EXTRA if cls == "health"
+                                                    else frozenset())
+        if dw & lex or {stem(w) for w in dw} & lex:
+            return True
+        if any(p in joined for p in _PHRASE_FORMS.get(cls, ())):
+            return True
+        if any(rx.search(t) for rx in _SENSE_PATTERNS.get(cls, ())):
+            return True
+    return False
+
+
+def draft_carries(fact, classes, draft, people=()) -> bool:
+    """Does this draft carry a sensitive word of this private fact, or any
+    word of its kind — his health, his money, a legal matter, a family
+    confidence (G4)? Read in any case, through the fold, with the synonyms."""
+    fact, draft = str(fact or ""), str(draft or "")
+    known = _known_for(fact, tuple(people))
+    dw = _draft_words(draft, known)
+    fw = _draft_words(fact)
+    # its sensitive words are the words of a kind of private thing it holds —
+    # never a name ('my friend dana reyes has lupus' is not about 'Dana')
+    lex = set().union(*_SENSE_WORDS.values()) | _DRAFT_LEX_EXTRA
+    names = {w for p in people for w in _words(fold(p))}
+    sens = {w for w in fw if w in lex or stem(w) in lex} - names - _COMMON
+    if sens & dw:
+        return True
+    kinds = tuple(c for c in OWN_CLASSES if c in set(classes or ()))
+    return bool(kinds) and _carries_kind(draft, kinds, known)
+
+
 def draft_repeats(fact, draft, people=()) -> bool:
     """Does this draft repeat this private fact (F5)? It names the fact's
     person — in any case — together with a word of what makes the fact
     private, or any word of his health or his money; or it repeats two of
     the fact's words and at least half of them."""
     fact, draft = str(fact or ""), str(draft or "")
-    fw, dw = _draft_words(fact), _draft_words(draft)
+    fw = _draft_words(fact)
+    dw = _draft_words(draft, _known_for(fact, tuple(people)))
     shared = fw & dw
     if len(fw) >= 2 and len(shared) >= max(2, -(-len(fw) // 2)):
         return True
@@ -1001,8 +1128,62 @@ _HEALTH_LEX = """
 _HEALTH_LEX_PHRASES = ("blood sugar", "sugar level", "sugar levels", "my sugars",
                        "blood work", "bloodwork", "lab results", "taux de sucre",
                        "tension arterielle", "pression arterielle", "prise de sang")
+# Round 9 (G9): the words the round-8 skeptics found his health in — HIV
+# medicines and prevention, a CPAP, AA, NA and twelve-step meetings,
+# incontinence, a personal support worker who bathes him, a joint replaced,
+# hearing aids, 'my sugar', 'ma pression', 'mes pilules', an ostomy, a puffer
+# or an inhaler, 'the big C', 'my waterworks', a worry about 'my memory' —
+# and his money: borrowed, lent, 'five grand'. Exactly these; the list is
+# bounded (round 9 says what it knows remains).
+_HEALTH_LEX += """
+    biktarvy truvada descovy genvoya triumeq dovato odefsey stribild complera juluca
+    cpap bipap colostomy ostomy ileostomy urostomy stoma puffer puffers inhaler inhalers
+    pilule pilules waterworks psw incontinent
+"""
+_HEALTH_LEX_PHRASES += ("my sugar", "his sugar", "her sugar", "ma pression", "sa pression",
+                        "the big c", "le gros c", "hearing aid", "hearing aids",
+                        "hip replacement", "knee replacement", "joint replacement",
+                        "shoulder replacement", "replacement hip", "replacement knee",
+                        "incontinence pads", "incontinence pad", "adult diapers",
+                        "personal support worker", "personal care worker", "bathe me",
+                        "bathes me", "bathing me", "help me bathe", "helps me bathe",
+                        "help me shower", "helps me shower", "helping me shower",
+                        "help me in the shower", "twelve step", "12 step",
+                        "alcoholics anonymous", "narcotics anonymous", "aa meeting",
+                        "aa meetings", "na meeting", "na meetings", "sleep apnea",
+                        "sleep apnoea")
 _SENSE_WORDS["health"] = _SENSE_WORDS["health"] | _stems(_HEALTH_LEX)
 _SENSE_PHRASES["health"] = _SENSE_PHRASES["health"] + _HEALTH_LEX_PHRASES
+_SENSE_PATTERNS["health"] = _SENSE_PATTERNS["health"] + (
+    # 'I go to AA on Thursdays' — not 'AA batteries' or an AA flight
+    re.compile(r"\b(?:go|goes|going|went|attend|attends|attended|attending|at|in|to|from|"
+               r"join|joined|my|his|her)\s+(?:aa|na)\b(?!\s*(?:batter|cells?|flight|size|\d))"),
+    # 'I wear Depends at night' — not 'it depends'
+    re.compile(r"\b(?:wear|wears|wearing|wore|buy|buys|bought|need|needs|pack of|box of|"
+               r"my|his|her)\s+depends\b|\bdepends\s+(?:at night|pads?|underwear|"
+               r"undergarments|briefs|diapers)\b"),
+    # PrEP, the pill that prevents HIV — not meal prep
+    re.compile(r"\b(?:on|take|takes|taking|took|started|start|my|his|her|daily|hiv)\s+prep\b"
+               r"|\bprep\s+(?:pills?|daily|every|for\s+hiv)\b"),
+    # a worry about 'my memory' — not 'in my memory the lake was bigger'
+    re.compile(r"(?<!in )\b(?:my|his|her)\s+memory\b(?!\s+(?:of|from|for|card|stick|foam|"
+               r"box|book|lane)\b)"),
+)
+_SENSE_WORDS["money"] = _SENSE_WORDS["money"] | _stems("faillite")
+_GRAND = (r"(?:\d+(?:[.,]\d+)?|a few|a couple of|one|two|three|four|five|six|seven|eight|"
+          r"nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|"
+          r"ninety|hundred)\s*(?:grand|gs)\b")
+_SENSE_PATTERNS["money"] = _SENSE_PATTERNS["money"] + (
+    # 'five grand', '5 grand', 'forty grand' — thousands, not a piano
+    re.compile(r"\b" + _GRAND),
+    # borrowed, lent, a loan — of money: 'Mike borrowed 5 grand', 'I lent
+    # Mike $500' (not 'Al borrowed the ladder', nor 'chocolate for Lent')
+    re.compile(r"\b(?:borrow|borrows|borrowed|borrowing|lent|lend|lends|lending|loaned)\b"
+               r"[^.!?\n]{0,60}?(?:[$€£]\s?\d|\b\d[\d,.]*\s*(?:\$|dollars?|bucks|k)\b"
+               r"|\b(?:money|cash|cheque|check for)\b|\b" + _GRAND + r")"),
+)
+# PrEP written as it is spelt (G9)
+_PREP_RAW = re.compile(r"(?<![^\W_])PrEP(?![^\W_])")
 
 # A category the owner (or an AI) gave a fact that already says what it is.
 _CATEGORY = {
@@ -1024,6 +1205,7 @@ _PHRASE_FORMS = {cls: tuple(f" {_joined(p)} " for p in ps)
 @functools.lru_cache(maxsize=1 << 16)
 def _sensitivity(text: str, category: str) -> tuple[str, ...]:
     t = _normalise(text)
+    ft = fold(text)
     ws = _words(t)
     # ...and read through the fold (round 8): 'Оzempic' with a Cyrillic О,
     # 'glycémie' without its accent, '0zempic'
@@ -1037,7 +1219,10 @@ def _sensitivity(text: str, category: str) -> tuple[str, ...]:
             found.add(cls)
         elif any(p in joined for p in _PHRASE_FORMS.get(cls, ())):
             found.add(cls)
-        elif any(rx.search(t) for rx in _SENSE_PATTERNS.get(cls, ())):
+        elif any(rx.search(t) or (ft != t and rx.search(ft))
+                 for rx in _SENSE_PATTERNS.get(cls, ())):
+            found.add(cls)
+        elif cls == "health" and _PREP_RAW.search(str(text)):
             found.add(cls)
         if cat & _CATEGORY.get(cls, frozenset()):
             found.add(cls)
@@ -1131,8 +1316,13 @@ def tag_hits(rule_tags, text: str = "", tags=()) -> bool:
         return True
     tset = {normalise(t) for t in tags if normalise(t)}
     classes = {CLASS_ALIASES.get(t, t) for t in tset} & set(CLASSES)
+    # ...read as written and through the fold (round 9, G5: a combining mark
+    # or a look-alike letter inside a word hid it from the rule)
     have = {stem(w) for w in _words(str(text or ""))} | {stem(w) for t in tset
                                                           for w in _words(t)}
+    if text and not str(text).isascii():
+        have |= {stem(w) for w in _words(fold(text))}
+    text = text if not text or str(text).isascii() else f"{text} \n {fold(text)}"
     for rt in rts:
         if rt in tset:
             return True
@@ -1490,7 +1680,7 @@ def norm_audience(s) -> str:
 
 
 def _emails_in(text) -> set[str]:
-    return {e.strip(".,;:()<>").lower() for e in _EMAIL.findall(str(text or ""))}
+    return emails_of(text)
 
 
 def rule_names(audience, people=()) -> frozenset:
@@ -1530,6 +1720,39 @@ def rule_names(audience, people=()) -> frozenset:
 _EXCEPT = re.compile(r"(?<![^\W_])(?:but|except(?:\s+for)?|other\s+than|apart\s+from|aside\s+from"
                      r"|besides|mais|sauf|hormis|excepte|a\s+part|à\s+part)(?![^\W_])", re.I)
 _SELF_WORDS = frozenset("me myself moi i".split())
+
+
+# ---------------------------------------- a 'no' for himself (G1, round 9)
+# Round 8 read 'me', 'myself', 'just me' and 'moi' as the owner — and a no
+# for the owner bound nobody, so 'Keep my health to myself' (audience
+# 'myself', or no audience at all, which every surface stored as 'me') let
+# the family key read his diabetes. Now a no whose audience — or any part of
+# it before 'but' or 'except' — is himself holds as a no for someone nobody
+# knows does: for everyone and every AI but his own JEFFEREY.
+_SELF_ALONE = frozenset("me myself moi i meme moimeme".split())
+_SELF_ONLY = frozenset("just only juste seulement rien que simply solely uniquement "
+                       "that's thats c'est".split())
+_SELF_FOLD = _SELF_ALONE | _SELF_ONLY | frozenset({"moi-meme"})
+
+
+def names_self(audience) -> bool:
+    """Does this audience — the part before 'but' or 'except' — name the
+    owner himself ('me', 'Me', 'ME', 'myself', 'just me', 'only me', 'I',
+    'moi', 'moi-même', 'juste moi', 'mе' with a Cyrillic е, 'my​self')?"""
+    text = " ".join(str(audience or "").split())
+    if not text:
+        return False
+    m = _EXCEPT.search(text)
+    if m:
+        text = text[:m.start()]
+    n = fold(text, _SELF_FOLD)
+    n = re.sub(r"[^\w' ,;/&+|\-]", " ", n)
+    for part in _PART_BREAK.split(n):
+        ws = [w.strip("'.-") for w in part.replace("-", " ").split()]
+        ws = [w for w in ws if w and w not in _SELF_ONLY and w not in _STRONGER]
+        if ws and all(w in _SELF_ALONE for w in ws):
+            return True
+    return False
 
 
 def person_key(name, relationship="") -> tuple[str, str]:
@@ -1582,6 +1805,45 @@ _ADDRESSED = re.compile(r"^(.*?)<\s*([^<>\s]+@[^<>\s]+)\s*>\s*$")
 _EMAIL = re.compile(r"[^\s@<>]+@[^\s@<>]+")
 
 
+# ------------------------------------- someone, by a whole match (G3, round 9)
+# Round 8's triage asked `addr in notes`, so any address that was the END of
+# a recorded person's ('5@example.com', 'novak1985@example.com') was that
+# person, and a scam from it scored 0.0. An address is someone's only when it
+# is the whole address (case-folded, trimmed, read through the fold); a phone
+# number only when it is the whole number (digits only, a leading 1 for North
+# America set aside). A display name alone never makes anyone someone he
+# recorded.
+_PHONE_IN_TEXT = re.compile(r"(?<![\w+])\+?\d[\d \t().\-]{5,}\d(?!\w)")
+
+
+def email_key(text) -> str:
+    """One address in one spelling: trimmed, case-folded, through the fold
+    (no word is read back), without a 'mailto:' or the brackets around it."""
+    t = fold(str(text or ""), frozenset()).strip().strip(".,;:()<>\"'[]")
+    if t.startswith("mailto:"):
+        t = t[7:]
+    return t
+
+
+def emails_of(text) -> set[str]:
+    """Every whole e-mail address written in this text, as email_key."""
+    return {email_key(e) for e in _EMAIL.findall(visible(text))} - {""}
+
+
+def phone_key(text) -> str:
+    """A phone number as its digits, a leading 1 for North America set aside
+    ('+1 (613) 555-0142' and '6135550142' are one number)."""
+    d = re.sub(r"\D", "", fold(str(text or ""), frozenset()))
+    return d[1:] if len(d) == 11 and d.startswith("1") else d
+
+
+def phones_of(text) -> set[str]:
+    """Every whole phone number written in this text (seven digits or
+    more), as phone_key."""
+    return {k for k in (phone_key(m.group()) for m in _PHONE_IN_TEXT.finditer(visible(text)))
+            if len(k) >= 7}
+
+
 def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
     """Every name this audience may be known by to the owner's rules:
     (broad, strict). A rule that says NO is matched against `broad` — each
@@ -1602,12 +1864,16 @@ def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
     strict: set[str] = set()
     broad: set[str] = set()
     if email:
+        email = email_key(email)
         local = email.split("@", 1)[0]
-        strict |= {email, local}
-        broad |= {p for p in re.split(r"[._+\-0-9]+", local) if len(p) >= 2}
+        # with an address, a yes meets only that whole address (G3, round 9:
+        # 'Anna <stranger@example.net>' was Anna for a yes by her display
+        # name, and the part before the @ was a name of its own)
+        strict |= {email}
+        broad |= {local} | {p for p in re.split(r"[._+\-0-9]+", local) if len(p) >= 2}
     if name:
         n = norm_audience(name)
-        strict |= {name, n}
+        (broad if email else strict).update({name, n})
         broad |= {w for w in words(n) if w not in STOP and w not in _TITLES}
     for p in people or ():
         if not isinstance(p, dict):
@@ -1617,8 +1883,10 @@ def audience_aliases(audience, people=()) -> tuple[frozenset, frozenset]:
             continue
         pw = set(words(pn))
         rel = norm_audience(p.get("relationship", ""))
-        noted = _emails_in(p.get("notes", ""))
-        exact = pn in strict or bool(email and email.lower() in noted)
+        noted = emails_of(p.get("notes", ""))
+        # a person is this audience exactly by a whole address noted for them,
+        # or — with no address given — by their whole recorded name (G3)
+        exact = bool(email and email in noted) or bool(not email and pn in strict)
         # 'my ex-wife' is the person recorded as his ex-wife; 'knovak@…'
         # holds her surname (verify I-24) — for a NO, never for a yes
         if rel and norm_audience(raw) == rel:

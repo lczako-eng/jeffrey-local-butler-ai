@@ -1036,12 +1036,13 @@ TOOLS = [
             "Write one of the owner's standing rules, in THEIR words. kind: "
             "'disclosure' (who may hear what; set allow), 'reaction' (how to "
             "respond when THEY raise this), 'representation' (how to speak of "
-            "them to others). audience: 'me', 'anyone', or a named person. "
+            "them to others). audience: 'anyone' or a named person; left out, a "
+            "no is for everyone and a reaction rule is for him. "
             "Only at the owner's word; never write a rule for them. From you a "
             "no (disclosure, allow false) holds at once, noted by the AI; any "
             "other rule is a proposal that changes nothing until he confirms it. "
-            "A no for someone he has not recorded holds for everyone but his own "
-            "JEFFEREY."
+            "A no for himself ('me', 'myself') or for someone he has not "
+            "recorded holds for everyone but his own JEFFEREY."
         ),
         "input_schema": {
             "type": "object",
@@ -1049,7 +1050,7 @@ TOOLS = [
                 "kind": {"type": "string", "enum": ["disclosure", "reaction", "representation"]},
                 "tags": {"type": "string"},
                 "instruction": {"type": "string"},
-                "audience": {"type": "string", "default": "me"},
+                "audience": {"type": "string"},
                 "allow": {"type": "boolean", "default": True},
             },
             "required": ["kind", "tags", "instruction"],
@@ -1417,7 +1418,7 @@ def _dispatch_tool(name: str, args: dict) -> dict | list:
                              args.get("confirm", ""))
     if name == "set_rule":
         return rules.set_rule(args["kind"], args["tags"], args["instruction"],
-                              args.get("audience", "me"), args.get("allow", True))
+                              args.get("audience", ""), args.get("allow", True))
     if name == "remove_rule":
         return rules.remove_rule(args.get("rule_id_or_text", ""), args.get("confirm", ""))
     if name == "list_rules":

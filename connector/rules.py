@@ -81,6 +81,16 @@ KINDS = ("disclosure", "reaction", "representation")
 # in practice nobody. Once he records who they are at his own console, the
 # no binds only them; a person an AI wrote down never makes a no narrower. A
 # yes never widens past what is written.
+#
+# A NO FOR HIMSELF IS A NO FOR EVERYONE (G1, round 9). A no whose audience is
+# the owner himself — 'me', 'myself', 'just me', 'only me', 'I', 'moi',
+# 'moi-même', 'juste moi', in any case or letters (grounding.names_self) — or
+# that was left at its default holds as a no for someone nobody knows does:
+# for everyone and every AI but his own JEFFEREY. Round 8 stored such a no
+# as 'me' and it bound nobody: 'Keep my health to myself' let the family key
+# read his diabetes. The default audience of a disclosure no is everyone, on
+# every surface; set_rule says so plainly. A YES for himself widens nothing:
+# he always hears about himself, and no one else is named.
 SELF = "me"
 ANYONE = "anyone"
 # The keys a no may name: the presets, and every key he has given out.
@@ -123,13 +133,25 @@ def unknown(r: dict, data: dict | None = None) -> tuple[str, ...]:
     return grounding.unknown_parts(_written(r), people, keys)
 
 
+def for_himself(r: dict) -> bool:
+    """Is this rule's audience the owner himself, or was it left at its
+    default (G1, round 9)?"""
+    if not isinstance(r, dict):
+        return False
+    return (bool(r.get("audience_default")) or _aud(r) == SELF
+            or grounding.names_self(_written(r)))
+
+
 def _no_aud(r: dict, data: dict | None = None) -> str:
     """Who a rule that says NO is for: its own audience, or everyone when it
     says so with an anyone-word ('members of the public', 'nobody but my
     doctor', 'les gens', 'le monde') — or when nobody knows who it is (F1,
     round 8: 'Bob', 'my GP' and 'Le Monde' are each only themselves once he
-    has recorded who they are)."""
+    has recorded who they are) — or when it is for himself, or was left at
+    its default (G1, round 9)."""
     if grounding.is_anyone(_written(r)) or unknown(r, data):
+        return ANYONE
+    if r.get("kind") == "disclosure" and not r.get("allow") and for_himself(r):
         return ANYONE
     return _aud(r)
 
@@ -167,6 +189,17 @@ def describe(r: dict, data: dict | None = None) -> tuple[str, str]:
     everyone, ai = _no_aud(r, data) == ANYONE, every_ai(r, data)
     who = " and ".join(f"'{x}'" for x in nobody)
     are = "is" if len(nobody) == 1 else "are"
+    jeff = ("except your own JEFFEREY, which always sees your life so it can look after "
+            "you. To keep it from your JEFFEREY too, add a no for 'any AI'.")
+    if r.get("audience_default") and not ai:
+        return ("everyone",
+                "You did not say who this no is for, so it holds for everyone and every AI "
+                + jeff + " To let someone hear it after all, add a yes that names them.")
+    if not ai and for_himself(r):
+        return ("everyone",
+                f"A no for '{said or SELF}' — for you yourself — holds for everyone and every AI "
+                + jeff + " You yourself always see it. To let someone hear it after all, add "
+                "a yes that names them.")
     if ai:
         return ("everyone and every AI" if everyone else "every AI",
                 f"'{said}' names an AI, so this no holds for every AI that reads your "
@@ -238,7 +271,9 @@ def verdict(data: dict, broad, strict, hit) -> tuple[bool | None, dict | None, l
             and _says_no_to(r, names_no, people))]
         if no:
             return False, no[0], []
-        yes = [r for r in disc if r.get("allow") and _aud(r) in names_yes]
+        # a yes for himself widens nothing (G1, round 9)
+        yes = [r for r in disc if r.get("allow") and _aud(r) in names_yes
+               and not for_himself(r)]
         if yes:
             return True, yes[0], []
         say = [r for r in reps if _aud(r) in names_yes]
@@ -388,13 +423,15 @@ class ConscienceRules:
 
     # ----------------------------------------------------------------- rules
     def set_rule(self, kind: str, tags: str, instruction: str,
-                 audience: str = SELF, allow: bool = True) -> dict:
+                 audience: str | None = None, allow: bool = True) -> dict:
         """Write one rule in the owner's own words.
 
         kind       'disclosure' | 'reaction' | 'representation'
         tags       what it's about: 'health', 'father', 'money', 'karen' ...
-        audience   who it concerns: 'me' (the owner), 'anyone', or a named
-                   person/group ('karen', 'family', 'my doctor')
+        audience   who it concerns: 'anyone', or a named person/group
+                   ('karen', 'family', 'my doctor'). Left out, a NO is for
+                   everyone (but his own JEFFEREY) and any other rule is for
+                   him ('me'). A no for himself is a no for everyone too (G1).
         allow      for disclosure rules only: True = may share with this
                    audience, False = must not
         instruction  the rule itself, verbatim — this is what Jefferey obeys
@@ -403,15 +440,19 @@ class ConscienceRules:
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {KINDS}")
         written = " ".join(str(audience or "").split())
+        defaulted = not written
+        no = kind == "disclosure" and not allow
         rule = {
             "id": f"r{int(time.time() * 1000) % 10_000_000}",
             "kind": kind,
             "tags": _tags(tags),
-            "audience": written.lower() or SELF,
+            "audience": written.lower() or (ANYONE if no else SELF),
             "allow": bool(allow),
             "instruction": instruction.strip(),
             "added": _now(),
         }
+        if defaulted and no:
+            rule["audience_default"] = True          # said so plainly (G1, round 9)
         if written and written != written.lower():
             rule["audience_written"] = written       # 'Le Monde', not 'le monde' (D1)
         if _engine():
@@ -484,6 +525,11 @@ class ConscienceRules:
                 "Tell him what you asked to remove, and that it waits for him: /pending and "
                 "/confirm in 'Talk to JEFFEREY on this Mac'. Do not try again yourself.")
         rd = provenance.reader()
+        # a search by words: a key paused for searching that finds nothing is
+        # refused, and one that finds nothing is counted (G2, round 9)
+        paused = self.c.search_paused("remove_rule")
+        if paused:
+            return paused
         # Only by what this engine may read of a rule: its id, its topic, its
         # audience — and its words only when they are not kept from it (round
         # 8 repair: 'HIV' said 'proposed', 'cancer' said 'nothing', a yes/no
@@ -493,6 +539,7 @@ class ConscienceRules:
             readable=lambda r: not words_held(r, rd, self.c.data))
         if isinstance(plan, str):
             return forgetting.refusal("remove_rule", plan)
+        self.c.search_found(bool(plan.changes))
         if not plan.changes:
             return {"step": "nothing", "count": 0, "removed": 0,
                     "note": "Nothing matched, so nothing was asked for. Words match whole "
@@ -571,7 +618,7 @@ class ConscienceRules:
         """
         aud = str(audience or "").strip().lower()
         want = set(_tags(tags))
-        if grounding.norm_audience(aud) == SELF:
+        if grounding.norm_audience(aud) == SELF or grounding.names_self(audience):
             return {"allowed": True, "audience": aud, "reason": "the owner may always hear about themself"}
         # 'Karen Novak <k@example.com>' meets a rule for 'karen' (I-24: only
         # the exact string used to match, so a 'never tell Karen' rule let

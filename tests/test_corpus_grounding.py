@@ -40,11 +40,15 @@ explain_basis losing lowercase abbreviations ('my bp', 'Is the pc ok') and
     small letters only beside a medical word ('the or nurse', 'an ms
     flare'), never as the little word, the title or the hesitation.
   * Kept by the rule as it stands: 'ED' finds Ed's fact (a capitalised
-    short word is a name); 'Mon PC est lent' also finds 'Al lent me $500'
-    (the word 'lent' is in both; nothing is read for its language); 'Oz' is
+    short word is a name); 'Oz' is
     an ounce, so 'How is Oz?' finds nothing; 'Wu' alone does not find 'Dr Wu
     is my heart doctor', which is private (a private fact answers only a
     subject that names its kind — 'Dr Wu' does).
+  * Changed by round 9 (G9: borrowed, lent, a loan are his money): 'Al lent me
+    $500' is a private fact about his money now, so — like 'Dr Wu is my
+    heart doctor' — it answers only a subject that names his money. 'Is Al
+    around?' and "ce qu'en dit Al" no longer find it, and 'Mon PC est lent'
+    (which found it by the word 'lent') finds only 'My PC is old'.
 """
 
 from __future__ import annotations
@@ -169,10 +173,10 @@ LOOKUPS: list[tuple[list[str], list[tuple[str, list[str]]]]] = [
       "My PC is old", "Li is my neighbour", "We go to the lake in July",
       "The ER at the Civic took 6 hours", "My BP was 150 over 90",
       "Mom was in the OR for three hours", "Our cat is named Oz"],
-     [("Ed", ["Ed fixed the fence"]), ("Is Al around?", ["Al lent me $500"]),
+     [("Ed", ["Ed fixed the fence"]), ("Is Al around?", []),          # G9: his money
       ("Is it on TV?", ["The TV is in the den"]), ("Ask Jo", ["Jo lives in Ottawa"]),
       ("ok", []), ("Is it OK?", []), ("al dente pasta", []), ("Li", ["Li is my neighbour"]),
-      ("Où est Jo?", ["Jo lives in Ottawa"]), ("ce qu'en dit Al", ["Al lent me $500"]),
+      ("Où est Jo?", ["Jo lives in Ottawa"]), ("ce qu'en dit Al", []),        # G9
       ("Can we go?", []), ("Should I go to the ER?", ["The ER at the Civic took 6 hours"]),
       ("my bp", ["My BP was 150 over 90"]), ("Is my BP ok?", ["My BP was 150 over 90"]),
       ("Is the pc ok", ["My PC is old"]),
@@ -181,7 +185,7 @@ LOOKUPS: list[tuple[list[str], list[tuple[str, list[str]]]]] = [
       ("the or nurse", ["Mom was in the OR for three hours"]),
       ("tea or coffee", []), ("YES OR NO", []), ("Um, er, hm", []),
       ("ED", ["Ed fixed the fence"]), ("Is Ed OK?", ["Ed fixed the fence"]),
-      ("Mon PC est lent", ["My PC is old", "Al lent me $500"]),
+      ("Mon PC est lent", ["My PC is old"]),                                # G9
       ("How is Oz?", [])]),
 ]
 

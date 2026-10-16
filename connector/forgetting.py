@@ -394,13 +394,14 @@ def _kept_from_reader(c, section: str, item: dict) -> str | None:
     it back under his rule)."""
     if c is not None and section == "rules":
         # his rules are read only by a key that may read them (rules.read);
-        # and the words of a rule that holds for whoever reads are never
-        # handed to it (S1, round 8: 'Never tell any AI that I have HIV')
+        # and the words of a rule that holds for whoever reads — or whose
+        # words carry what another of his rules keeps from it — are never
+        # handed to it (S1, round 8; G2, round 9: rules.words_held)
         try:
             import provenance
             import rules as _rules
-            return ("his own words for a rule that holds for this connection"
-                    if _rules.binds(item, provenance.reader(), c.data) else None)
+            return ("his own words for a rule whose words are kept from this connection"
+                    if _rules.words_held(item, provenance.reader(), c.data) else None)
         except Exception:
             return "private"
     if c is None or section in ("rules", "priorities", "corrections"):
@@ -433,6 +434,16 @@ def _row(section: str, item: dict, change: str | None = None, c=None) -> dict:
     if change:
         r["change"] = change
     return r
+
+
+def _readable(c, section: str, item: dict) -> bool:
+    """May whoever asks read this item's words (G2, round 9)? An engine's
+    words match only what it may read — through what release would show it
+    (_shown) — so no search over his life tells it what it may not see. The
+    owner at his own keyboard reads everything."""
+    if not _engine() or c is None:
+        return True
+    return _can_read(section) and _kept_from_reader(c, section, item) is None
 
 
 def refusal(tool: str, reason: str, tell: str | None = None) -> dict:
@@ -482,9 +493,10 @@ class Plan:
 
 def _plan(data: dict, section: str, contains, ids, fields, *,
           eligible: Callable | None = None,
-          update: Callable | None = None) -> Plan | str:
+          update: Callable | None = None, c=None) -> Plan | str:
     """By ids, or by an exact id given as the words, or by whole words in the
-    item's own text fields."""
+    item's own text fields — for an engine, only in what it may read, as
+    release would show it (G2, round 9)."""
     plan = Plan()
     ids = _ids(ids)
     s = contains.strip() if isinstance(contains, str) else ""
@@ -513,6 +525,8 @@ def _plan(data: dict, section: str, contains, ids, fields, *,
     for it in _items(data, section):
         if eligible and not eligible(it):
             continue
+        if not _readable(c, section, it):
+            continue
         if any(w(_shown(x)) for f in fields for x in _strs(it.get(f))):
             add(it)
     return plan
@@ -528,27 +542,33 @@ def _shown(text: str) -> str:
     return egress.shown_text(text)
 
 
-def _mentions(data: dict, plan: Plan, terms: list[str]) -> None:
-    """What else still names it, so the owner hears it — never removed here."""
+def _mentions(data: dict, plan: Plan, terms: list[str], c=None) -> None:
+    """What else still names it, so the owner hears it — never removed here.
+    For an engine, only what it may read, as release would show it (G2,
+    round 9: forget_life('4821') named 'My bank PIN is [hidden…]' here, and
+    forget_life('4822') nothing — a PIN confirmed)."""
     ws = [Words(t) for t in terms if t and not too_vague(t)]
     if not ws:
         return
-    changed = {(c["section"], c["id"]): c for c in plan.changes}
+    changed = {(ch["section"], ch["id"]): ch for ch in plan.changes}
     for sec in MENTION_SECTIONS:
         for it in _items(data, sec):
-            c = changed.get((sec, _id(sec, it)))
-            if c and c["action"] == "remove":
+            ch = changed.get((sec, _id(sec, it)))
+            if ch and ch["action"] == "remove":
                 continue
-            look = c["after"] if c else it
-            if any(w(s) for w in ws for p, s in _leaves(look) if p[:1] != ("path",)):
+            if not _readable(c, sec, it):
+                continue
+            look = ch["after"] if ch else it
+            if any(w(_shown(s)) for w in ws for p, s in _leaves(look) if p[:1] != ("path",)):
                 plan.mention(sec, it)
 
 
-def plan_life(data: dict, contains, ids) -> Plan | str:
+def plan_life(data: dict, contains, ids, c=None) -> Plan | str:
     """forget_life: a person by exact name or id (with the moments and
     pictures that are about them), or moments and pictures by id or by whole
     words in what was said about them. Never a person by part of a name, and
-    never a picture by the folder it sits in."""
+    never a picture by the folder it sits in. For an engine, only what it may
+    read, as release would show it (G2, round 9)."""
     plan = Plan()
     ids = _ids(ids)
     s = contains.strip() if isinstance(contains, str) else ""
@@ -575,9 +595,11 @@ def plan_life(data: dict, contains, ids) -> Plan | str:
         if bad:
             return bad
         key = _squash(s)
-        persons = [p for p in _items(data, "people") if _squash(p.get("name", "")) == key]
+        persons = [p for p in _items(data, "people") if _squash(p.get("name", "")) == key
+                   and _readable(c, "people", p)]
         listed = any(_squash(n) == key for sec in ("memories", "media")
-                     for it in _items(data, sec) for n in _strs(it.get("people")))
+                     for it in _items(data, sec) if _readable(c, sec, it)
+                     for n in _strs(it.get("people")))
         if persons or listed:
             for p in persons:
                 plan.remove("people", p)
@@ -587,22 +609,27 @@ def plan_life(data: dict, contains, ids) -> Plan | str:
             for sec, fields in (("memories", ("text", "when", "tags")),
                                 ("media", ("caption", "when", "tags"))):
                 for it in _items(data, sec):
-                    if any(w(_shown(x)) for f in fields for x in _strs(it.get(f))):
+                    if _readable(c, sec, it) and any(
+                            w(_shown(x)) for f in fields for x in _strs(it.get(f))):
                         plan.remove(sec, it)
     for name in names:
-        _cascade(data, plan, name)
+        _cascade(data, plan, name, c)
     plan.names = names
-    _mentions(data, plan, names + ([s] if s and not names else []))
+    _mentions(data, plan, names + ([s] if s and not names else []), c)
     return plan
 
 
-def _cascade(data: dict, plan: Plan, name: str) -> None:
+def _cascade(data: dict, plan: Plan, name: str, c=None) -> None:
     """A forgotten person's moments and pictures. One that is about them
     alone goes with them; one shared with other people stays, with their
-    name taken off it — and if its words still name them, the owner is told."""
+    name taken off it — and if its words still name them, the owner is told.
+    For an engine, only those it may read (G2, round 9): what it may not
+    read stays, for him to forget himself."""
     key, w = _squash(name), Words(name)
     for sec, fields in (("memories", ("text", "tags")), ("media", ("caption", "tags"))):
         for it in _items(data, sec):
+            if not _readable(c, sec, it):
+                continue
             people = _strs(it.get("people"))
             in_people = any(_squash(n) == key for n in people)
             in_words = any(w(x) for f in fields for x in _strs(it.get(f)))
@@ -806,15 +833,28 @@ def _legacy(tool: str, changes: list[dict], done: bool) -> dict:
 
 
 def run(c: Conscience, tool: str, make_plan: Callable[[], Plan | str],
-        confirm: str = "") -> dict:
+        confirm: str = "", searched: bool = False) -> dict:
     """The one way a destructive tool runs: a code carries out what was
-    shown; anything else only shows."""
+    shown; anything else only shows. `searched`: the request names what to
+    forget by words, not ids — a search (G2, round 9): a key paused for
+    searching that finds nothing is refused, and one that finds nothing is
+    counted."""
     if isinstance(confirm, str) and confirm.strip():
         return confirm_code(c, tool, confirm)
+    if searched:
+        paused = c.search_paused(tool)
+        if paused:
+            return paused
     plan = make_plan()
     if isinstance(plan, str):
         return refusal(tool, plan)
+    if searched:
+        c.search_found(bool(plan.changes))
     return ask(c, tool, plan)
+
+
+def _by_words(contains, ids) -> bool:
+    return bool(isinstance(contains, str) and contains.strip()) and not _ids(ids)
 
 
 def _engine() -> bool:
@@ -1199,8 +1239,8 @@ def _log(data: dict, description: str, outcome: str) -> None:
 
 # ------------------------------------------------------------ the tools
 def forget_facts(c: Conscience, contains: str = "", ids=None, confirm: str = "") -> dict:
-    return run(c, "forget", lambda: _plan(c.data, "facts", contains, ids, ("fact",)),
-               confirm)
+    return run(c, "forget", lambda: _plan(c.data, "facts", contains, ids, ("fact",), c=c),
+               confirm, searched=_by_words(contains, ids))
 
 
 def close_goals(c: Conscience, contains: str = "", ids=None, confirm: str = "") -> dict:
@@ -1208,7 +1248,8 @@ def close_goals(c: Conscience, contains: str = "", ids=None, confirm: str = "") 
         return {**g, "active": False, "closed": _cs._now()}, "marked done"
     return run(c, "close_goal", lambda: _plan(
         c.data, "goals", contains, ids, ("goal",),
-        eligible=lambda g: g.get("active"), update=done), confirm)
+        eligible=lambda g: g.get("active"), update=done, c=c), confirm,
+        searched=_by_words(contains, ids))
 
 
 def resolve_opportunities(c: Conscience, contains: str = "", outcome: str = "done",
@@ -1220,12 +1261,14 @@ def resolve_opportunities(c: Conscience, contains: str = "", outcome: str = "don
                 f"marked {outcome}")
     return run(c, "resolve_opportunity", lambda: _plan(
         c.data, "opportunities", contains, ids, ("what",),
-        eligible=lambda o: not o.get("resolved"), update=done), confirm)
+        eligible=lambda o: not o.get("resolved"), update=done, c=c), confirm,
+        searched=_by_words(contains, ids))
 
 
 def exclude(c: Conscience, contains: str = "", ids=None, confirm: str = "") -> dict:
     return run(c, "conscience_exclude", lambda: _plan(
-        c.data, "conscience_included", contains, ids, ("ref", "note")), confirm)
+        c.data, "conscience_included", contains, ids, ("ref", "note"), c=c), confirm,
+        searched=_by_words(contains, ids))
 
 
 def plan_rules(c: Conscience, rule_id_or_text: str = "", readable=None) -> Plan | str:
@@ -1278,7 +1321,8 @@ def forget_profile(c: Conscience, field: str, key: str, confirm: str = "") -> di
 
 
 def forget_life(c: Conscience, contains: str = "", ids=None, confirm: str = "") -> dict:
-    return run(c, "forget_life", lambda: plan_life(c.data, contains, ids), confirm)
+    return run(c, "forget_life", lambda: plan_life(c.data, contains, ids, c), confirm,
+               searched=_by_words(contains, ids))
 
 
 # --------------------------------------------------------- the owner's view
