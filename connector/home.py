@@ -53,7 +53,8 @@ Explicit environment variables always win (the caller chose the place):
     SELFCLOUD_ROOT             use exactly this drive (it must be a real one)
     SELFCLOUD_DRIVE_ID         the id(s) of the owner's drive(s), pinned
 
-Owner commands (his own terminal; no AI can run these):
+Owner commands (his own terminal, typing the number shown; a pipe or a
+script is refused):
     python3 connector/home.py                    where does my life live?
     python3 connector/home.py pair <drive>       this drive is mine
     python3 connector/home.py unpair <id|name>   this Mac forgets a drive
@@ -968,7 +969,10 @@ def main(argv: list[str]) -> int:
             return 1
         print(f"\n  The drive '{safe_name(mk.get('name'), r.name)}' at {r}, id {mk['id']}.")
         print("  JEFFEREY will keep your life on it and use no other drive you have not said yes to.")
-        if not answers.ask_yes_no("  Is this your own Self-Cloud drive? Type yes or no: "):
+        # pairing says which drive is his life: the owner's own yes, typed at
+        # this keyboard with the number shown (final checks: a piped 'yes'
+        # paired a planted drive)
+        if not answers.confirm_by_code(print, None, None, "If it is your own Self-Cloud drive:"):
             print("  Nothing was changed.\n")
             return 1
         pair(r, mk)
@@ -977,7 +981,7 @@ def main(argv: list[str]) -> int:
         return 0
     if argv[0] == "this-mac" and len(argv) == 1:
         print("\n  JEFFEREY will keep your memories on this Mac, in ~/.jefferey, and use no drive.")
-        if not answers.ask_yes_no("  Is that what you want? Type yes or no: "):
+        if not answers.confirm_by_code(print, None, None, "If that is what you want:"):
             print("  Nothing was changed.\n")
             return 1
         try:
@@ -998,7 +1002,7 @@ def main(argv: list[str]) -> int:
         print(f"\n  This Mac will forget the drive '{recs[0].get('name')}' (id {recs[0]['id']}).")
         print("  Nothing on the drive is touched. If it was your only drive, JEFFEREY keeps")
         print("  your life on this Mac from now on.")
-        if not answers.ask_yes_no("  Forget it? Type yes or no: "):
+        if not answers.confirm_by_code(print, None, None, "To forget it:"):
             print("  Nothing was changed.\n")
             return 1
         unpair(argv[1])

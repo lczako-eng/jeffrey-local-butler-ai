@@ -56,16 +56,16 @@ file already on the drive:
 | `.selfcloud/selfcloud.json` | the marker that makes every JEFFEREY tool find this drive on any Mac |
 | the cloud icon | the Self-Cloud logo as the drive's Finder icon (eject and re-plug if it doesn't show) |
 
-**Then encrypt it.** The drive holds the family's photographs in plain text
-until you do. The runbook is [`docs/ENCRYPT_THE_DRIVE.md`](docs/ENCRYPT_THE_DRIVE.md)
-in this repo; the short version, if the drive is already APFS: Finder →
-right-click the drive → **Encrypt "Self-Cloud"…**, choose a passphrase, write
-the passphrase on paper and put the paper somewhere that is not the drive. (No
-"Encrypt…" in the menu? The drive is a Time Machine disk — the runbook says
-what to do.)
-**Do not begin until a second copy of the photographs exists** (iCloud and the
-Mac both count). Do not cancel iCloud until two copies exist and a restore has
-been tested.
+**Then encrypt it, but first make sure a second copy of everything on the drive
+exists:** the photographs, and the hidden `.selfcloud` folder with your memories
+(iCloud and the Mac both count for photographs). Do not cancel iCloud until two
+copies exist and a restore has been tested. The drive holds the family's
+photographs in plain text until you encrypt it. The runbook is
+[`docs/ENCRYPT_THE_DRIVE.md`](docs/ENCRYPT_THE_DRIVE.md) in this repo. The short
+version, if the drive is already APFS: Finder → right-click the drive → **Encrypt
+"Self-Cloud"…**, choose a passphrase, write the passphrase on paper and put the
+paper somewhere that is not the drive. (No "Encrypt…" in the menu? It is almost
+always a Time Machine disk; the runbook says what to do.)
 
 ---
 

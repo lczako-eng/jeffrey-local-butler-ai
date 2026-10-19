@@ -788,8 +788,8 @@ def provision(volume: Path, name: str, rename: bool, force: bool,
             "you put photographs on it.\n")
     else:
         warn("JEFFEREY could NOT verify that this drive is encrypted. Check it "
-             "yourself: Finder → right-click the drive — if it offers 'Encrypt', "
-             "it is not encrypted yet.\n")
+             "yourself with step 1 of docs/ENCRYPT_THE_DRIVE.md (in this JEFFEREY "
+             "folder): it says what each kind of drive shows, and what to do.\n")
     return info
 
 

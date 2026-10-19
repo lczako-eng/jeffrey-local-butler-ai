@@ -35,9 +35,10 @@ every scenario and finding. Several claims below (the egress door being "the one
 way out", 20 snapshots buying back "weeks", the drive always winning) are
 contradicted by verified findings there — the report wins until they are fixed.
 
-**⚑ FIXES, 2026-10-16 — read §10 of the report.** Nine rounds of fixes, each
-adversarially verified in frozen copies, are on this branch (`0ec43b3..`).
-All 67 JEFFEREY-side or shared issues have a fix:
+**⚑ FIXES, 2026-10-16 (corrected 2026-10-19) — read §10 of the report.** Nine
+rounds of fixes are on this branch (`0ec43b3..`). Each was adversarially verified in
+frozen copies, then two final independent checks ran (a skeptic and a fact-checker),
+and what they found was fixed too. All 67 JEFFEREY-side or shared issues have a fix:
 
 - 52 fully fixed;
 - 5 fixed with a tail of unusual wordings still missed: I-07, I-13, I-24,
@@ -45,14 +46,24 @@ All 67 JEFFEREY-side or shared issues have a fix:
 - 10 partly fixed, each remainder named in §10: I-11, I-17, I-18, I-21, I-42,
   I-43, I-44, I-53, I-54 and I-56.
 
-The rule is now in code, decided by who wrote something: an AI's writes wait
-for the owner's `/confirm`. An AI can narrow, never widen. Confirming needs a
-person at the terminal. His home is never "act". Before you change anything,
-read `tests/test_his_own.py` and the `TheDecisionsThatStand` tests: they pin
-the fail-safe choices. Of the 55 missing capabilities, 5 are built, 21 are
-partly built and 23 are absent. The biggest absent ones are the backup
-verifier and the iCloud dedup pipeline. Nothing has been run on a real Mac
-since the fixes.
+The rule is now in code, decided by who wrote something: an AI's writes wait for
+the owner's `/confirm`. An AI can narrow, never widen. A yes reaches only a reader's
+own name or the exact name of someone he recorded. Owner confirmations need the
+keyboard number (not a shell: no AI may run commands on his Mac). His home is never
+"act". Before you change anything, read `tests/test_his_own.py` and the
+`TheDecisionsThatStand` tests in `tests/test_round8_repair.py`: they pin the
+fail-safe choices.
+
+Of the 55 capabilities §6 listed as missing (53 confirmed), the 2026-10-15 audit,
+made before rounds 8 and 9, found:
+
+- 5 built, 1 of them there already;
+- 21 partly built;
+- 23 absent;
+- 6 not JEFFEREY's.
+
+The biggest absent ones are the backup verifier and the iCloud dedup pipeline.
+Nothing has been run on a real Mac since the fixes.
 
 **ADVERSARIALLY AUDITED 2026-09-15**, under your rule 6.4. Seven attackers,
 each required to produce a repro they actually ran; 48 findings raised, 31

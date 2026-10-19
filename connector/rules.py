@@ -305,7 +305,7 @@ VENDOR_NAMES = frozenset({"ai", "an ai", "any ai", "engines", "engine", "ais", "
                           "claude", "openai", "chatgpt", "gpt", grounding.AI_READER})
 
 
-def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
+def held_back(data: dict, audiences, text: str = "", tags=(), yes_to=None) -> dict | None:
     """Does one of the owner's rules keep this (a fact, a moment, a person,
     a picture) from whoever is reading? The rule that does, or None. Only a
     rule that says no holds anything back here: what reaches a reader at all
@@ -317,7 +317,15 @@ def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
     his diabetes over Claude despite 'never share my health with anyone',
     while the same key over ChatGPT was refused). An engine is always one of
     the readers (D1): a no that names any AI holds for every key that
-    reaches one, his caretaker key too, whatever yes there is."""
+    reaches one, his caretaker key too, whatever yes there is.
+
+    `yes_to`, when given, is the only set of names a YES may meet: the
+    readers as they are, and the people HE recorded whose names they are
+    exactly. `audiences` may be wider — a relationship, a word of a name, a
+    person an AI wrote down — but that width is for a NO only (final checks:
+    a family key whose aliases took in an AI-recorded 'Karen Novak, family'
+    read past 'Never tell anyone when I travel' through his 'Karen may
+    know')."""
     # every reading of each reader's name meets a no; only the names whose
     # readings agree meet a yes (round 9, second repair)
     readings = [grounding.norm_audiences(a) for a in audiences or () if a]
@@ -330,6 +338,8 @@ def held_back(data: dict, audiences, text: str = "", tags=()) -> dict | None:
         if rule:
             return rule
     people = aud - VENDOR_NAMES
+    if yes_to is not None:
+        readings = [grounding.norm_audiences(a) for a in yes_to or () if a]
     sure = frozenset(x for rs in readings if len(rs) == 1 for x in rs) - VENDOR_NAMES
     if people:
         ok, rule, _ = verdict(data, people, sure, hit)

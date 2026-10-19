@@ -3,15 +3,18 @@
 Your drive holds your life: your memories, your photographs, your voice. Until it
 is encrypted, anyone who picks it up — in a car, at a border, after a break-in —
 can read all of it on any computer. Encrypting it takes an afternoon, needs no
-code, and is the single most useful thing you can do for it.
+programming (a few steps ask you to paste one line into Terminal), and is the
+single most useful thing you can do for it.
 
-JEFFEREY checks this for you. `Make this drive a Self-Cloud.command` and
-`python3 tools/install.py --check` both say whether the drive is
-encrypted, or that they **could not verify** it. If either says it is not, come here.
+JEFFEREY checks this for you. `Make this drive a Self-Cloud.command` always says
+whether the drive is encrypted, or that it **could not verify** it. With the drive
+plugged in and in use on a Mac, `cd ~/JEFFEREY && python3 tools/install.py --check`
+says the same. If either says it is not encrypted, or could not verify it, come here.
 
 > **Mac only, for now.** JEFFEREY runs on a Mac today. On Windows (BitLocker To
 > Go) or Linux (LUKS) a drive can be encrypted, but JEFFEREY cannot check it
-> there, so it will say "could not verify".
+> there: the drive launcher will say "could not verify", and `install.py --check`
+> says nothing about encryption.
 
 ---
 
@@ -23,6 +26,11 @@ the photographs there** ("I moved them" is not a check). Encryption that goes
 wrong on a drive that holds the only copy is exactly the loss this product
 exists to prevent. Do not cancel iCloud until step 5 passes.
 
+**Everything includes the hidden `.selfcloud` folder.** That is where JEFFEREY
+keeps your memories, your voice and the record of what left the house. Finder
+hides it: in the drive's window press **Cmd-Shift-.** (the full stop) to show it,
+and copy it with the rest. Ask someone you trust if you are unsure.
+
 ## 1. Find out what kind of drive it is
 
 Open **Terminal** and type (your drive's name may differ):
@@ -30,6 +38,9 @@ Open **Terminal** and type (your drive's name may differ):
 ```sh
 diskutil info /Volumes/Self-Cloud | grep -i "personality\|encrypted\|filevault"
 ```
+
+If your drive's name has spaces, put the whole path in quotes, here and in every
+command below: `diskutil info "/Volumes/My Passport"`.
 
 | What it says | What you do |
 |---|---|
@@ -90,7 +101,11 @@ has been released (System Settings → General → Time Machine → select the d
 4. Double-click **`Make this drive a Self-Cloud.command`** again. The erase
    removed the drive's Self-Cloud folders and marker; this puts them back. **The
    drive gets a new id**, and the launcher pairs it with this Mac again.
-5. Copy your photographs back, and open a few from the drive before deleting
+5. **Before you start JEFFEREY, put your memories back.** Copy the `jefferey`
+   folder from inside the second copy's hidden `.selfcloud` folder into the
+   drive's `.selfcloud` folder (Cmd-Shift-. shows hidden folders). Without it,
+   JEFFEREY starts with no memories. Ask someone you trust if you are unsure.
+6. Copy your photographs back, and open a few from the drive before deleting
    anything anywhere else.
 
 ## 3. The passphrase — where people really lose everything
@@ -117,7 +132,8 @@ on, and keep its recovery key the same way as the passphrase.
    both.
 2. `diskutil info /Volumes/Self-Cloud` says `FileVault: Yes`. On current macOS
    an APFS drive may print no `Encrypted:` line at all; that is normal.
-3. `python3 tools/install.py --check` says the drive is encrypted.
+3. In Terminal, `cd ~/JEFFEREY && python3 tools/install.py --check` says the
+   drive is encrypted.
 4. Open a handful of photographs from the drive and compare them with the
    second copy.
 

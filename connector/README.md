@@ -262,6 +262,27 @@ Round 9, last fixes (what the confirm check of the second repair found):
   ex⠀wife' all meet a no for his ex-wife (`grounding.same_relationship`; a
   no only).
 
+After the two final checks of the last fixes:
+
+- **A yes meets only exact names of people he recorded.** `rules.held_back`
+  takes `yes_to`: the reader's own names and the strict aliases from
+  `provenance.his_people`. `life._view` keeps the broad aliases (every recorded
+  person, a relationship, a word of a name) for a NO only. Before, an AI-recorded
+  'Karen Novak, family' let his yes for Karen beat 'Never tell anyone' for the
+  family key.
+- **The bank's own accents are not a disguise.** `guardian._marked_unlike`
+  reads token by token. Only a token that holds one of his words (or the start of
+  one, as in 'ADHÉS') is checked, and every mark in it must be his at its place.
+  A city or 'LTÉE' is the bank's own. One-letter words of his ('à') explain
+  nothing, and a mark with no letter under it is never his.
+- **Numbers in any words.** `guess_shaped` reads the teens, 'dozen', French
+  teens and Roman numerals (IV, xiv) as numbers. 'one', 'un', 'sept' and 'neuf'
+  count only beside another number word. A dose, a stage, 'COVID-19' and 'the
+  3rd' are not guesses. 'heart', 'coeur' and 'dentist' are health words.
+- **Pairing a drive wants the keyboard.** `home.py pair`, `unpair` and
+  `this-mac` ask for the number shown (a piped 'yes' paired a planted drive).
+  Pairing inside the installer and the drive launcher still takes a typed yes.
+
 **Confirmation needs a person.** The owner's own command-line confirmations —
 `conscience.py confirm` and `restore`, `forgetting.py approve`, `erase` and
 `bring-back`, `guardian.py review`, `egress.py open` and `keep` — refuse unless

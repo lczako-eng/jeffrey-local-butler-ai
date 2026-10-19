@@ -474,22 +474,31 @@ class Life:
         # a no for any AI holds for every engine reader (D1); his rules about
         # people govern every key but his own
         aud: set = set(rd["audiences"])
+        yes: set = set(rd["audiences"])
         if rd.get("people_rules"):
+            # a NO meets every way the reader is written, through anyone
+            # recorded (an AI's people too: a no only narrows); a YES meets
+            # only the reader as named and the people HE recorded by their
+            # exact name (final checks: an AI-recorded 'Karen Novak, family'
+            # let his yes for Karen beat 'Never tell anyone')
             broad, _ = grounding.audience_aliases(client, self.c.data.get("people") or [])
+            _, strict = grounding.audience_aliases(client, provenance.his_people(self.c.data))
             aud |= set(broad)
-            if ceiling == "family":
-                aud.add("family")
-            if ceiling == "legacy":
-                aud.add("executor")
-        return {"rd": rd, "levels": levels, "audiences": aud, "ceiling": ceiling,
-                "full": ceiling in ("private", "self")}
+            yes |= set(strict)
+            for extra in (("family",) if ceiling == "family" else ()) + (
+                    ("executor",) if ceiling == "legacy" else ()):
+                aud.add(extra)
+                yes.add(extra)
+        return {"rd": rd, "levels": levels, "audiences": aud, "yes_to": yes,
+                "ceiling": ceiling, "full": ceiling in ("private", "self")}
 
     def _rule(self, v: dict, text: str, tags) -> bool:
         if not v["audiences"]:
             return False
         import rules
         tags = list(tags) + grounding.sensitivity(text)
-        return rules.held_back(self.c.data, v["audiences"], text, tags) is not None
+        return rules.held_back(self.c.data, v["audiences"], text, tags,
+                               yes_to=v.get("yes_to")) is not None
 
     def _moments(self, v: dict) -> tuple[list[dict], int]:
         out, held = [], 0
