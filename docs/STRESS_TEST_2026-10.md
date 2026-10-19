@@ -648,38 +648,56 @@ words mean:
 - **Your words are made only by your hands.** Anything an AI writes waits as
   "noted by the AI, not yet confirmed by him" until you confirm it yourself: type
   `/confirm` in *Talk to JEFFEREY on this Mac* (not in Claude: typed there, it goes
-  to the AI, which cannot confirm), or in Terminal: `cd ~/JEFFEREY && python3
-  connector/conscience.py confirm`. That covers facts, memories, priorities, rules,
+  to the AI, which cannot confirm; the first time, that window asks you to install
+  Ollama and downloads about 5 GB, so until then use the Terminal line), or in
+  Terminal: `cd ~/JEFFEREY && python3 connector/conscience.py confirm`. That covers facts, memories, priorities, rules,
   your profile, your people and your goals. Until then it is used, labelled, at
   reduced confidence, and never put in your own boxes on a form.
 - **An AI can narrow, never widen.** It can add a "no" at once. A "yes", taking a
   "no" away, a key, a permission or a spending limit is only ever a proposal. A
-  "yes" reaches a reader only by that reader's own name, or the exact name of
-  someone you recorded yourself, never through someone an AI wrote down.
+  "yes" reaches a key only when it names that key: the key's own name or, for a
+  key named after someone you recorded yourself, that person as you recorded
+  them. A yes for Karen never reaches your family's key, even if you recorded
+  Karen as family, and nobody an AI wrote down ever widens a yes. A "no" reaches
+  every way someone is written (a relationship, a first or last name), the same on
+  every surface.
 - **Confirming needs the keyboard.** These work only when someone at this Mac's
   keyboard types a number shown at that moment, and `--yes` and piped answers are
-  refused: making an AI's notes yours, restoring, forgetting, erasing, widening
-  anything, and pairing or forgetting a drive with `connector/home.py`. Smaller
-  steps take a typed yes: switching a key off, sealing, and pairing a drive inside
-  the installer or the drive launcher. A program that can run commands on your Mac
-  can still get past all of this. Never let an AI run commands on your Mac. Touch
-  ID (I-43) is what will close it.
+  refused: making an AI's notes yours, editing your memories by hand, restoring a
+  copy, approving a forget an AI asked for, bringing something back, erasing words
+  for good, letting the words of old sends go, opening the door again, saying yes
+  to a charge, every `/permit`, `/grant`, `/scope add`, `/share` (except private)
+  and `/legacy open`, and pairing or forgetting a drive with `connector/home.py`.
+  Smaller steps take a typed yes: switching a key off, removing a kind of access,
+  sealing, making something private, keeping a note with `/remember`, and pairing
+  a drive or moving your memories inside the installer or the drive launcher.
+  Deleting a voice asks you to type the name. Making a new drive with
+  `tools/provision_drive.py` pairs it without asking, and an AI may forget up to
+  three of its own unconfirmed notes by itself. A program that can run commands on
+  your Mac can get past all of this. Never let an AI run commands on your Mac.
+  Touch ID (I-43) is what will close it.
 - **Forgetting is safe.** Nothing is wiped by an empty or short word. Forgetting is
   two steps, goes to a trash you can bring back from, and anything that is yours
-  needs you. A real erase reaches JEFFEREY's record of what left, its safety copies
-  and its removed list, and tells you what the AI companies may still hold. It
-  cannot reach copies outside JEFFEREY, such as Time Machine or another drive.
+  needs you. A real erase reaches your memories, JEFFEREY's record of what left,
+  its safety copies and its removed list, and tells you what the AI companies may
+  still hold. It does not touch your photographs, the photo index, voice
+  recordings or filled forms: delete those yourself ("Record my voice" deletes a
+  voice). It cannot reach copies outside JEFFEREY, such as Time Machine or another
+  drive.
 - **Your home is never "act".** No category about your home, its doors, keys,
   codes, alarm or cameras can be set to "act". Moving money, gift cards, crypto and
   speaking in your voice are never "act" either. A request that names getting into
   the house asks you first, under any permission. A door described in other words
   can still slip past (see the tail below).
-- **Forms** put only details you confirmed into your own boxes. They save a new copy
-  only into the "Filled forms" folder, with hidden PDF actions stripped. Secrets come
-  only from your vault. Boxes for other people (a buyer, a seller) take what the AI
-  hands in, for you to check. Boxes that sign or agree for you stay empty unless you
-  yourself have allowed paperwork at "act" (`/permit paperwork act`). Otherwise they
-  are left for you to sign.
+- **Forms** put only what you confirmed into the boxes for your own details: your
+  name, birth date, address, phone, e-mail, job and employer. Every other box takes
+  what the AI hands in, for you to check before you send the form. That means boxes
+  about other people (a buyer, a seller) and boxes about anything else (a price,
+  your income, a description). Forms save a new copy only into the "Filled forms"
+  folder, with hidden PDF actions stripped. Secrets come only from your vault.
+  Boxes that sign or agree for you stay empty unless you yourself have allowed
+  paperwork at "act" (`/permit paperwork act`). Otherwise they are left for you to
+  sign.
 - **The drive** is paired with your Mac. If it is not plugged in, JEFFEREY stops
   and says so. It never starts a second life on the laptop.
 - **The action log tells the truth.** An act that was not what you approved is
@@ -698,13 +716,29 @@ There were nine rounds. In each one:
 5. A confirm check ran everything again.
 
 After round 9, two more independent checks ran: a skeptic and a fact-checker. The
-skeptic found a real hole. Someone an AI wrote down could let one of your "yes"
+skeptic found a real hole: someone an AI wrote down could let one of your "yes"
 rules reach the family key past a "no" for anyone. It also found two regressions
-from the last fixes: your own Québec bills with an accented city on the statement
-were flagged, and some numbers written as words slipped past the guess counter.
-The fact-checker found claims in this section that promised more than the code
-does. All of it was fixed or corrected, each with a test that fails on the code
-before. Those fixes passed the full test runner.
+from the last fixes: bills for a plan you registered, written the way Québec
+statements write them (an accented city after the name, such as "HYDRO-QUÉBEC
+MONTRÉAL QC"), were flagged in testing, and some numbers written as words slipped
+past the guess counter. The fact-checker found claims in this section that
+promised more than the code does. All of it was fixed or corrected (commit
+`73eb149`), and each code fix has a test that fails on the code before.
+
+A last skeptic and fact-checker then checked those fixes. They found the hole
+closed, and four regressions in the fixes themselves:
+- a look-alike plan name could hide its accent in a separate word ("N ÉTFLIX");
+- the new words "heart", "coeur" and "dentist" made ordinary memories private
+  ("by heart", "Sacré-Coeur");
+- a guess could be dressed as a dose or a stage ("type 4800") and never be counted;
+- Roman numerals and French articles counted as guesses.
+
+They also found two older inconsistencies. A "no" held on one surface and not
+another for the same key, and a "no" for "my neighbour" did not reach a key named
+"bob". Where a fix had made things worse, it was taken back to the safer behaviour
+rather than patched further. The rest were fixed, each with a test, in the commit
+after `73eb149`. That commit passed the full test runner. No skeptic has checked it
+yet.
 
 Nothing was pushed with a failing test. The suite now has 26 test files and over
 750 tests, including frozen corpora of nearly two thousand cases. Round 6
@@ -733,7 +767,9 @@ for example:
 - a code word written as one word ("Codeword: pineapple");
 - a health condition in slang ("my ticker");
 - a door opened in other words ("Pop the back for the nurse");
-- a character from an obscure script hidden between two words.
+- a character from an obscure script hidden between two words;
+- a plan's name split by a plain space ("N ETFLIX"), which still passes as the plan;
+- the American spelling "neighbor" for a "no" you wrote as "my neighbour".
 
 These are second lines of defence. The first line is structural (above): an AI's
 words never become yours, never widen anything, and never act on your home or your
@@ -747,7 +783,8 @@ round records, for the next pass.
 **Accepted friction.** Asking first means JEFFEREY sometimes asks when it need not.
 Examples: "Let the cat in", an errand with "promo code" in it, a second gym charge
 that is probably a price rise, and the first bill under a new way of writing a
-plan's name (confirm it once and it is known). A "no" for someone you have not
+plan's name, for example "VIDÉOTRON" when you typed "Videotron" (confirm it once
+and it is known). A "no" for someone you have not
 recorded holds for everyone except your own JEFFEREY, until you record them.
 
 ### What is still not built

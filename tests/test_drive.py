@@ -224,16 +224,14 @@ class TheDriveIsWhereTheLifeIs(DriveTest):
             import shutil, jefferey_mcp as m
             first = mcp_call(m, "remember_fact", {"fact": "before the drive"})
             shutil.move(os.environ["AWAY"], os.environ["BACK"])
-            # (not a dentist: since the final checks a dentist is his health,
-            # and a health fact is private, out of the bulk read)
-            second = mcp_call(m, "remember_fact", {"fact": "Book club moved to Nov 10"})
+            second = mcp_call(m, "remember_fact", {"fact": "Dentist moved to Nov 10"})
             facts = [f["fact"] for f in mcp_call(m, "get_conscience")["facts"]]
             out({"first": first, "second": second, "facts": facts,
                  "store": str(m.conscience.path)})
         """, JEFFEREY_CLIENT="jefferey", AWAY=away, BACK=self.vols / "Self-Cloud 1")
         self.assertTrue(r["first"]["refused"])
         self.assertFalse(r["second"].get("refused"), r["second"])
-        self.assertEqual(r["facts"], ["Book club moved to Nov 10"])
+        self.assertEqual(r["facts"], ["Dentist moved to Nov 10"])
         self.assertTrue(r["store"].startswith(str(self.vols / "Self-Cloud 1")))
         self.assertEqual(self.laptop_files(), [])
 

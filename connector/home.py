@@ -869,8 +869,10 @@ def encryption_line() -> str | None:
         return "✓ your Self-Cloud drive is encrypted"
     if e is False:
         return ("! your Self-Cloud drive is NOT encrypted: whoever holds it can read "
-                "everything on it. Finder → right-click the drive → Encrypt.")
-    return "! JEFFEREY could NOT verify that your Self-Cloud drive is encrypted."
+                "everything on it. Make a second copy first, then follow "
+                "docs/ENCRYPT_THE_DRIVE.md in your JEFFEREY folder.")
+    return ("! JEFFEREY could NOT verify that your Self-Cloud drive is encrypted. Step 1 "
+            "of docs/ENCRYPT_THE_DRIVE.md in your JEFFEREY folder shows how to check.")
 
 
 # ------------------------------------------------------------------ words

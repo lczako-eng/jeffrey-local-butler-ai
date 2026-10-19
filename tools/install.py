@@ -621,7 +621,7 @@ def drive_step(offer: bool, input_fn=input) -> list[str]:
             move_life_step(p, offer, input_fn)
         else:
             say(f"    {DIM}JEFFEREY will not use it. If it is yours, run this again in Terminal "
-                f"and answer yes, or:  python3 connector/home.py pair '{p}'{OFF}")
+                f"and answer yes, or:  cd '{REPO}' && python3 connector/home.py pair '{p}'{OFF}")
     if not ids:
         try:
             chosen = bool((home._pairing() or {}).get("this_mac"))

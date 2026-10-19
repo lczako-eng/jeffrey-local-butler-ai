@@ -1223,11 +1223,13 @@ _HEALTH_LEX_PHRASES += ("my sugar", "his sugar", "her sugar", "ma pression", "sa
 _HEALTH_LEX += """
     vih demence
 """
-# Final checks: plain questions about his heart and his teeth ('how is his
-# heart', 'comment va son coeur', 'did he see the dentist') were not read as
-# health, so they were not answered by his rule and counted as guesses
+# Final checks: words that are only ever medical, so a plain question about
+# them is answered by his rule and is no guess. Not 'heart', 'coeur' or
+# 'dentist': the last check found they made 'by heart', 'Sacré-Coeur' and 'my
+# friend who is a dentist' private health, hidden even from his own JEFFEREY
 _HEALTH_LEX += """
-    heart cardiac coeur cardiaque cardiologue dentist dentists dental dentiste dentaire
+    cardiac cardiaque cardiologue ordonnance ordonnances infirmiere infirmieres
+    comprime comprimes antibiotique antibiotiques gelule gelules
 """
 _SENSE_WORDS["health"] = _SENSE_WORDS["health"] | _stems(_HEALTH_LEX)
 _SENSE_PHRASES["health"] = _SENSE_PHRASES["health"] + _HEALTH_LEX_PHRASES
@@ -1363,29 +1365,33 @@ CLASS_ALIASES = {
 # closed kind is no guess unless it carries a number; then it counts like any
 # other. (Words alone confirm nothing: a held fact is never matched.)
 _NUMBER_WORDS = frozenset(
-    "zero two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    "zero two three four five seven eight nine ten eleven twelve thirteen fourteen"
     " fifteen sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy"
     " eighty ninety hundred hundreds thousand thousands million millions dozen dozens"
-    " deux trois quatre cinq six huit dix onze douze treize quatorze quinze seize vingt"
-    " trente quarante cinquante soixante cent cents mille douzaine".split())
-# words that are numbers only beside another number ('one', 'un' and 'une'
-# are everywhere; 'sept' is September, 'neuf' is new)
-_WEAK_NUMBER_WORDS = frozenset("one un une sept neuf".split())
-_ROMAN = re.compile(r"^(?:[ivx]{2,5}|[IVX]{2,5})$")      # IV, XIV, xiv; not MD or CD
-# a number that is a medical or calendar word, not a guess: 'type 2',
-# 'COVID-19', '500 mg', 'the 3rd', 'le 2e'
+    " deux trois quatre cinq huit dix onze douze treize quatorze quinze vingt trente"
+    " quarante cinquante soixante douzaine".split())
+# words that are numbers only right beside another number word: 'one', 'un'
+# and 'une' are everywhere, 'six' and 'sept' are also French and a month,
+# 'neuf' is new, 'seize' is a verb, 'cent' and 'mille' are other words too
+_WEAK_NUMBER_WORDS = frozenset("one un une six sept neuf seize cent cents mille".split())
+# A number in a medical or calendar phrase is not a guess — but only a small
+# one (the last check: 'type 4800', '4800 mg' and '4800th' slipped past the
+# count): a type or stage of one or two digits, COVID-19, a dose of at most
+# three digits (or with a decimal), a day of the month.
 _NOT_A_GUESS = re.compile(
-    r"\b(?:type|stage|grade|level|covid|phase)[\s-]*\d+\b"
-    r"|\b\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|ug|ml|g|kg|lb|lbs|units?|iu|ui|%|mmol|mm|cm|kcal)\b"
-    r"|\b\d+(?:st|nd|rd|th|e|er|re|ème|eme)\b", re.IGNORECASE)
+    r"\b(?:type|stage|grade|level|phase)[\s-]*\d{1,2}\b(?!\d)"
+    r"|\bcovid[\s-]*19\b"
+    r"|\b(?:\d{1,3}|\d+[.,]\d+)\s*(?:mg|mcg|µg|ug|ml|g|kg|lb|lbs|units?|iu|ui|%|mmol|mm|cm|kcal)\b"
+    r"|\b(?:[12]?\d|3[01])(?:st|nd|rd|th|e|er|re|ème|eme)\b", re.IGNORECASE)
 
 
 def guess_shaped(text) -> bool:
     """Does any reading of this question carry a number — a digit of any
-    script (circled, full-width, Roman numerals included), a number word, or
-    a run of Roman numerals ('IV', 'xiv')? A dose, a stage, 'COVID-19' or a
-    date like 'the 3rd' is not a guess; a weak number word ('one', 'un',
-    'sept') counts only beside another."""
+    script (circled, full-width, Roman numeral characters included) or a
+    number word? A small dose, a stage, 'COVID-19' or a day of the month is
+    not a guess; a weak number word ('one', 'un', 'sept') counts only right
+    beside another number word. Roman numerals written in letters ('IV',
+    'II') are not read: they are 'type II' and 'an IV', not codes."""
     for r in readings(str(text or "")):
         t = _NOT_A_GUESS.sub(" ", unicodedata.normalize("NFKC", r))
         if any(unicodedata.category(ch).startswith("N") for ch in t):
@@ -1393,10 +1399,10 @@ def guess_shaped(text) -> bool:
         folded = list(_words(fold(t)))
         if any(w in _NUMBER_WORDS for w in folded + list(_words(t))):
             return True
-        if sum(1 for w in folded if w in _WEAK_NUMBER_WORDS) >= 2:
-            return True
-        if any(_ROMAN.match(w) for w in re.findall(r"[A-Za-z]+", t)):
-            return True
+        for a, b in zip(folded, folded[1:]):
+            if a in _WEAK_NUMBER_WORDS and (b in _WEAK_NUMBER_WORDS or b in _NUMBER_WORDS) \
+                    or b in _WEAK_NUMBER_WORDS and a in _NUMBER_WORDS:
+                return True
     return False
 
 
@@ -1916,6 +1922,10 @@ def _rule_names_one(audience, people=()) -> set[str]:
                 if n == pn or (nw and pw and (nw <= pw or pw <= nw)) or (
                         rel and same_relationship(n, rel)):
                     out |= {pn} | ({rel} if rel else set())
+                    # a no written by relationship ('my neighbour') meets the
+                    # words of the name too, as a no for 'Bob Smith' does
+                    # (the last check: keys 'bob' and 'smith' read past it)
+                    out |= {w for w in pw if len(w) >= 2 and w not in STOP}
                     out |= _emails_in(p.get("notes", ""))
     out.discard("")
     out.discard(SELF)

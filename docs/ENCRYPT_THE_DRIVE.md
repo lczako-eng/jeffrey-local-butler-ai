@@ -6,15 +6,16 @@ can read all of it on any computer. Encrypting it takes an afternoon, needs no
 programming (a few steps ask you to paste one line into Terminal), and is the
 single most useful thing you can do for it.
 
-JEFFEREY checks this for you. `Make this drive a Self-Cloud.command` always says
-whether the drive is encrypted, or that it **could not verify** it. With the drive
-plugged in and in use on a Mac, `cd ~/JEFFEREY && python3 tools/install.py --check`
-says the same. If either says it is not encrypted, or could not verify it, come here.
+JEFFEREY checks this for you. When `Make this drive a Self-Cloud.command` sets a
+drive up, it says whether the drive is encrypted, or that it **could not verify** it
+(run again on a drive that is already yours, it says nothing about encryption). Any
+time, with the drive plugged in and in use on a Mac, `cd ~/JEFFEREY && python3
+tools/install.py --check` says the same. If either says it is not encrypted, or could not verify it, come here.
 
 > **Mac only, for now.** JEFFEREY runs on a Mac today. On Windows (BitLocker To
 > Go) or Linux (LUKS) a drive can be encrypted, but JEFFEREY cannot check it
-> there: the drive launcher will say "could not verify", and `install.py --check`
-> says nothing about encryption.
+> there: the drive launcher will say "could not verify" when it sets the drive
+> up, and `install.py --check` says nothing about encryption.
 
 ---
 
@@ -101,10 +102,16 @@ has been released (System Settings → General → Time Machine → select the d
 4. Double-click **`Make this drive a Self-Cloud.command`** again. The erase
    removed the drive's Self-Cloud folders and marker; this puts them back. **The
    drive gets a new id**, and the launcher pairs it with this Mac again.
-5. **Before you start JEFFEREY, put your memories back.** Copy the `jefferey`
-   folder from inside the second copy's hidden `.selfcloud` folder into the
-   drive's `.selfcloud` folder (Cmd-Shift-. shows hidden folders). Without it,
-   JEFFEREY starts with no memories. Ask someone you trust if you are unsure.
+5. **Before you open Claude or any JEFFEREY window, put your memories back.** In
+   the drive's window press Cmd-Shift-. (the full stop) to show hidden folders,
+   open `.selfcloud`, and drag in the `jefferey` folder from the second copy's
+   `.selfcloud` folder. Finder says a `jefferey` folder is already there: choose
+   **Replace** (not Keep Both). Then tell this Mac again that the re-made drive is
+   yours, because the folder you copied carries the old drive's pairing: in
+   Terminal, `cd ~/JEFFEREY && python3 connector/home.py pair /Volumes/Self-Cloud`,
+   and type the number it shows. Without both steps, JEFFEREY starts with no
+   memories, or stays off saying the drive is a copy. Ask someone you trust if you
+   are unsure.
 6. Copy your photographs back, and open a few from the drive before deleting
    anything anywhere else.
 

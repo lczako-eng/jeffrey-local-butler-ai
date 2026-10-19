@@ -42,6 +42,7 @@ import time
 
 import forgetting
 import grounding
+import functools
 import provenance
 
 KINDS = ("disclosure", "reaction", "representation")
@@ -305,6 +306,40 @@ VENDOR_NAMES = frozenset({"ai", "an ai", "any ai", "engines", "engine", "ais", "
                           "claude", "openai", "chatgpt", "gpt", grounding.AI_READER})
 
 
+def _people_key(people) -> tuple:
+    return tuple((str(p.get("name") or ""), str(p.get("relationship") or ""),
+                  str(p.get("notes") or ""), provenance.his(p))
+                 for p in people or () if isinstance(p, dict))
+
+
+@functools.lru_cache(maxsize=4096)
+def _aliases_for(name: str, people_key: tuple) -> tuple[frozenset, frozenset]:
+    everyone = [{"name": n, "relationship": r, "notes": o} for n, r, o, _ in people_key]
+    his = [{"name": n, "relationship": r, "notes": o} for n, r, o, h in people_key if h]
+    wide, _ = grounding.audience_aliases(name, everyone)
+    _, exact = grounding.audience_aliases(name, his)
+    return frozenset(wide), frozenset(exact)
+
+
+def _reader_aliases(names, data) -> tuple[set, set]:
+    """(every name a NO may meet them by, every name a YES may) for these
+    readers, through the people recorded in his life story. An AI never
+    names a reader: 'any AI' and the engines' own names are left as they
+    are."""
+    key = _people_key((data or {}).get("people"))
+    wide: set = set()
+    exact: set = set()
+    if not key:
+        return wide, exact
+    for a in names:
+        if a in VENDOR_NAMES or grounding.names_ai(a):
+            continue
+        w, e = _aliases_for(str(a), key)
+        wide |= w
+        exact |= e
+    return wide, exact
+
+
 def held_back(data: dict, audiences, text: str = "", tags=(), yes_to=None) -> dict | None:
     """Does one of the owner's rules keep this (a fact, a moment, a person,
     a picture) from whoever is reading? The rule that does, or None. Only a
@@ -326,9 +361,19 @@ def held_back(data: dict, audiences, text: str = "", tags=(), yes_to=None) -> di
     a family key whose aliases took in an AI-recorded 'Karen Novak, family'
     read past 'Never tell anyone when I travel' through his 'Karen may
     know')."""
-    # every reading of each reader's name meets a no; only the names whose
-    # readings agree meet a yes (round 9, second repair)
-    readings = [grounding.norm_audiences(a) for a in audiences or () if a]
+    # Every surface reads a reader the same way (the last check: a key named
+    # 'exwife' was held back from a moment on /life, yet /basis gave it the
+    # fact). A NO meets every way the reader is written, through anyone
+    # recorded — a relationship, the words of a name, an AI's people too, for
+    # a no only narrows; a YES meets the reader as named and the people HE
+    # recorded by their exact name.
+    own_names = set(a for a in audiences or () if a)
+    wide, exact = _reader_aliases(own_names, data)
+    if yes_to is None:
+        yes_to = own_names
+    yes_to = set(yes_to) | exact
+    audiences = own_names | wide
+    readings = [grounding.norm_audiences(a) for a in audiences if a]
     aud = frozenset().union(*readings) - {""} if readings else frozenset()
     if not aud:
         return None

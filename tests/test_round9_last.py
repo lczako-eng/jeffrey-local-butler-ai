@@ -241,6 +241,12 @@ class L5TheBanksOwnAccentsAreNotADisguise(HisOwnTest):
                 "fake LA moved": one("L\u00c0 PRESSE ABONNEMENT", LP, 30.0),
                 "fake lead mark": one("\u0301NETFLIX.COM", "Netflix", 18.99),
                 "fake accent moved": one("HYDRO-QUEB\u00c9C", HQ, 80.0),
+                # the last check: a marked letter in a token of its own passed
+                "fake split N": one("N \u00c9TFLIX", "Netflix", 18.99),
+                "fake split LIX": one("NETF L\u00cfX", "Netflix", 18.99),
+                "fake split CAA": one("CAA-QUEB \u00c9C", CAA, 95.0),
+                "real LE DEVOIR LEVIS": one("LE DEVOIR L\u00c9VIS", "Le Devoir", 25.0),
+                "real HQ preautorise": one("HYDRO-QU\u00c9BEC PR\u00c9AUTORIS\u00c9", HQ, 80.0),
             })
         """)
         for k, v in r.items():
@@ -255,18 +261,30 @@ class L6ANumberInAnyWordsIsANumber(HisOwnTest):
             out({"yes": [g.guess_shaped(q) for q in (
                     "my health and the code thirteen fifteen", "my health and the code one one",
                     "ma sant\u00e9 et le code quinze seize", "my health and a dozen",
-                    "my health and the code IV", "my money and the code xiv")],
+                    # the last check: a number dressed as a dose, a stage or a day
+                    "my health and my boat number type 4800", "my health and 4800 mg",
+                    "my health and 4800th", "my health and level 4800")],
                  "no": [g.guess_shaped(q) for q in (
                     "is his type 2 diabetes under control", "did he get his COVID-19 booster",
                     "is he still on 500 mg of metformin", "did he see the doctor on the 3rd",
                     "does he take one pill", "a-t-il un nouveau m\u00e9decin",
-                    "est-ce que son m\u00e9decin est neuf")],
+                    "est-ce que son m\u00e9decin est neuf",
+                    # the last check: Roman numerals are medical, articles are words
+                    "is his type II diabetes under control", "is he getting an IV at the hospital",
+                    "a-t-il un m\u00e9decin de famille et une pharmacie",
+                    "does he take one pill in the morning and one at night",
+                    "did his back seize up")],
                  "health": [g.sensitivity(q) for q in (
-                    "how is his heart", "comment va son coeur", "did he see the dentist")]})
+                    "his cardiac rehab", "a-t-il une ordonnance pour un antibiotique",
+                    "prend-il ses comprim\u00e9s le soir")],
+                 "not health": [g.sensitivity(q) for q in (
+                    "Visited the Sacr\u00e9-Coeur in Paris with Anna",
+                    "She knows the poem by heart", "Lunch with my friend who is a dentist")]})
         """)
-        self.assertEqual(r["yes"], [True] * 6, r["yes"])
-        self.assertEqual(r["no"], [False] * 7, r["no"])
+        self.assertEqual(r["yes"], [True] * 8, r["yes"])
+        self.assertEqual(r["no"], [False] * 12, r["no"])
         self.assertEqual(r["health"], [["health"]] * 3, r["health"])
+        self.assertEqual(r["not health"], [[]] * 3, r["not health"])
 
 
 class L7PairingADriveWantsTheKeyboard(HisOwnTest):
@@ -294,6 +312,43 @@ class L7PairingADriveWantsTheKeyboard(HisOwnTest):
         rc, screen = at_the_keyboard.run(cmd, env, self.tmp)
         self.assertEqual(rc, 0, screen)
         self.assertIn("0123456789abcdef", Path(env["JEFFEREY_DRIVES"]).read_text())
+
+
+class L8ANoHoldsTheSameOnEverySurface(HisOwnTest):
+
+    def test_a_no_by_name_or_relationship_holds_on_life_and_basis_alike(self):
+        TB = "tokB-bobkey-0123456789abcdefghijklmnopq"
+        toks = TOKENS + f",exwife:{TX},bob:{TB}"
+        r = self.py(code=f"""
+            import os
+            os.environ["JEFFEREY_HTTP_TOKENS"] = {toks!r}
+            import jefferey_http as h, access
+            from fastapi.testclient import TestClient
+            c = TestClient(h.app)
+            TX, TB = {TX!r}, {TB!r}
+            def seen(tok):
+                fresh(); h.conscience.refresh()
+                life = c.get("/life", headers=H(tok)).json()
+                basis = c.get("/basis", params={{"topic": "travel Lisbon"}}, headers=H(tok)).json()
+                return {{"moments": [x.get("text") for x in life.get("moments", [])],
+                         "life facts": [x.get("fact") for x in life.get("facts", [])],
+                         "basis": [x.get("fact") for x in basis.get("facts", [])]}}
+            with access.owner_console():
+                h.life.add_person("Karen Novak", "ex-wife", notes="karen.novak@example.com")
+                h.life.add_person("Bob Smith", "neighbour")
+                h.rules.set_rule("disclosure", "travel", "Never tell Karen when I travel",
+                                 audience="Karen Novak", allow=False)
+                h.rules.set_rule("disclosure", "travel", "Never tell my neighbour when I travel",
+                                 audience="my neighbour", allow=False)
+                h.life.add_memory("Flying to Lisbon on the third.", tags="travel",
+                                  visibility="family")
+                h.conscience.remember_fact("I fly to Lisbon on the third", "travel")
+                for k in ("exwife", "bob"):
+                    h.cloud.grant(k, ["life.read", "facts.read", "priorities.read"])
+            out({{"exwife": seen(TX), "bob": seen(TB)}})
+        """)
+        for k, v in r.items():
+            self.assertEqual(v, {"moments": [], "life facts": [], "basis": []}, (k, v))
 
 
 if __name__ == "__main__":

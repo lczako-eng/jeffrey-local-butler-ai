@@ -37,8 +37,10 @@ contradicted by verified findings there — the report wins until they are fixed
 
 **⚑ FIXES, 2026-10-16 (corrected 2026-10-19) — read §10 of the report.** Nine
 rounds of fixes are on this branch (`0ec43b3..`). Each was adversarially verified in
-frozen copies, then two final independent checks ran (a skeptic and a fact-checker),
-and what they found was fixed too. All 67 JEFFEREY-side or shared issues have a fix:
+frozen copies. Then two rounds of final independent checks ran, each a skeptic and
+a fact-checker: what the first found was fixed in `73eb149`, and what the second
+found in the commit after it. That last commit passed the full runner; no skeptic
+has tried to break it yet. All 67 JEFFEREY-side or shared issues have a fix:
 
 - 52 fully fixed;
 - 5 fixed with a tail of unusual wordings still missed: I-07, I-13, I-24,
@@ -48,9 +50,14 @@ and what they found was fixed too. All 67 JEFFEREY-side or shared issues have a 
 
 The rule is now in code, decided by who wrote something: an AI's writes wait for
 the owner's `/confirm`. An AI can narrow, never widen. A yes reaches only a reader's
-own name or the exact name of someone he recorded. Owner confirmations need the
-keyboard number (not a shell: no AI may run commands on his Mac). His home is never
-"act". Before you change anything, read `tests/test_his_own.py` and the
+own name or the exact name of someone he recorded; a no reaches every way a
+reader is written, through `rules.held_back`, the same on every surface.
+Confirmations that make an AI's notes his, restore, approve a forget, erase or widen
+need the keyboard number. Smaller ones take a typed yes: /revoke, /legacy seal,
+/remember, /share private, /scope remove, and pairing a marked drive or moving his
+life in the installer or the launcher. Voice deletion takes the typed name, and
+`tools/provision_drive.py <drive>` pairs with no question. None of it stops a
+shell: no AI may run commands on his Mac. His home is never "act". Before you change anything, read `tests/test_his_own.py` and the
 `TheDecisionsThatStand` tests in `tests/test_round8_repair.py`: they pin the
 fail-safe choices.
 

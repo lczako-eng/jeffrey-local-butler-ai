@@ -1,7 +1,8 @@
 # Start here — the owner's steps, in order
 
-**For:** Laszlo, on the Mac, with the drive. Nothing here needs a terminal
-except one copy-paste in step 0. Everything else is a double-click.
+**For:** Laszlo, on the Mac, with the drive. Most of this is a double-click.
+A few steps (step 0, step 2, and the encryption runbook) ask you to paste a line into
+Terminal; each one is written out for you.
 **Updated:** 2026-10-14.
 
 Two products, two repos. **Self-Cloud** is the drive and the box — storage,

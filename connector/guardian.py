@@ -401,55 +401,66 @@ def _name_words(name: Any) -> list[list[tuple[str, str, str]]]:
     return [sk for sk in (_skeleton(w) for w in words) if sk]
 
 
+# Words a bank prints beside a name, with accents of its own: a Québec city, a
+# company ending, a billing word. A whole space-separated word on this list is
+# the bank's, not his name's. A closed list on purpose: a word that is only
+# LIKE one of these is read like any other word (the last check: a rule that
+# let any word outside his name keep its accents let 'N ÉTFLIX' through).
+_BANK_WORDS = frozenset("""
+    montreal quebec levis troisrivieres saintjerome stjerome jonquiere riviereduloup
+    septiles saintleonard stleonard cotesaintluc chateauguay montrealnord montrealest
+    saintetherese stetherese saintremi stremi saintefoy stefoy beauce becancour
+    sainthyacinthe sthyacinthe valdor
+    ltee limitee preautorise prelevement electronique facture recurrent mensualite
+    paiement autorise
+""".split())
+
+
 def _marked_unlike(merchant: Any, names) -> bool:
     """Does this statement name carry an accent, a mark or a letter written
     another way (full-width, circled, a Roman numeral, a dotless i) that his
-    own name for the plan does not have AT THAT PLACE, in the words that
-    carry his name? A statement may drop his accents (banks often do: 'CAA
-    QUEBEC' for 'CAA-Québec'), shorten one of his words ('ADHÉS' for
-    'adhésion'), and add words of its own (a city, 'LTÉE'); it may not add
-    an accent to his name, move one ('CAA-QUEBÉC'), or write one of its
-    letters another way (a circled Ⓝ in NETFLIX.COM). Read token by token
-    (a run with no space in it): a token that holds one of his words — or is
-    the start of one — is his name, and every mark in it must be his, at
-    its place, including the marks in what it glues on ('NETFLIX.ÇOM')."""
+    own name for the plan does not have AT THAT PLACE? A statement may drop
+    his accents (banks often do: 'CAA QUEBEC' for 'CAA-Québec'); it may not
+    add one, move one ('CAA-QUEBÉC', 'N ÉTFLIX'), or write one of his letters
+    another way (a circled Ⓝ in NETFLIX.COM). Every place is checked, in
+    every word of the statement: a marked letter must be explained by one of
+    his words (two letters or more) found there, with the same mark. The only
+    words left alone are whole words the bank adds of its own (_BANK_WORDS:
+    'MONTRÉAL', 'LÉVIS', 'LTÉE')."""
+    st: list[tuple[str, str, str]] = []
+    exempt: set[int] = set()
+    starts: list[tuple[int, str]] = []          # each word of the statement: where, what
+    for token in str(merchant or "").split():
+        words = _name_words(token)
+        bare = "".join(p[0] for w in words for p in w)
+        at = len(st)
+        for w in words:
+            starts.append((len(st), "".join(p[0] for p in w)))
+            st.extend(w)
+        if bare in _BANK_WORDS:
+            exempt.update(range(at, len(st)))
+    if all(_plain(p) for i, p in enumerate(st) if i not in exempt):
+        return False
+    seq = "".join(p[0] for p in st)
     own = [("".join(p[0] for p in sk), sk) for n in names or () for sk in _name_words(n)
            if len(sk) >= 2]
-    if not own:
-        return False
-    for token in str(merchant or "").split():
-        parts = _name_words(token)
-        if all(_plain(p) for sk in parts for p in sk):
-            continue
-        seqs = ["".join(p[0] for p in sk) for sk in parts]
 
-        def touches(seq: str) -> bool:
-            return any(w in seq or (len(seq) >= 3 and w.startswith(seq)) for w, _ in own)
-
-        if not any(touches(q) for q in seqs):
-            continue                       # the bank's own word: a city, 'LTÉE'
-        for sk, seq in zip(parts, seqs):
-            for i, p in enumerate(sk):
-                if _plain(p):
-                    continue
-                ok = False
-                for w, osk in own:
-                    starts = [0] if (len(seq) >= 3 and w.startswith(seq)) else []
-                    k = seq.find(w)
-                    while k >= 0:
-                        starts.append(k)
-                        k = seq.find(w, k + 1)
-                    for k in starts:
-                        j = i - k
-                        if 0 <= j < len(osk) and p[1] == osk[j][1] \
-                                and p[2].casefold() == osk[j][2].casefold():
-                            ok = True
-                            break
-                    if ok:
-                        break
-                if not ok:
+    def explained(i: int, p: tuple[str, str, str]) -> bool:
+        for word, sk in own:
+            # where his word is found, and where a statement word is its
+            # start ('ADHÉS' for 'adhésion': banks shorten)
+            at = [k for k, w in starts if len(w) >= 3 and w != word and word.startswith(w)]
+            k = seq.find(word)
+            while k >= 0:
+                at.append(k)
+                k = seq.find(word, k + 1)
+            for k in at:
+                if k <= i < k + len(sk) and p[1] == sk[i - k][1] \
+                        and p[2].casefold() == sk[i - k][2].casefold():
                     return True
-    return False
+        return False
+
+    return not all(_plain(p) or i in exempt or explained(i, p) for i, p in enumerate(st))
 
 
 # A registered name glued to a fee word on a statement ('PAYPAL *COSTCOMEMBER',

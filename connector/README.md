@@ -262,26 +262,37 @@ Round 9, last fixes (what the confirm check of the second repair found):
   ex⠀wife' all meet a no for his ex-wife (`grounding.same_relationship`; a
   no only).
 
-After the two final checks of the last fixes:
+After the two final checks of the last fixes, and the last check of those:
 
-- **A yes meets only exact names of people he recorded.** `rules.held_back`
-  takes `yes_to`: the reader's own names and the strict aliases from
-  `provenance.his_people`. `life._view` keeps the broad aliases (every recorded
-  person, a relationship, a word of a name) for a NO only. Before, an AI-recorded
-  'Karen Novak, family' let his yes for Karen beat 'Never tell anyone' for the
-  family key.
-- **The bank's own accents are not a disguise.** `guardian._marked_unlike`
-  reads token by token. Only a token that holds one of his words (or the start of
-  one, as in 'ADHÉS') is checked, and every mark in it must be his at its place.
-  A city or 'LTÉE' is the bank's own. One-letter words of his ('à') explain
-  nothing, and a mark with no letter under it is never his.
-- **Numbers in any words.** `guess_shaped` reads the teens, 'dozen', French
-  teens and Roman numerals (IV, xiv) as numbers. 'one', 'un', 'sept' and 'neuf'
-  count only beside another number word. A dose, a stage, 'COVID-19' and 'the
-  3rd' are not guesses. 'heart', 'coeur' and 'dentist' are health words.
+- **A no and a yes read a reader in one place.** `rules.held_back` works out,
+  for every caller on every surface, every way a NO meets a reader (through
+  anyone recorded: a relationship, a first or last name, an AI's people too),
+  and the names a YES may meet: the reader's own and the exact names of people HE
+  recorded (`_reader_aliases`, cached per people list). `life._view` passes only
+  the reader's own names. When it widened them as well, the widened names counted
+  as the reader's own, and a yes reached them. A no written by relationship ('my
+  neighbour') meets the words of that person's name.
+- **Accents are checked in every word of a statement name.** A marked letter
+  must be explained by one of his words, of two letters or more, found there with
+  the same mark, or by a statement word that is the start of one of his ('ADHÉS').
+  The only words left alone are whole words the bank adds of its own
+  (`guardian._BANK_WORDS`: Québec cities, 'LTÉE', 'PRÉAUTORISÉ'). A rule that let
+  any word outside his name keep its accents let 'N ÉTFLIX' through, so it was
+  taken back.
+- **A number is a guess unless it is clearly not.** `guess_shaped` reads digits of
+  any script, number words, the teens, 'dozen' and French teens. 'one', 'un',
+  'une', 'six', 'sept', 'neuf', 'seize', 'cent' and 'mille' count only right
+  beside another number word. A type or stage of one or two digits, COVID-19, a
+  dose of at most three digits and a day of the month are not guesses; 'type
+  4800' and '4800 mg' are. Roman numerals written in letters are not read
+  ('type II', 'an IV').
+- **Health words are only the medical ones.** cardiac, cardiaque, cardiologue,
+  ordonnance, infirmière, comprimé, antibiotique and gélule. Not 'heart', 'coeur'
+  or 'dentist': they made 'by heart' and 'Sacré-Coeur' private.
 - **Pairing a drive wants the keyboard.** `home.py pair`, `unpair` and
   `this-mac` ask for the number shown (a piped 'yes' paired a planted drive).
-  Pairing inside the installer and the drive launcher still takes a typed yes.
+  Pairing inside the installer and the drive launcher takes a typed yes, and
+  `tools/provision_drive.py <drive>` pairs a drive it makes without asking.
 
 **Confirmation needs a person.** The owner's own command-line confirmations —
 `conscience.py confirm` and `restore`, `forgetting.py approve`, `erase` and

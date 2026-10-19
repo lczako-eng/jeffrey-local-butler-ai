@@ -474,21 +474,16 @@ class Life:
         # a no for any AI holds for every engine reader (D1); his rules about
         # people govern every key but his own
         aud: set = set(rd["audiences"])
-        yes: set = set(rd["audiences"])
         if rd.get("people_rules"):
-            # a NO meets every way the reader is written, through anyone
-            # recorded (an AI's people too: a no only narrows); a YES meets
-            # only the reader as named and the people HE recorded by their
-            # exact name (final checks: an AI-recorded 'Karen Novak, family'
-            # let his yes for Karen beat 'Never tell anyone')
-            broad, _ = grounding.audience_aliases(client, self.c.data.get("people") or [])
-            _, strict = grounding.audience_aliases(client, provenance.his_people(self.c.data))
-            aud |= set(broad)
-            yes |= set(strict)
+            # only the reader's own names: rules.held_back works out, in one
+            # place for every surface, every way a NO meets them (through
+            # anyone recorded) and the exact names a YES may (only people HE
+            # recorded). Widening here as well made the widened names count
+            # as the reader's own, and a yes reached them (the last check)
             for extra in (("family",) if ceiling == "family" else ()) + (
                     ("executor",) if ceiling == "legacy" else ()):
                 aud.add(extra)
-                yes.add(extra)
+        yes = set(aud)
         return {"rd": rd, "levels": levels, "audiences": aud, "yes_to": yes,
                 "ceiling": ceiling, "full": ceiling in ("private", "self")}
 

@@ -759,7 +759,7 @@ def provision(volume: Path, name: str, rename: bool, force: bool,
                "drive you have not said yes to")
         except OSError as e:
             warn(f"this Mac could not remember the drive ({_plain_oserror(e)}); run "
-                 f"python3 connector/home.py pair '{here or volume}'")
+                 f"cd '{REPO}' && python3 connector/home.py pair '{here or volume}'")
     if move_life and here is not None:
         try:
             move_home_life(here)
