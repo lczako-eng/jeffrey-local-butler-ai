@@ -268,17 +268,22 @@ After the two final checks of the last fixes, and the last check of those:
   for every caller on every surface, every way a NO meets a reader (through
   anyone recorded: a relationship, a first or last name, an AI's people too),
   and the names a YES may meet: the reader's own and the exact names of people HE
-  recorded (`_reader_aliases`, cached per people list). `life._view` passes only
+  recorded (`_reader_aliases`, cached per people list). A no meets keys named like
+  an AI ('claude', 'alexa') too; a yes never meets a reader through an AI's or an
+  engine's name, nor through a name two of his people share. `life._view` passes only
   the reader's own names. When it widened them as well, the widened names counted
   as the reader's own, and a yes reached them. A no written by relationship ('my
   neighbour') meets the words of that person's name.
-- **Accents are checked in every word of a statement name.** A marked letter
-  must be explained by one of his words, of two letters or more, found there with
-  the same mark, or by a statement word that is the start of one of his ('ADHÉS').
-  The only words left alone are whole words the bank adds of its own
-  (`guardian._BANK_WORDS`: Québec cities, 'LTÉE', 'PRÉAUTORISÉ'). A rule that let
-  any word outside his name keep its accents let 'N ÉTFLIX' through, so it was
-  taken back.
+- **Accents are checked where his name is.** `guardian._marked_unlike` finds
+  where his name is in the statement: his whole name, his words of three letters
+  or more, and statement words that are his words or the start of one
+  ('ADHÉS'). Every space-separated word touching that, glued parts included
+  ('NETFLIX.ÇOM'), must carry only his marks at his places. A word touching none of
+  it is the bank's own ('MOBILITÉ', 'GASPÉ', 'MONTRÉAL'). A mark on no letter is
+  never his. Two earlier versions were bypassed and taken back: a token rule ('N
+  ÉTFLIX') and a closed list of bank words ('CAA QUEBÉC', because 'Québec' is also
+  his word). A fuzz of 7,170 single-accent variants of ten Québec plans finds no
+  disguise that passes.
 - **A number is a guess unless it is clearly not.** `guess_shaped` reads digits of
   any script, number words, the teens, 'dozen' and French teens. 'one', 'un',
   'une', 'six', 'sept', 'neuf', 'seize', 'cent' and 'mille' count only right

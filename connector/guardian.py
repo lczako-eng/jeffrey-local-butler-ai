@@ -362,16 +362,14 @@ def _skeleton(name: Any) -> list[tuple[str, str, str]]:
     fold reads it as, the marks that sit on it, how it is written). Spaces,
     punctuation and characters that show as nothing are left out; a letter
     the fold reads as two ('ß') is two places, the first carrying how it is
-    written. A mark with no letter before it is a place of its own, read as
-    '?' (it sits on nothing, so it is never his)."""
+    written. A mark with no letter under it is left out here; it is never
+    his, and _marked_unlike asks about it before anything else."""
     out: list[list[str]] = []
     for ch in unicodedata.normalize("NFD", str(name or "").strip().lstrip("\ufeff")):
         if unicodedata.category(ch).startswith("M"):
             if out:
                 out[-1][1] += ch
-            else:
-                out.append(["?", ch, ""])
-            continue
+            continue                     # a mark on nothing: _marked_unlike asks
         f = ch.casefold() if ch.isascii() else grounding.fold(ch, frozenset())
         f = "".join(c for c in (f or "") if c.isalnum())
         for i, c in enumerate(f):
@@ -401,66 +399,82 @@ def _name_words(name: Any) -> list[list[tuple[str, str, str]]]:
     return [sk for sk in (_skeleton(w) for w in words) if sk]
 
 
-# Words a bank prints beside a name, with accents of its own: a Québec city, a
-# company ending, a billing word. A whole space-separated word on this list is
-# the bank's, not his name's. A closed list on purpose: a word that is only
-# LIKE one of these is read like any other word (the last check: a rule that
-# let any word outside his name keep its accents let 'N ÉTFLIX' through).
-_BANK_WORDS = frozenset("""
-    montreal quebec levis troisrivieres saintjerome stjerome jonquiere riviereduloup
-    septiles saintleonard stleonard cotesaintluc chateauguay montrealnord montrealest
-    saintetherese stetherese saintremi stremi saintefoy stefoy beauce becancour
-    sainthyacinthe sthyacinthe valdor
-    ltee limitee preautorise prelevement electronique facture recurrent mensualite
-    paiement autorise
-""".split())
-
-
 def _marked_unlike(merchant: Any, names) -> bool:
     """Does this statement name carry an accent, a mark or a letter written
     another way (full-width, circled, a Roman numeral, a dotless i) that his
     own name for the plan does not have AT THAT PLACE? A statement may drop
-    his accents (banks often do: 'CAA QUEBEC' for 'CAA-Québec'); it may not
-    add one, move one ('CAA-QUEBÉC', 'N ÉTFLIX'), or write one of his letters
-    another way (a circled Ⓝ in NETFLIX.COM). Every place is checked, in
-    every word of the statement: a marked letter must be explained by one of
-    his words (two letters or more) found there, with the same mark. The only
-    words left alone are whole words the bank adds of its own (_BANK_WORDS:
-    'MONTRÉAL', 'LÉVIS', 'LTÉE')."""
+    his accents (banks often do: 'CAA QUEBEC' for 'CAA-Québec'), shorten one of
+    his words ('ADHÉS'), and add words of its own ('MONTRÉAL', 'MOBILITÉ',
+    'LTÉE'); it may not add an accent to his name, move one ('CAA-QUEBÉC'),
+    or write one of its letters another way.
+
+    Where his name is: every place covered by his whole name, by one of his
+    words of three letters or more, or by a statement word that is one of his
+    words or the start of one. Every space-separated word of the statement
+    that touches such a place — and every place in it, glued on or not
+    ('NETFLIX.ÇOM') — must carry only his marks. A word that touches none of
+    them is the bank's own, and its accents are left alone. (The last checks:
+    a rule that let a word keep its accents when it held none of his letters
+    let 'N ÉTFLIX' through, and a fixed list of the bank's words let 'CAA
+    QUEBÉC' through, because 'Québec' is also his word.)"""
+    # a mark that sits on no letter or digit — at the start, after a space or
+    # a sign — is never his (the fuzz: 'V ́IDEOTRON' broke his name apart, so
+    # no word of it looked like his and its marks were left alone)
+    prev = ""
+    for ch in unicodedata.normalize("NFD", str(merchant or "")):
+        if unicodedata.category(ch).startswith("M"):
+            if not prev or not (prev.isalnum() or (not prev.isascii()
+                                                   and grounding.fold(prev, frozenset()).isalnum())):
+                return True
+        else:
+            prev = ch
     st: list[tuple[str, str, str]] = []
-    exempt: set[int] = set()
-    starts: list[tuple[int, str]] = []          # each word of the statement: where, what
+    tokens: list[range] = []                     # each space-separated word: its places
+    starts: list[tuple[int, str]] = []           # each word inside them: where, what
     for token in str(merchant or "").split():
-        words = _name_words(token)
-        bare = "".join(p[0] for w in words for p in w)
         at = len(st)
-        for w in words:
+        for w in _name_words(token):
             starts.append((len(st), "".join(p[0] for p in w)))
             st.extend(w)
-        if bare in _BANK_WORDS:
-            exempt.update(range(at, len(st)))
-    if all(_plain(p) for i, p in enumerate(st) if i not in exempt):
+        tokens.append(range(at, len(st)))
+    if all(_plain(p) for p in st):
         return False
     seq = "".join(p[0] for p in st)
     own = [("".join(p[0] for p in sk), sk) for n in names or () for sk in _name_words(n)
            if len(sk) >= 2]
+    whole = [("".join(p[0] for w in _name_words(n) for p in w),
+              [p for w in _name_words(n) for p in w]) for n in names or ()]
 
-    def explained(i: int, p: tuple[str, str, str]) -> bool:
+    # where his name is, and how each place of it is written by him
+    aligned: dict[int, list[tuple[str, str]]] = {}
+
+    def lay(k: int, sk) -> None:
+        for j, q in enumerate(sk):
+            if 0 <= k + j < len(st):
+                aligned.setdefault(k + j, []).append((q[1], q[2].casefold()))
+
+    for word, sk in whole + [(w, sk) for w, sk in own if len(w) >= 3]:
+        if not word:
+            continue
+        k = seq.find(word)
+        while k >= 0:
+            lay(k, sk)
+            k = seq.find(word, k + 1)
+    for k, w in starts:
         for word, sk in own:
-            # where his word is found, and where a statement word is its
-            # start ('ADHÉS' for 'adhésion': banks shorten)
-            at = [k for k, w in starts if len(w) >= 3 and w != word and word.startswith(w)]
-            k = seq.find(word)
-            while k >= 0:
-                at.append(k)
-                k = seq.find(word, k + 1)
-            for k in at:
-                if k <= i < k + len(sk) and p[1] == sk[i - k][1] \
-                        and p[2].casefold() == sk[i - k][2].casefold():
-                    return True
-        return False
+            if w == word or (len(w) >= 3 and word.startswith(w)):
+                lay(k, sk[:len(w)])
 
-    return not all(_plain(p) or i in exempt or explained(i, p) for i, p in enumerate(st))
+    for places in tokens:
+        if not any(i in aligned for i in places):
+            continue                             # the bank's own word
+        for i in places:
+            p = st[i]
+            if _plain(p):
+                continue
+            if (p[1], p[2].casefold()) not in aligned.get(i, []):
+                return True
+    return False
 
 
 # A registered name glued to a fee word on a statement ('PAYPAL *COSTCOMEMBER',

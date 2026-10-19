@@ -313,31 +313,47 @@ def _people_key(people) -> tuple:
 
 
 @functools.lru_cache(maxsize=4096)
-def _aliases_for(name: str, people_key: tuple) -> tuple[frozenset, frozenset]:
+def _aliases_for(name: str, people_key: tuple, for_yes: bool) -> tuple[frozenset, frozenset]:
     everyone = [{"name": n, "relationship": r, "notes": o} for n, r, o, _ in people_key]
     his = [{"name": n, "relationship": r, "notes": o} for n, r, o, h in people_key if h]
     wide, _ = grounding.audience_aliases(name, everyone)
+    if not for_yes:
+        return frozenset(wide), frozenset()
+    # a yes meets a key through a person he recorded only when the key's name
+    # is exactly ONE person's: two of his people with one name make the key
+    # nobody in particular (the last check: 'Karen, ex-wife' and 'Karen,
+    # sister' let 'My sister may know' reach key 'karen' on every surface)
+    n = grounding.norm_audience(name)
+    if sum(1 for p in his if grounding.norm_audience(p["name"]) == n) > 1:
+        return frozenset(wide), frozenset({name, n})
     _, exact = grounding.audience_aliases(name, his)
     return frozenset(wide), frozenset(exact)
 
 
 def _reader_aliases(names, data) -> tuple[set, set]:
     """(every name a NO may meet them by, every name a YES may) for these
-    readers, through the people recorded in his life story. An AI never
-    names a reader: 'any AI' and the engines' own names are left as they
-    are."""
-    key = _people_key((data or {}).get("people"))
+    readers, through the people recorded in his life story. A NO meets every
+    reader name but 'any AI' — a key called 'claude' or 'alexa' after a
+    neighbour or a granddaughter included, for a no only narrows. A YES never
+    meets a reader through a name that is an AI's or an engine's (a person
+    recorded as 'Claude' must never open anything to Claude the AI)."""
+    names = [a for a in names if a and a != grounding.AI_READER and a not in _GENERIC_AI]
     wide: set = set()
     exact: set = set()
+    if not names:
+        return wide, exact
+    key = _people_key((data or {}).get("people"))
     if not key:
         return wide, exact
     for a in names:
-        if a in VENDOR_NAMES or grounding.names_ai(a):
-            continue
-        w, e = _aliases_for(str(a), key)
+        yes_ok = not (a in VENDOR_NAMES or grounding.names_ai(a))
+        w, e = _aliases_for(str(a), key, yes_ok)
         wide |= w
         exact |= e
     return wide, exact
+
+
+_GENERIC_AI = frozenset({"ai", "an ai", "any ai", "engines", "engine", "ais"})
 
 
 def held_back(data: dict, audiences, text: str = "", tags=(), yes_to=None) -> dict | None:

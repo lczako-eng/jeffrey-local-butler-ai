@@ -247,6 +247,15 @@ class L5TheBanksOwnAccentsAreNotADisguise(HisOwnTest):
                 "fake split CAA": one("CAA-QUEB \u00c9C", CAA, 95.0),
                 "real LE DEVOIR LEVIS": one("LE DEVOIR L\u00c9VIS", "Le Devoir", 25.0),
                 "real HQ preautorise": one("HYDRO-QU\u00c9BEC PR\u00c9AUTORIS\u00c9", HQ, 80.0),
+                # the reader check: his own word written on its own ('Québec')
+                # is his name, not the bank's; a mark on no letter is never his;
+                # an accented word the bank adds is the bank's
+                "fake CAA QUEBEC own word": one("CAA QUEB\u00c9C", "CAA-Qu\u00e9bec", 95.0),
+                "fake HQ own word": one("HYDRO QU\u00c9B\u00c8C", HQ, 80.0),
+                "fake orphan mark": one("V \u0301IDEOTRON", VT, 60.0),
+                "real BELL MOBILITE": one("BELL MOBILIT\u00c9", "Bell", 70.0),
+                "real COSTCO GASPE": one("COSTCO GASP\u00c9", "Costco", 65.0),
+                "real CAA ADHESION": one("CAA-QU\u00c9BEC ADH\u00c9SION", "CAA-Qu\u00e9bec", 95.0),
             })
         """)
         for k, v in r.items():
@@ -318,14 +327,15 @@ class L8ANoHoldsTheSameOnEverySurface(HisOwnTest):
 
     def test_a_no_by_name_or_relationship_holds_on_life_and_basis_alike(self):
         TB = "tokB-bobkey-0123456789abcdefghijklmnopq"
-        toks = TOKENS + f",exwife:{TX},bob:{TB}"
+        TC2 = "tokK-claudekey-0123456789abcdefghijkl"
+        toks = TOKENS + f",exwife:{TX},bob:{TB},claude:{TC2}"
         r = self.py(code=f"""
             import os
             os.environ["JEFFEREY_HTTP_TOKENS"] = {toks!r}
             import jefferey_http as h, access
             from fastapi.testclient import TestClient
             c = TestClient(h.app)
-            TX, TB = {TX!r}, {TB!r}
+            TX, TB, TC2 = {TX!r}, {TB!r}, {TC2!r}
             def seen(tok):
                 fresh(); h.conscience.refresh()
                 life = c.get("/life", headers=H(tok)).json()
@@ -336,6 +346,7 @@ class L8ANoHoldsTheSameOnEverySurface(HisOwnTest):
             with access.owner_console():
                 h.life.add_person("Karen Novak", "ex-wife", notes="karen.novak@example.com")
                 h.life.add_person("Bob Smith", "neighbour")
+                h.life.add_person("Claude", "neighbour")
                 h.rules.set_rule("disclosure", "travel", "Never tell Karen when I travel",
                                  audience="Karen Novak", allow=False)
                 h.rules.set_rule("disclosure", "travel", "Never tell my neighbour when I travel",
@@ -343,12 +354,44 @@ class L8ANoHoldsTheSameOnEverySurface(HisOwnTest):
                 h.life.add_memory("Flying to Lisbon on the third.", tags="travel",
                                   visibility="family")
                 h.conscience.remember_fact("I fly to Lisbon on the third", "travel")
-                for k in ("exwife", "bob"):
+                for k in ("exwife", "bob", "claude"):
                     h.cloud.grant(k, ["life.read", "facts.read", "priorities.read"])
-            out({{"exwife": seen(TX), "bob": seen(TB)}})
+                # the reader check: a key named like an AI (a neighbour called
+            # Claude) is still met by a no through his record of the person
+            out({{"exwife": seen(TX), "bob": seen(TB), "claude": seen(TC2)}})
         """)
         for k, v in r.items():
             self.assertEqual(v, {"moments": [], "life facts": [], "basis": []}, (k, v))
+
+
+class L9TwoOfHisPeopleWithOneNameGetNoYesThroughEachOther(HisOwnTest):
+
+    def test_an_ambiguous_key_name_opens_nothing(self):
+        TK = "tokK-karenkey-0123456789abcdefghijklmn"
+        toks = TOKENS + f",karen:{TK}"
+        r = self.py(code=f"""
+            import os
+            os.environ["JEFFEREY_HTTP_TOKENS"] = {toks!r}
+            import jefferey_http as h, access
+            from fastapi.testclient import TestClient
+            c = TestClient(h.app)
+            TK = {TK!r}
+            with access.owner_console():
+                h.life.add_person("Karen", "ex-wife")
+                h.life.add_person("Karen", "sister")
+                h.rules.set_rule("disclosure", "travel", "Never tell anyone when I travel",
+                                 audience="anyone", allow=False)
+                h.rules.set_rule("disclosure", "travel", "My sister may know when I travel",
+                                 audience="my sister", allow=True)
+                h.conscience.remember_fact("I fly to Lisbon on the third", "travel")
+                h.cloud.grant("karen", ["facts.read", "life.read"])
+            fresh(); h.conscience.refresh()
+            basis = c.get("/basis", params={{"topic": "travel Lisbon"}}, headers=H(TK)).json()
+            conscience = c.get("/conscience", headers=H(TK)).json()
+            out({{"basis": [x.get("fact") for x in basis.get("facts", [])],
+                 "conscience": [x.get("fact") for x in conscience.get("facts", [])]}})
+        """)
+        self.assertEqual(r, {"basis": [], "conscience": []}, r)
 
 
 if __name__ == "__main__":

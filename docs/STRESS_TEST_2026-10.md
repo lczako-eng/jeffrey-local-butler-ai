@@ -736,9 +736,23 @@ closed, and four regressions in the fixes themselves:
 They also found two older inconsistencies. A "no" held on one surface and not
 another for the same key, and a "no" for "my neighbour" did not reach a key named
 "bob". Where a fix had made things worse, it was taken back to the safer behaviour
-rather than patched further. The rest were fixed, each with a test, in the commit
-after `73eb149`. That commit passed the full test runner. No skeptic has checked it
-yet.
+rather than patched further. The rest were fixed, each with a test, in `bc6b9ac`.
+
+A targeted skeptic then checked `bc6b9ac`, on who may read what and on bill names,
+across every kind of key and every surface. It found the hole still closed, and no
+"yes" reaching anyone through a person an AI wrote down. It also found four more
+problems, all fixed, each with a test, in the commit after `bc6b9ac`:
+- a short list of the bank's own words ("Québec") also swallowed your own plan's
+  word, so "CAA QUEBÉC" passed as your plan;
+- real bills with an accented word the bank adds ("BELL MOBILITÉ") were flagged;
+- keys named after people with AI-sounding names (a neighbour called Claude, a
+  granddaughter called Alexa) were no longer met by a "no" through your record of
+  them;
+- two people you recorded with the same name let a "yes" for one reach the other's
+  key.
+
+That commit passed the full test runner, and a fuzz of 7,170 accent variants found
+no disguise that passes. No skeptic has checked it yet.
 
 Nothing was pushed with a failing test. The suite now has 26 test files and over
 750 tests, including frozen corpora of nearly two thousand cases. Round 6
@@ -770,6 +784,13 @@ for example:
 - a character from an obscure script hidden between two words;
 - a plan's name split by a plain space ("N ETFLIX"), which still passes as the plan;
 - the American spelling "neighbor" for a "no" you wrote as "my neighbour".
+
+Three known low issues, left as they are:
+- On /life, a family key is read with the word "family" added, so a yes or a no for
+  "my family" counts there and not on the other surfaces.
+- A person an AI wrote down can narrow a family member's key, which fails safe; you
+  are not told.
+- A named or rented key with about 2,000 facts waits about 4 seconds per call.
 
 These are second lines of defence. The first line is structural (above): an AI's
 words never become yours, never widen anything, and never act on your home or your
